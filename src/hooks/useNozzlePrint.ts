@@ -8,8 +8,9 @@ import { useEffect, useRef } from "react";
  * pressed — echoing the vase-mode single-line print the products are made
  * with.
  */
-export function useNozzlePrint<T extends HTMLElement>() {
+export function useNozzlePrint<T extends HTMLElement>(options?: { cornerRadius?: number }) {
   const ref = useRef<T | null>(null);
+  const cornerRadius = options?.cornerRadius;
 
   useEffect(() => {
     const el = ref.current;
@@ -37,7 +38,7 @@ export function useNozzlePrint<T extends HTMLElement>() {
     function layout() {
       const w = el!.offsetWidth + 2;
       const h = el!.offsetHeight + 2;
-      const r = h / 2;
+      const r = cornerRadius ?? h / 2;
       if (w <= 2 || h <= 2) return;
       svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
       const d =
@@ -94,7 +95,7 @@ export function useNozzlePrint<T extends HTMLElement>() {
       el.removeEventListener("pointerdown", onDown);
       svg.remove();
     };
-  }, []);
+  }, [cornerRadius]);
 
   return ref;
 }

@@ -2,6 +2,35 @@ import { NozzleLink } from "@/components/NozzleLink";
 import { ProductPhoto } from "@/components/ProductPhoto";
 import type { Product } from "@/lib/categories";
 
+function RegMark({ className }: { className: string }) {
+  return (
+    <span aria-hidden className={`pointer-events-none absolute h-4 w-4 ${className}`}>
+      <span className="absolute inset-0 m-auto h-4 w-px bg-ink/30" />
+      <span className="absolute inset-0 m-auto h-px w-4 bg-ink/30" />
+    </span>
+  );
+}
+
+const CALLOUT_POSITION = [
+  "md:top-[16%] md:-left-1 md:-translate-x-full md:flex-row-reverse md:text-right",
+  "md:top-1/2 md:-translate-y-1/2 md:-right-1 md:translate-x-full",
+  "md:bottom-[10%] md:-left-1 md:-translate-x-full md:flex-row-reverse md:text-right",
+];
+
+function Callout({ label, value, index }: { label: string; value: string; index: number }) {
+  return (
+    <div
+      className={`flex items-center gap-2 border-t border-dashed border-ink/15 py-2.5 last:border-b md:absolute md:border-0 md:py-0 ${CALLOUT_POSITION[index]}`}
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-teal" />
+      <span className="hidden h-px w-11 shrink-0 bg-ink/30 md:block" />
+      <span className="whitespace-nowrap font-mono text-[10px] tracking-[0.08em] text-ink uppercase">
+        {label}: {value}
+      </span>
+    </div>
+  );
+}
+
 export function ProductShowcase({
   products,
   categoryName,
@@ -10,6 +39,8 @@ export function ProductShowcase({
   categoryName: string;
 }) {
   if (products.length === 0) return null;
+
+  const idPrefix = categoryName.slice(0, 2).toUpperCase();
 
   return (
     <section className="border-t border-ink/10 px-6 py-20 sm:px-10">
@@ -22,81 +53,57 @@ export function ProductShowcase({
         </p>
       </div>
 
-      <div className="flex flex-col gap-8">
+      <div className="flex flex-col gap-12">
         {products.map((product, i) => (
           <article
             key={product.name}
-            className="grid grid-cols-1 overflow-hidden rounded-2xl bg-basalt text-paper md:grid-cols-2"
+            className="relative mx-auto w-full max-w-2xl border border-ink/25 bg-paper p-6 sm:p-9"
           >
-            {product.images && product.images.length > 0 ? (
-              <ProductPhoto images={product.images} alt={product.name} />
-            ) : (
-              <div className="m-5 flex min-h-72 items-center justify-center rounded-xl border border-dashed border-paper/25 sm:min-h-96">
-                <span className="font-mono text-xs tracking-[0.1em] text-paper/45 uppercase">
-                  Product photo — coming soon
-                </span>
-              </div>
-            )}
+            <RegMark className="-top-2 -left-2" />
+            <RegMark className="-top-2 -right-2" />
+            <RegMark className="-bottom-2 -left-2" />
+            <RegMark className="-bottom-2 -right-2" />
 
-            <div className="flex flex-col gap-6 p-8 sm:p-9">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="font-display text-3xl">{product.name}</h3>
-                  <p className="mt-2 max-w-sm text-sm leading-relaxed text-sage-pale">
-                    {product.description}
-                  </p>
-                </div>
-                <span className="font-mono text-xs text-paper/40">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-              </div>
-
-              <div className="flex items-baseline justify-between">
-                {product.priceSar ? (
-                  <p className="font-mono text-xl">
-                    <span className="mr-1 text-xs text-sage">SAR</span>
-                    {product.priceSar}
-                  </p>
-                ) : (
-                  <span className="w-fit rounded-full bg-paper/10 px-3 py-1 font-mono text-[10px] tracking-[0.1em] text-paper/60 uppercase">
-                    Price — coming soon
-                  </span>
-                )}
-              </div>
-
-              <dl className="grid grid-cols-3 gap-2 border-t border-b border-paper/15 py-4">
-                {product.specs.map((spec) => (
-                  <div key={spec.label}>
-                    <dt className="font-mono text-[10px] tracking-[0.1em] text-paper/50 uppercase">
-                      {spec.label}
-                    </dt>
-                    <dd className="font-mono text-xs">{spec.value}</dd>
-                  </div>
-                ))}
-              </dl>
-
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  {product.colors.map((color) => (
-                    <span
-                      key={color}
-                      style={{ backgroundColor: color }}
-                      className="h-6 w-6 rounded-full border border-paper/20"
-                      aria-hidden
-                    />
-                  ))}
-                  <span className="rounded-full border border-paper/25 px-3 py-1 font-mono text-[10px] tracking-[0.08em] text-paper/80 uppercase">
-                    + Custom
-                  </span>
-                </div>
-                <NozzleLink
-                  href="/#waitlist"
-                  className="rounded-full bg-sage px-6 py-3 font-mono text-xs tracking-[0.12em] text-basalt uppercase transition-opacity hover:opacity-90"
-                >
-                  Notify me
-                </NozzleLink>
-              </div>
+            <div className="flex items-baseline justify-between gap-3">
+              <h3 className="font-display text-3xl text-ink">{product.name}</h3>
+              <span className="font-mono text-xs whitespace-nowrap text-ink-soft/60">
+                NBT—{idPrefix}—{String(i + 1).padStart(2, "0")}
+              </span>
             </div>
+
+            <div className="relative mt-6 border border-ink/20">
+              {product.images && product.images.length > 0 ? (
+                <ProductPhoto images={product.images} alt={product.name} />
+              ) : (
+                <div className="flex min-h-72 items-center justify-center border border-dashed border-ink/20 sm:min-h-96">
+                  <span className="font-mono text-xs tracking-[0.1em] text-ink-soft/60 uppercase">
+                    Product photo — coming soon
+                  </span>
+                </div>
+              )}
+
+              {product.specs.map((spec, si) => (
+                <Callout key={spec.label} label={spec.label} value={spec.value} index={si} />
+              ))}
+            </div>
+
+            <p className="mt-6 max-w-md text-sm leading-relaxed text-ink-soft">
+              {product.description}
+            </p>
+
+            <div className="mt-6 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-dashed border-ink/25 pt-4 font-mono text-[11px] tracking-[0.03em] text-ink-soft uppercase">
+              <span>Status: Pre-launch</span>
+              <span>Price: {product.priceSar ? `SAR ${product.priceSar}` : "Pending"}</span>
+              <span>Origin: Saudi Arabia</span>
+            </div>
+
+            <NozzleLink
+              href="/#waitlist"
+              cornerRadius={2}
+              className="mt-6 inline-flex items-center justify-center rounded-sm border border-ink px-6 py-3 font-mono text-xs tracking-[0.12em] text-ink uppercase transition-colors hover:bg-ink hover:text-paper"
+            >
+              Notify me
+            </NozzleLink>
           </article>
         ))}
       </div>
