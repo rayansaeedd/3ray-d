@@ -7,6 +7,8 @@ export type Product = {
   name: string;
   description: string;
   specs: ProductSpec[];
+  priceSar?: number;
+  colors: string[];
 };
 
 export type Category = {
@@ -35,27 +37,30 @@ export const categories: Category[] = [
         description: "A squat, wide-mouthed planter for trailing plants and low succulents.",
         specs: [
           { label: "Height", value: "11 cm" },
+          { label: "Width", value: "15 cm" },
           { label: "Print time", value: "4h 20m" },
-          { label: "Wall", value: "Single line" },
         ],
+        colors: ["#f3ede0", "#8a9787", "#1f3214"],
       },
       {
         name: "Rukn",
         description: "A tall corner planter, tapered to sit flush against a wall or ledge.",
         specs: [
           { label: "Height", value: "26 cm" },
+          { label: "Width", value: "13 cm" },
           { label: "Print time", value: "7h 10m" },
-          { label: "Wall", value: "Single line" },
         ],
+        colors: ["#f3ede0", "#8a9787", "#1f3214"],
       },
       {
         name: "Sadaf",
         description: "A ribbed, shell-like profile for a single statement plant.",
         specs: [
           { label: "Height", value: "18 cm" },
+          { label: "Width", value: "16 cm" },
           { label: "Print time", value: "5h 45m" },
-          { label: "Wall", value: "Single line" },
         ],
+        colors: ["#f3ede0", "#8a9787", "#1f3214"],
       },
     ],
     live: true,

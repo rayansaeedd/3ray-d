@@ -7,10 +7,11 @@
   --nabtah-ink-soft: #625c4b;
   --nabtah-teal: #1f5c57;
   --nabtah-teal-deep: #123f3b;
-  --nabtah-sage: #7c8b5a;
+  --nabtah-sage: #8a9787;
+  --nabtah-sage-pale: #b8bda9;
   --nabtah-clay: #c4633a;
-  --nabtah-basalt: #1b1815;
-  --nabtah-basalt-soft: #2a251e;
+  --nabtah-basalt: #17220f;
+  --nabtah-basalt-soft: #212f16;
 }
 
 @theme inline {
@@ -25,6 +26,7 @@
   --color-teal: var(--nabtah-teal);
   --color-teal-deep: var(--nabtah-teal-deep);
   --color-sage: var(--nabtah-sage);
+  --color-sage-pale: var(--nabtah-sage-pale);
   --color-clay: var(--nabtah-clay);
   --color-basalt: var(--nabtah-basalt);
   --color-basalt-soft: var(--nabtah-basalt-soft);
