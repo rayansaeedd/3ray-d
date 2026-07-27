@@ -34,7 +34,11 @@ export default async function ProductPage({
         </Link>
 
         <div className="mt-8 grid grid-cols-1 gap-10 lg:grid-cols-2 lg:gap-16">
-          <ProductGallery images={product.images ?? []} alt={product.name} />
+          <ProductGallery
+            images={product.images ?? []}
+            alt={product.name}
+            aspect={product.imageAspect}
+          />
 
           <div className="flex flex-col gap-6">
             <div>

@@ -27,7 +27,8 @@ export function ProductShowcase({
           <Link
             key={product.slug}
             href={`/products/${product.slug}`}
-            className="group relative block aspect-[33/65] overflow-hidden rounded-2xl bg-stone"
+            style={{ aspectRatio: product.imageAspect ?? "33/65" }}
+            className="group relative block overflow-hidden rounded-2xl bg-stone"
           >
             {product.images && product.images.length > 0 ? (
               <ProductPhoto images={product.images} alt={product.name} />

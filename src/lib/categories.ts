@@ -11,6 +11,8 @@ export type Product = {
   priceSar?: number;
   colors: string[];
   images?: string[];
+  /** CSS aspect-ratio ("w/h") matching the primary image, so photo tiles fill their frame with no letterboxing. */
+  imageAspect?: string;
 };
 
 export type Category = {
@@ -46,6 +48,7 @@ export const categories: Category[] = [
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
         images: ["/products/qamra-1.jpg", "/products/qamra-2.jpg"],
+        imageAspect: "660/1300",
       },
       {
         slug: "rukn",
@@ -59,6 +62,7 @@ export const categories: Category[] = [
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
         images: ["/products/rukn-1.jpg", "/products/rukn-2.jpg"],
+        imageAspect: "1170/1559",
       },
       {
         slug: "sadaf",
@@ -72,6 +76,7 @@ export const categories: Category[] = [
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
         images: ["/products/sadaf-1.jpg", "/products/sadaf-2.jpg"],
+        imageAspect: "1170/1045",
       },
     ],
     live: true,

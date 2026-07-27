@@ -3,7 +3,15 @@
 import Image from "next/image";
 import { useState } from "react";
 
-export function ProductGallery({ images, alt }: { images: string[]; alt: string }) {
+export function ProductGallery({
+  images,
+  alt,
+  aspect,
+}: {
+  images: string[];
+  alt: string;
+  aspect?: string;
+}) {
   const [active, setActive] = useState(0);
 
   if (images.length === 0) {
@@ -18,14 +26,17 @@ export function ProductGallery({ images, alt }: { images: string[]; alt: string 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="relative aspect-[33/40] overflow-hidden rounded-2xl bg-stone">
+      <div
+        style={{ aspectRatio: aspect ?? "33/40" }}
+        className="relative overflow-hidden rounded-2xl bg-stone"
+      >
         <Image
           key={images[active]}
           src={images[active]}
           alt={`${alt}, view ${active + 1} of ${images.length}`}
           fill
           sizes="(min-width: 1024px) 45vw, 100vw"
-          className="object-contain"
+          className="object-cover"
           priority
         />
       </div>
