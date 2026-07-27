@@ -63,13 +63,15 @@ export const categories: Category[] = [
       {
         slug: "sadaf",
         name: "Sadaf",
-        description: "A ribbed, shell-like profile for a single statement plant.",
+        description:
+          "The horizontal take on the clip-on system — five different-sized pots lined up along a single shelf rail.",
         specs: [
-          { label: "Height", value: "18 cm" },
-          { label: "Width", value: "16 cm" },
-          { label: "Print time", value: "5h 45m" },
+          { label: "Pots", value: "5" },
+          { label: "Mount", value: "Shelf rail" },
+          { label: "Wall", value: "Single line" },
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
+        images: ["/products/sadaf-1.jpg", "/products/sadaf-2.jpg"],
       },
     ],
     live: true,

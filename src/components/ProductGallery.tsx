@@ -25,7 +25,7 @@ export function ProductGallery({ images, alt }: { images: string[]; alt: string 
           alt={`${alt}, view ${active + 1} of ${images.length}`}
           fill
           sizes="(min-width: 1024px) 45vw, 100vw"
-          className="object-cover"
+          className="object-contain"
           priority
         />
       </div>

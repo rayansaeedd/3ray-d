@@ -23,7 +23,7 @@ export function ProductPhoto({ images, alt }: { images: string[]; alt: string })
           alt={alt}
           fill
           sizes="(min-width: 1024px) 400px, (min-width: 640px) 50vw, 100vw"
-          className="object-cover transition-opacity duration-1000"
+          className="object-contain transition-opacity duration-1000"
           style={{ opacity: i === active ? 1 : 0 }}
           priority={i === 0}
         />
