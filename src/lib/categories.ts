@@ -50,13 +50,15 @@ export const categories: Category[] = [
       {
         slug: "rukn",
         name: "Rukn",
-        description: "A tall corner planter, tapered to sit flush against a wall or ledge.",
+        description:
+          "The compact take on the wall rod — two clip-on pots for a corner or a narrow stretch of wall.",
         specs: [
-          { label: "Height", value: "26 cm" },
-          { label: "Width", value: "13 cm" },
-          { label: "Print time", value: "7h 10m" },
+          { label: "Pots", value: "2" },
+          { label: "Mount", value: "Wall rod" },
+          { label: "Wall", value: "Single line" },
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
+        images: ["/products/rukn-1.jpg", "/products/rukn-2.jpg"],
       },
       {
         slug: "sadaf",
