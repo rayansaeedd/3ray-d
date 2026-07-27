@@ -37,7 +37,7 @@ export default async function ProductPage({
 
           <div className="flex flex-col gap-6">
             <div>
-              <h1 className="font-display text-4xl text-ink sm:text-5xl">
+              <h1 className="font-display text-4xl font-bold text-ink sm:text-5xl">
                 {product.name}
               </h1>
               <p className="mt-4 max-w-md text-base leading-relaxed text-ink-soft">
@@ -90,7 +90,7 @@ export default async function ProductPage({
 
             <NozzleLink
               href="/#waitlist"
-              className="mt-2 w-full rounded-full bg-teal py-4 text-center font-mono text-xs tracking-[0.12em] text-paper uppercase transition-colors hover:bg-teal-deep sm:w-fit sm:px-10"
+              className="mt-2 w-full rounded-full bg-ink py-4 text-center font-sans text-sm font-medium text-paper transition-colors hover:bg-teal-deep sm:w-fit sm:px-10"
             >
               Notify me
             </NozzleLink>

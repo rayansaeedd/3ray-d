@@ -15,10 +15,8 @@ export default function KitchenPage() {
       <CategoryArrow target={next} />
 
       <section className="flex min-h-screen flex-col items-center justify-center gap-6 px-6 text-center sm:px-10">
-        <p className="font-mono text-xs tracking-[0.22em] text-teal uppercase">
-          {category.eyebrow}
-        </p>
-        <h1 className="font-display text-5xl leading-[0.95] text-ink sm:text-6xl">
+        <p className="font-sans text-sm text-ink-soft">{category.eyebrow}</p>
+        <h1 className="font-display text-5xl font-bold leading-[1.05] text-ink sm:text-6xl">
           {category.headline.map((line, i) => (
             <span key={i} className="block">
               {line}

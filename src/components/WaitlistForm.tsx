@@ -28,7 +28,7 @@ export function WaitlistForm() {
           />
           <NozzleButton
             type="submit"
-            className="shrink-0 rounded-full bg-ink px-6 py-3 font-mono text-xs tracking-[0.12em] text-paper uppercase transition-colors hover:bg-teal-deep"
+            className="shrink-0 rounded-full bg-ink px-6 py-3 font-sans text-sm font-medium text-paper transition-colors hover:bg-teal-deep"
           >
             Notify me
           </NozzleButton>

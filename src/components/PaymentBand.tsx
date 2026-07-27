@@ -7,7 +7,7 @@ export function PaymentBand() {
         <p className="font-mono text-xs tracking-[0.2em] text-sage uppercase">
           Checkout
         </p>
-        <h2 className="font-display text-3xl sm:text-4xl">
+        <h2 className="font-display text-3xl font-bold sm:text-4xl">
           Built for how Saudi Arabia pays.
         </h2>
         <p className="max-w-lg font-sans text-sm leading-relaxed text-paper/70">

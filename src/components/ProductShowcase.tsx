@@ -14,7 +14,7 @@ export function ProductShowcase({
   return (
     <section className="border-t border-ink/10 px-6 py-20 sm:px-10">
       <div className="mb-12 flex items-baseline justify-between">
-        <h2 className="font-display text-3xl text-ink sm:text-4xl">
+        <h2 className="font-display text-3xl font-bold text-ink sm:text-4xl">
           The first drop
         </h2>
         <p className="font-mono text-xs tracking-[0.15em] text-ink-soft uppercase">

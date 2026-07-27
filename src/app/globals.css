@@ -17,7 +17,7 @@
 }
 
 @theme inline {
-  --font-display: var(--font-instrument-serif);
+  --font-display: var(--font-public-sans);
   --font-sans: var(--font-public-sans);
   --font-mono: var(--font-plex-mono);
 
@@ -32,33 +32,13 @@
   --color-clay: var(--nabtah-clay);
   --color-basalt: var(--nabtah-basalt);
   --color-basalt-soft: var(--nabtah-basalt-soft);
+  --color-thread: var(--nabtah-thread);
+  --color-spark: var(--nabtah-spark);
 }
 
 body {
-  background: var(--nabtah-stone);
+  background: var(--nabtah-paper);
   color: var(--nabtah-ink);
-}
-
-@keyframes draw-spiral {
-  from {
-    stroke-dashoffset: 1;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
-.spiral-path {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: draw-spiral 2.6s cubic-bezier(0.65, 0, 0.35, 1) 0.2s forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spiral-path {
-    animation: none;
-    stroke-dashoffset: 0;
-  }
 }
 
 /* ---------- nozzle print button effect ---------- */
