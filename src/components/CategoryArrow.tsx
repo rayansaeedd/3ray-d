@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { NozzleLink } from "@/components/NozzleLink";
 import type { Category } from "@/lib/categories";
 
 export function CategoryArrow({
@@ -16,7 +16,7 @@ export function CategoryArrow({
       : `${target.name} — coming soon`;
 
   return (
-    <Link
+    <NozzleLink
       href={`/${target.slug}`}
       aria-label={label}
       className={`group fixed z-40 flex items-center gap-3 bottom-6 sm:top-1/2 sm:bottom-auto sm:-translate-y-1/2 ${
@@ -51,6 +51,6 @@ export function CategoryArrow({
           />
         </svg>
       </span>
-    </Link>
+    </NozzleLink>
   );
 }

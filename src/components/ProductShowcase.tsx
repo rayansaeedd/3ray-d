@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { NozzleLink } from "@/components/NozzleLink";
 import { ProductPhoto } from "@/components/ProductPhoto";
 import type { Product } from "@/lib/categories";
 
@@ -89,12 +89,12 @@ export function ProductShowcase({
                     + Custom
                   </span>
                 </div>
-                <Link
+                <NozzleLink
                   href="/#waitlist"
                   className="rounded-full bg-sage px-6 py-3 font-mono text-xs tracking-[0.12em] text-basalt uppercase transition-opacity hover:opacity-90"
                 >
                   Notify me
-                </Link>
+                </NozzleLink>
               </div>
             </div>
           </article>

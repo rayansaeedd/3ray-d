@@ -12,6 +12,8 @@
   --nabtah-clay: #c4633a;
   --nabtah-basalt: #17220f;
   --nabtah-basalt-soft: #212f16;
+  --nabtah-thread: #4fd6c4;
+  --nabtah-spark: #e8794a;
 }
 
 @theme inline {
@@ -56,5 +58,127 @@ body {
   .spiral-path {
     animation: none;
     stroke-dashoffset: 0;
+  }
+}
+
+/* ---------- nozzle print button effect ---------- */
+.nozzle-outline-path {
+  fill: none;
+  stroke: var(--nabtah-thread);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0;
+  filter: drop-shadow(0 0 4px rgba(79, 214, 196, 0.35));
+  transition:
+    stroke-dashoffset 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.25s ease;
+}
+
+.is-printing .nozzle-outline-path {
+  stroke-dashoffset: 0;
+  opacity: 1;
+}
+
+.nozzle-pulse {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 1.5px solid var(--nabtah-spark);
+  pointer-events: none;
+  animation: nozzle-pulse-out 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes nozzle-pulse-out {
+  from {
+    transform: scale(0.3);
+    opacity: 1;
+  }
+  to {
+    transform: scale(4.2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nozzle-outline-path {
+    transition: none;
+  }
+}
+
+/* ---------- scroll print bar ---------- */
+.print-bar-track {
+  position: absolute;
+  inset: 0;
+  background: rgba(36, 33, 28, 0.12);
+}
+
+.print-bar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 0%;
+  background: var(--nabtah-thread);
+  box-shadow: 0 0 8px var(--nabtah-thread);
+}
+
+.print-bar-ticks {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+
+.print-bar-ticks span {
+  width: 1px;
+  height: 8px;
+  background: rgba(36, 33, 28, 0.15);
+}
+
+.print-bar-head {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--nabtah-paper);
+  box-shadow:
+    0 0 0 3px var(--nabtah-stone),
+    0 0 10px var(--nabtah-thread);
+  transform: translate(-50%, -50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .print-bar-fill,
+  .print-bar-head {
+    transition: none !important;
+  }
+}
+
+/* ---------- cursor thread (desktop only) ---------- */
+#cursor-thread-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  pointer-events: none;
+}
+
+@media (pointer: fine) {
+  body.js-cursor-active,
+  body.js-cursor-active a,
+  body.js-cursor-active button {
+    cursor: none;
+  }
+  body.js-cursor-active input,
+  body.js-cursor-active textarea {
+    cursor: text;
   }
 }

@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Instrument_Serif, Public_Sans, IBM_Plex_Mono } from "next/font/google";
+import { PrintProgressBar } from "@/components/PrintProgressBar";
+import { CursorThread } from "@/components/CursorThread";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -35,7 +37,11 @@ export default function RootLayout({
       lang="en"
       className={`${instrumentSerif.variable} ${publicSans.variable} ${plexMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-stone font-sans">{children}</body>
+      <body className="min-h-full flex flex-col bg-stone font-sans">
+        <PrintProgressBar />
+        <CursorThread />
+        {children}
+      </body>
     </html>
   );
 }

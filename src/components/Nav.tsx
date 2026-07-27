@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { NozzleLink } from "@/components/NozzleLink";
 
 export function Nav() {
   return (
@@ -9,12 +10,12 @@ export function Nav() {
       >
         Nabtah
       </Link>
-      <Link
+      <NozzleLink
         href="/#waitlist"
         className="rounded-full border border-ink/20 px-4 py-2 font-mono text-xs tracking-[0.12em] text-ink uppercase transition-colors hover:border-ink/60"
       >
         Notify me
-      </Link>
+      </NozzleLink>
     </header>
   );
 }
