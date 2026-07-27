@@ -15,14 +15,14 @@ export function ProductPhoto({ images, alt }: { images: string[]; alt: string })
   }, [images.length]);
 
   return (
-    <div className="relative m-5 min-h-72 overflow-hidden rounded-xl sm:min-h-96">
+    <div className="relative h-full w-full">
       {images.map((src, i) => (
         <Image
           key={src}
           src={src}
           alt={alt}
           fill
-          sizes="(min-width: 768px) 50vw, 100vw"
+          sizes="(min-width: 1024px) 400px, (min-width: 640px) 50vw, 100vw"
           className="object-cover transition-opacity duration-1000"
           style={{ opacity: i === active ? 1 : 0 }}
           priority={i === 0}
