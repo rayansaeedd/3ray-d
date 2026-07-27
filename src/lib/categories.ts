@@ -4,6 +4,7 @@ export type ProductSpec = {
 };
 
 export type Product = {
+  slug: string;
   name: string;
   description: string;
   specs: ProductSpec[];
@@ -34,6 +35,7 @@ export const categories: Category[] = [
       "Nabtah planters are printed, not molded — one continuous wall, traced from base to rim, then finished by hand. The first collection is almost ready.",
     products: [
       {
+        slug: "qamra",
         name: "Qamra",
         description:
           "A modular wall planter — individual pots that clip onto a shared rod, so you can mix succulents and trailing plants in one arrangement.",
@@ -46,6 +48,7 @@ export const categories: Category[] = [
         images: ["/products/qamra-1.jpg", "/products/qamra-2.jpg"],
       },
       {
+        slug: "rukn",
         name: "Rukn",
         description: "A tall corner planter, tapered to sit flush against a wall or ledge.",
         specs: [
@@ -56,6 +59,7 @@ export const categories: Category[] = [
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
       },
       {
+        slug: "sadaf",
         name: "Sadaf",
         description: "A ribbed, shell-like profile for a single statement plant.",
         specs: [
@@ -88,4 +92,16 @@ export function getCategoryBySlug(slug: string): Category | undefined {
 export function getNextCategory(currentSlug: string): Category {
   const index = categories.findIndex((c) => c.slug === currentSlug);
   return categories[(index + 1) % categories.length];
+}
+
+export function getAllProducts(): { product: Product; category: Category }[] {
+  return categories.flatMap((category) =>
+    category.products.map((product) => ({ product, category }))
+  );
+}
+
+export function getProductBySlug(
+  slug: string
+): { product: Product; category: Category } | undefined {
+  return getAllProducts().find((entry) => entry.product.slug === slug);
 }
