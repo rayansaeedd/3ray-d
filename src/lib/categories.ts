@@ -9,6 +9,7 @@ export type Product = {
   specs: ProductSpec[];
   priceSar?: number;
   colors: string[];
+  images?: string[];
 };
 
 export type Category = {
@@ -34,13 +35,15 @@ export const categories: Category[] = [
     products: [
       {
         name: "Qamra",
-        description: "A squat, wide-mouthed planter for trailing plants and low succulents.",
+        description:
+          "A modular wall planter — individual pots that clip onto a shared rod, so you can mix succulents and trailing plants in one arrangement.",
         specs: [
-          { label: "Height", value: "11 cm" },
-          { label: "Width", value: "15 cm" },
-          { label: "Print time", value: "4h 20m" },
+          { label: "Pots", value: "5" },
+          { label: "Mount", value: "Wall rod" },
+          { label: "Wall", value: "Single line" },
         ],
         colors: ["#f3ede0", "#8a9787", "#1f3214"],
+        images: ["/products/qamra-1.jpg", "/products/qamra-2.jpg"],
       },
       {
         name: "Rukn",

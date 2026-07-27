@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ProductPhoto } from "@/components/ProductPhoto";
 import type { Product } from "@/lib/categories";
 
 export function ProductShowcase({
@@ -27,11 +28,15 @@ export function ProductShowcase({
             key={product.name}
             className="grid grid-cols-1 overflow-hidden rounded-2xl bg-basalt text-paper md:grid-cols-2"
           >
-            <div className="m-5 flex min-h-72 items-center justify-center rounded-xl border border-dashed border-paper/25 sm:min-h-96">
-              <span className="font-mono text-xs tracking-[0.1em] text-paper/45 uppercase">
-                Product photo — coming soon
-              </span>
-            </div>
+            {product.images && product.images.length > 0 ? (
+              <ProductPhoto images={product.images} alt={product.name} />
+            ) : (
+              <div className="m-5 flex min-h-72 items-center justify-center rounded-xl border border-dashed border-paper/25 sm:min-h-96">
+                <span className="font-mono text-xs tracking-[0.1em] text-paper/45 uppercase">
+                  Product photo — coming soon
+                </span>
+              </div>
+            )}
 
             <div className="flex flex-col gap-6 p-8 sm:p-9">
               <div className="flex items-start justify-between gap-3">
