@@ -57,6 +57,7 @@ class Task:
     code: str
     start_time: datetime.time
     shift_type: str
+    duration_minutes: int = None
 
 
 @dataclass(eq=False)  # identity-based hash/eq: each Stretch is a distinct object, never value-equal
@@ -80,7 +81,8 @@ def load_tasks():
     for t in data["tasks"]:
         h, m = (int(x) for x in t["start"].split(":"))
         st = datetime.time(h, m)
-        tasks.append(Task(code=t["code"], start_time=st, shift_type=classify_shift(st)))
+        tasks.append(Task(code=t["code"], start_time=st, shift_type=classify_shift(st),
+                           duration_minutes=t["duration_minutes"]))
     return tasks
 
 
