@@ -24,6 +24,8 @@
     --ok: #3f7d3a;
     --warn: #a5701e;
     --bad: #a13b3b;
+    --task-color: #008000;
+    --reserve-color: #0070c0;
     --input-bg: #ffffff;
     --input-border: #ccd0c0;
     --shadow: 0 1px 2px rgba(20, 22, 12, 0.06), 0 4px 14px rgba(20, 22, 12, 0.05);
@@ -36,6 +38,7 @@
       --reserve-bg: #2c2a18; --reserve-border: #b8a24a;
       --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
       --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
+      --task-color: #6fd66f; --reserve-color: #7cb3e8;
       --input-bg: #23261c; --input-border: #454a38;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.35);
     }
@@ -47,6 +50,7 @@
     --reserve-bg: #2c2a18; --reserve-border: #b8a24a;
     --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
     --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
+    --task-color: #6fd66f; --reserve-color: #7cb3e8;
     --input-bg: #23261c; --input-border: #454a38;
   }
   :root[data-theme="light"] {
@@ -56,6 +60,7 @@
     --reserve-bg: #f5f0e0; --reserve-border: #9c8a3a;
     --tag-bg: #ffffff; --tag-border: #33361f; --day-chip: #e0a72e; --afternoon-chip: #4a7fb5;
     --night-chip: #4b3f7a; --ok: #3f7d3a; --warn: #a5701e; --bad: #a13b3b;
+    --task-color: #008000; --reserve-color: #0070c0;
     --input-bg: #ffffff; --input-border: #ccd0c0;
   }
 
@@ -178,6 +183,38 @@
   .legend .swatch.day { background: var(--day-chip); }
   .legend .swatch.afternoon { background: var(--afternoon-chip); }
   .legend .swatch.night { background: var(--night-chip); }
+
+  /* ---------------- view tabs ---------------- */
+  .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
+  .view-tab {
+    background: transparent; border: none; color: var(--accent-yellow); opacity: 0.65;
+    font-size: 13px; font-weight: 700; padding: 9px 18px; border-radius: 6px 6px 0 0;
+    cursor: pointer; font-family: inherit;
+  }
+  .view-tab.active { background: var(--olive); opacity: 1; }
+  .view-tab:focus-visible { outline: 2px solid var(--accent-yellow); outline-offset: -2px; }
+
+  /* ---------------- roster view ---------------- */
+  .roster-scroll { overflow: auto; max-height: 70vh; }
+  .roster-table { border-collapse: collapse; font-size: 11px; min-width: 100%; }
+  .roster-table th, .roster-table td {
+    border: 1px solid var(--grid-line); padding: 4px 7px; white-space: nowrap; text-align: center;
+  }
+  .roster-table thead th {
+    position: sticky; top: 0; background: var(--bg-alt); color: var(--olive-dark);
+    font-size: 10.5px; z-index: 2;
+  }
+  .roster-table .roster-name-cell {
+    position: sticky; left: 0; background: var(--bg); text-align: left; z-index: 1;
+    font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-weight: 600;
+  }
+  .roster-table thead th.roster-name-header { position: sticky; left: 0; top: 0; z-index: 3; text-align: left; background: var(--bg-alt); }
+  .roster-table tbody tr:nth-child(odd) td:not(.roster-name-cell) { background: var(--bg-alt); }
+  .roster-table tbody tr:nth-child(odd) .roster-name-cell { background: var(--bg-alt); }
+  .roster-cell-task { color: var(--task-color); font-weight: 700; }
+  .roster-cell-reserve { color: var(--reserve-color); font-weight: 700; }
+  .roster-cell-off { color: var(--ink); }
+  .roster-note { padding: 10px 22px; font-size: 11.5px; color: var(--ink-soft); }
 </style>
 
 <div class="app">
@@ -230,32 +267,48 @@
   </aside>
 
   <main class="schedule">
-    <div class="excel-header">
-      <span class="op-label">Technical Planning of the Operation</span>
-      <div class="day-title-row">
-        <div class="day-pill" id="day-pill">—</div>
-        <div class="day-date">DAY:
-          <select id="day-select" onchange="renderDay()"></select>
+    <div class="view-tabs">
+      <button class="view-tab active" id="tab-day" type="button" onclick="showView('day')">Day Schedule</button>
+      <button class="view-tab" id="tab-roster" type="button" onclick="showView('roster')">Full Roster</button>
+    </div>
+
+    <div id="day-view">
+      <div class="excel-header">
+        <span class="op-label">Technical Planning of the Operation</span>
+        <div class="day-title-row">
+          <div class="day-pill" id="day-pill">—</div>
+          <div class="day-date">DAY:
+            <select id="day-select" onchange="renderDay()"></select>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="gantt-scroll">
-      <div class="gantt">
-        <div class="hour-header" id="hour-header"></div>
-        <div id="rows"></div>
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="hour-header" id="hour-header"></div>
+          <div id="rows"></div>
+        </div>
+      </div>
+
+      <div class="reserve-panel">
+        <h3>Reserve today (<span class="reserve-count" id="reserve-count">0</span>)</h3>
+        <div class="reserve-list" id="reserve-list">Generate a month to see who's on standby each day.</div>
+      </div>
+
+      <div class="legend">
+        <div class="item"><span class="swatch day"></span> Day shift</div>
+        <div class="item"><span class="swatch afternoon"></span> Afternoon shift</div>
+        <div class="item"><span class="swatch night"></span> Night shift</div>
       </div>
     </div>
 
-    <div class="reserve-panel">
-      <h3>Reserve today (<span class="reserve-count" id="reserve-count">0</span>)</h3>
-      <div class="reserve-list" id="reserve-list">Generate a month to see who's on standby each day.</div>
-    </div>
-
-    <div class="legend">
-      <div class="item"><span class="swatch day"></span> Day shift</div>
-      <div class="item"><span class="swatch afternoon"></span> Afternoon shift</div>
-      <div class="item"><span class="swatch night"></span> Night shift</div>
+    <div id="roster-view" style="display:none">
+      <div class="roster-note">
+        Green = task assigned by the engine &middot; blue = RESERVE &middot; black = original off-duty code (F/V/O/etc.) or fixed 830/7T assignment.
+      </div>
+      <div class="roster-scroll">
+        <table class="roster-table" id="roster-table"></table>
+      </div>
     </div>
   </main>
 </div>
@@ -470,7 +523,67 @@
       }
       document.getElementById("compliance").innerHTML = complianceHtml;
       renderDay();
+      renderRoster();
     }, 250);
+  }
+
+  function showView(view) {
+    document.getElementById("day-view").style.display = view === "day" ? "" : "none";
+    document.getElementById("roster-view").style.display = view === "roster" ? "" : "none";
+    document.getElementById("tab-day").classList.toggle("active", view === "day");
+    document.getElementById("tab-roster").classList.toggle("active", view === "roster");
+  }
+
+  // stretch lookup per driver per day, built fresh each render so renderRoster stays cheap
+  function renderRoster() {
+    const table = document.getElementById("roster-table");
+    const dates = REAL_DATA.dates;
+    const drivers = REAL_DATA.drivers;
+
+    const headCells = dates
+      .map((d) => {
+        const dt = new Date(d + "T00:00:00");
+        return `<th>${dt.toLocaleDateString("en-US", { day: "2-digit", month: "short" })}</th>`;
+      })
+      .join("");
+    let html = `<thead><tr><th class="roster-name-header">Driver</th>${headCells}</tr></thead><tbody>`;
+
+    // driverIndex -> array (by dayIdx) of the stretch covering that day, for O(1) lookup below
+    const stretchByDriverDay = drivers.map(() => new Array(dates.length).fill(null));
+    if (monthResult) {
+      monthResult.allStretches.forEach((s) => {
+        s.days.forEach((dayIdx) => {
+          stretchByDriverDay[s.driverIndex][dayIdx] = s;
+        });
+      });
+    }
+
+    drivers.forEach((d, di) => {
+      let row = `<tr><td class="roster-name-cell">${d.name}</td>`;
+      d.codes.forEach((rawCode, dayIdx) => {
+        if (rawCode && OFF_CODES.has(rawCode)) {
+          row += `<td class="roster-cell-off">${rawCode}</td>`;
+          return;
+        }
+        if (rawCode === "830/7T") {
+          row += `<td class="roster-cell-off">${rawCode}</td>`;
+          return;
+        }
+        const stretch = stretchByDriverDay[di][dayIdx];
+        if (!stretch) {
+          row += `<td></td>`;
+          return;
+        }
+        const val = stretch.assignments[dayIdx];
+        if (val === "RESERVE") row += `<td class="roster-cell-reserve">RESERVE</td>`;
+        else row += `<td class="roster-cell-task">${val}</td>`;
+      });
+      row += `</tr>`;
+      html += row;
+    });
+
+    html += "</tbody>";
+    table.innerHTML = html;
   }
 
   function populateDaySelect() {
@@ -550,4 +663,5 @@
     '<div class="hcell"></div>';
 
   populateDaySelect();
+  renderRoster();
 </script>
