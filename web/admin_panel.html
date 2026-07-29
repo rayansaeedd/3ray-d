@@ -176,39 +176,39 @@
     background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
     opacity: 0.3; pointer-events: none;
   }
-  .block {
-    position: absolute; top: 50%; transform: translateY(-50%); height: 28px; border: 1.5px solid var(--trip-border);
-    border-radius: 3px; background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
-    font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  /* ---------------- driver duty: two trip legs + connector ---------------- */
+  .block-pair { position: absolute; top: 50%; transform: translateY(-50%); height: 28px; display: flex; align-items: center; gap: 4px; }
+  .leg-block {
+    flex: 1 1 0; height: 28px; min-width: 0; border: 1.5px solid var(--trip-border); border-radius: 3px;
+    background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-weight: 700; white-space: nowrap; overflow: hidden; position: relative;
+  }
+  .connector-badge {
+    flex: 0 0 auto; width: 17px; height: 17px; border: 1px solid var(--trip-border); border-radius: 3px;
+    background: var(--task-color); color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 800;
   }
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
-  .block-underline.day { background: var(--day-chip); }
-  .block-underline.afternoon { background: var(--afternoon-chip); }
-  .block-underline.night { background: var(--night-chip); }
+  .block-underline.outbound { background: var(--reserve-color); }
+  .block-underline.return { background: var(--task-color); }
   .time-label {
     position: absolute; top: -13px; font-size: 8px; font-weight: 700; color: var(--ink-soft);
     white-space: nowrap; pointer-events: none; transform: rotate(-58deg);
   }
   .time-label.start-label { left: -1px; transform-origin: left bottom; }
   .time-label.end-label { right: -1px; transform-origin: right bottom; }
-  .no-driver-block {
-    position: absolute; top: 50%; transform: translateY(-50%); left: 4px; right: 4px; height: 26px;
-    border: 1.5px dashed var(--bad); border-radius: 3px; display: flex; align-items: center; justify-content: center;
-    font-size: 11px; color: var(--bad);
+  .reserve-block {
+    position: absolute; top: 50%; transform: translateY(-50%); left: 10%; right: 10%; height: 26px;
+    border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
+    align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--reserve-color);
   }
-
-  .reserve-panel { padding: 16px 22px; border-top: 2px solid var(--grid-line); background: var(--reserve-bg); }
-  .reserve-panel h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--olive-dark); }
-  .reserve-list { font-size: 12px; line-height: 1.7; color: var(--ink); }
-  .reserve-count { font-weight: 700; color: var(--olive-dark); }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
   .legend .item { display: flex; align-items: center; gap: 6px; }
   .legend .swatch { width: 13px; height: 4px; border-radius: 2px; }
-  .legend .swatch.day { background: var(--day-chip); }
-  .legend .swatch.afternoon { background: var(--afternoon-chip); }
-  .legend .swatch.night { background: var(--night-chip); }
+  .legend .swatch.outbound { background: var(--reserve-color); }
+  .legend .swatch.return { background: var(--task-color); }
 
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
@@ -319,15 +319,11 @@
         </div>
       </div>
 
-      <div class="reserve-panel">
-        <h3>Reserve today (<span class="reserve-count" id="reserve-count">0</span>)</h3>
-        <div class="reserve-list" id="reserve-list">Generate a month to see who's on standby each day.</div>
-      </div>
-
       <div class="legend">
-        <div class="item"><span class="swatch day"></span> Day shift</div>
-        <div class="item"><span class="swatch afternoon"></span> Afternoon shift</div>
-        <div class="item"><span class="swatch night"></span> Night shift</div>
+        <div class="item"><span class="swatch outbound"></span> Outbound leg (Madinah &rarr; Kaia Station*)</div>
+        <div class="item"><span class="swatch return"></span> Return leg (Kaia Station* &rarr; Madinah)</div>
+        <div class="item">Connector: <b>K</b>* &middot; RESERVE = driver on standby, no trip today</div>
+        <div class="item" style="color:var(--ink-soft); font-style:italic;">*placeholder until real station/connector data is provided</div>
       </div>
     </div>
 
@@ -629,9 +625,14 @@
       .join("");
   }
 
-  // manual edits per day, keyed by the task's original index (so renaming a code doesn't
-  // break the lookup): dayOverrides[dayIdx][taskIdx] = { code, name, start, end }
+  // manual edits per day, keyed by driverIndex (one row per driver now):
+  // dayOverrides[dayIdx][driverIndex] = { code, name, start, end }
   const dayOverrides = {};
+
+  // placeholder destination for the outbound leg until the real station/connector plan is
+  // provided -- every duty is shown as Madinah -> this station -> Madinah, split in half
+  const PLACEHOLDER_DESTINATION = "Kaia Station";
+  const PLACEHOLDER_CONNECTOR = "K";
 
   function minutesToHHMM(min) {
     const m = ((min % 1440) + 1440) % 1440;
@@ -642,10 +643,10 @@
     return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  function updateOverride(dayIdx, taskIdx, field, value) {
+  function updateOverride(dayIdx, driverIndex, field, value) {
     dayOverrides[dayIdx] = dayOverrides[dayIdx] || {};
-    dayOverrides[dayIdx][taskIdx] = dayOverrides[dayIdx][taskIdx] || {};
-    dayOverrides[dayIdx][taskIdx][field] = value;
+    dayOverrides[dayIdx][driverIndex] = dayOverrides[dayIdx][driverIndex] || {};
+    dayOverrides[dayIdx][driverIndex][field] = value;
     renderDay();
   }
 
@@ -655,86 +656,71 @@
     document.getElementById("day-pill").textContent = dt.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
 
     const rowsEl = document.getElementById("rows");
-    const reserveListEl = document.getElementById("reserve-list");
-    const reserveCountEl = document.getElementById("reserve-count");
 
     if (!monthResult) {
       rowsEl.innerHTML = "";
-      reserveListEl.textContent = "Generate a month to see who's on standby each day.";
-      reserveCountEl.textContent = "0";
       return;
     }
 
-    // task code -> {driverIndex, shiftType} for this day
-    const taskAssignment = {};
-    const reserveDrivers = [];
-    monthResult.allStretches.forEach((s) => {
-      if (!s.days.includes(dayIdx)) return;
-      const val = s.assignments[dayIdx];
-      if (val === "RESERVE") reserveDrivers.push(REAL_DATA.drivers[s.driverIndex].name);
-      else taskAssignment[val] = { driverIndex: s.driverIndex, shiftType: s.shiftType };
-    });
+    const activeStretches = monthResult.allStretches
+      .filter((s) => s.days.includes(dayIdx))
+      .sort((a, b) => a.driverIndex - b.driverIndex);
 
     const overridesForDay = dayOverrides[dayIdx] || {};
 
-    rowsEl.innerHTML = REAL_DATA.tasks
-      .map((t, taskIdx) => {
-        const o = overridesForDay[taskIdx] || {};
-        const assign = taskAssignment[t.code];
-        const code = o.code !== undefined ? o.code : t.code;
-        const start = o.start !== undefined ? o.start : t.start;
-        const defaultName = assign ? REAL_DATA.drivers[assign.driverIndex].name : "";
-        const name = o.name !== undefined ? o.name : defaultName;
+    rowsEl.innerHTML = activeStretches
+      .map((s) => {
+        const driverIndex = s.driverIndex;
+        const o = overridesForDay[driverIndex] || {};
+        const assignedVal = s.assignments[dayIdx]; // "RESERVE" or a real task code
+        const code = o.code !== undefined ? o.code : assignedVal;
+        const name = o.name !== undefined ? o.name : REAL_DATA.drivers[driverIndex].name;
+        const isReserve = code.trim().toUpperCase() === "RESERVE";
 
-        const startMin = timeToMinutes(start);
-        const duration = durationFor(t.code);
-        const defaultEnd = minutesToHHMM(startMin + duration);
-        const end = o.end !== undefined ? o.end : defaultEnd;
-        const endMin = timeToMinutes(end);
-        const effectiveDuration = ((endMin - startMin + 1440) % 1440) || duration;
+        let track, start = "", end = "";
+        if (isReserve) {
+          track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
+        } else {
+          const matchedTask = REAL_DATA.tasks.find((t) => t.code === assignedVal);
+          const defaultStart = matchedTask ? matchedTask.start : "07:00";
+          const defaultDuration = matchedTask ? matchedTask.duration_minutes : 420;
 
-        const leftPct = (startMin / 1440) * 100;
-        const widthPct = (Math.min(effectiveDuration, 1440 - startMin) / 1440) * 100;
+          start = o.start !== undefined ? o.start : defaultStart;
+          const startMin = timeToMinutes(start);
+          const defaultEnd = minutesToHHMM(startMin + defaultDuration);
+          end = o.end !== undefined ? o.end : defaultEnd;
+          const endMin = timeToMinutes(end);
+          const effectiveDuration = ((endMin - startMin + 1440) % 1440) || defaultDuration;
 
-        const hasName = name.trim() !== "";
-        const shiftClass = hasName
-          ? (assign ? assign.shiftType : classifyShift(startMin, monthResult.config.shiftWindows)).toLowerCase()
-          : "";
-        const timeLabels =
-          `<div class="time-label start-label">${start}</div>` +
-          `<div class="time-label end-label">${end}</div>`;
-        const block = hasName
-          ? `<div class="block" style="left:${leftPct}%; width:${widthPct}%;">
-               ${timeLabels}
-               ${escapeAttr(code)}
-               <div class="block-baseline"></div>
-               <div class="block-underline ${shiftClass}"></div>
-             </div>`
-          : `<div class="no-driver-block" style="left:${leftPct}%; width:${widthPct}%;">
-               ${timeLabels}
-               ${escapeAttr(code)}
-               <div class="block-baseline"></div>
-             </div>`;
+          const leftPct = (startMin / 1440) * 100;
+          const widthPct = (Math.min(effectiveDuration, 1440 - startMin) / 1440) * 100;
+
+          track = `
+            <div class="block-pair" style="left:${leftPct}%; width:${widthPct}%;">
+              <div class="time-label start-label">${start}</div>
+              <div class="time-label end-label">${end}</div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline outbound"></div></div>
+              <div class="connector-badge">${PLACEHOLDER_CONNECTOR}</div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline return"></div></div>
+            </div>`;
+        }
 
         return `
         <div class="task-row">
           <input class="cell-input task-code-input" value="${escapeAttr(code)}"
-                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'code', this.value)" />
-          <input class="cell-input driver-name-input" value="${escapeAttr(name)}" placeholder="unfilled"
-                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'name', this.value)" />
-          <input type="time" class="cell-input time-input" value="${start}"
-                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'start', this.value)" />
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'code', this.value)" />
+          <input class="cell-input driver-name-input" value="${escapeAttr(name)}"
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'name', this.value)" />
+          <input type="time" class="cell-input time-input" value="${start}" ${isReserve ? "disabled" : ""}
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'start', this.value)" />
           <div class="madinah-tag">Madinah</div>
-          <div class="track">${block}</div>
+          <div class="track">${track}</div>
           <div class="madinah-tag">Madinah</div>
-          <input type="time" class="cell-input time-input" value="${end}"
-                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'end', this.value)" />
+          <input type="time" class="cell-input time-input" value="${end}" ${isReserve ? "disabled" : ""}
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'end', this.value)" />
         </div>`;
       })
       .join("");
-
-    reserveCountEl.textContent = reserveDrivers.length;
-    reserveListEl.textContent = reserveDrivers.length ? reserveDrivers.join(" · ") : "Nobody on reserve this day.";
   }
 
   // ---- static hour header (once) ----

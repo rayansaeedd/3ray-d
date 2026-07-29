@@ -20,9 +20,10 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   stickiness violations, genuine coverage shortages).
 - **`web/admin_panel.html`** — a self-contained prototype admin panel. The same engine logic is
   ported to JavaScript and runs client-side against the embedded real data in
-  `web/real_data.json`. Styled to match the original Excel sheet's visual language (task-row
-  layout, Madinah tags, colored trip blocks, RESERVE panel) so it's a drop-in replacement for
-  whoever currently uses the spreadsheet.
+  `web/real_data.json`. The Day Schedule view is one row per active driver for the selected day
+  (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
+  (outbound leg + return leg) joined by a connector badge, drivers on standby show a single
+  RESERVE box. Every field (duty code, driver name, start, end) is directly editable.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -51,13 +52,16 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
-- **Manual task catalog** — each task row's code, driver name, start, and end time are editable
-  directly in the Day Schedule view (a manual name overrides the auto-assignment for that
-  task/day). Adding a brand-new task row that didn't come from the real data isn't built yet.
-- **Full Gantt visual fidelity** — the original workbook's per-duty rows can show multiple trip
-  segments with connector codes (A/K/L) between them; the current admin panel shows one
-  representative trip block per task row rather than the full multi-segment detail.
-- **Persistence** — manual edits to a task row survive switching days/tabs, but are cleared by
+- **Manual task catalog** — each driver row's duty code, name, start, and end time are editable
+  directly in the Day Schedule view (typing a code onto a RESERVE row assigns them a duty;
+  typing RESERVE onto a duty row puts them back on standby). Adding a brand-new duty that
+  didn't come from the real data isn't built yet.
+- **Real trip pairing / connector codes** — each working driver's duty is shown as two legs
+  (Madinah &rarr; a placeholder "Kaia Station" &rarr; Madinah) joined by a placeholder "K"
+  connector badge, split in half from the duty's one real start/end time. The real per-duty
+  train numbers for each leg, which connector letter (A/K/L) applies, and the real turnaround
+  timing between legs are still pending from the user's full plan.
+- **Persistence** — manual edits to a driver row survive switching days/tabs, but are cleared by
   the next "Generate month" click or a page reload; nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
