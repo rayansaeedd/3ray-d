@@ -1,0 +1,46 @@
+// OFFICE SCRIPT — creates a clean, values-only copy of every day tab's driver-facing
+// schedule (Tasks, NAME, times, hour grid) in the SAME workbook, so you don't have to
+// manually copy/paste-special each day one at a time.
+//
+// HOW TO USE (in Excel Online):
+//   1. Make sure every day tab you want to export already has its Shuffle # filled in
+//      (so the NAME column shows real driver names, not blank).
+//   2. Click the "Automate" tab -> "New Script", delete the placeholder, paste this in.
+//   3. Edit DAY_SHEET_NAMES below to list every day tab you want exported (add as many
+//      as you have -- 7, 15, 30, whatever).
+//   4. Click "Run". You'll get one new tab per day, named "Export - <day tab name>",
+//      each a plain values-and-formatting copy with NO formulas and NO link to Roster.
+//   5. Click the first "Export - ..." tab, then Ctrl-click (Cmd-click on Mac) every other
+//      "Export - ..." tab so they're all selected together.
+//   6. Right-click any of the selected tabs -> "Move or Copy" -> check "Create a copy" ->
+//      "To book:" -> "(new workbook)" -> OK.
+//   7. That's your one finished file with every day's schedule, ready to send. The
+//      "Export - ..." tabs stay behind in your original file too -- safe to delete them
+//      there, or just leave them; re-running this script always rebuilds them fresh.
+
+function main(workbook: ExcelScript.Workbook) {
+  // ============ CONFIG ============
+  const DAY_SHEET_NAMES = [
+    "TEST ", "TEST  (2)", "TEST  (3)", "TEST  (4)", "TEST  (5)", "TEST  (6)", "TEST  (7)"
+  ]; // add/remove day-tab names here to match what you actually have
+  const EXPORT_RANGE = "A1:AG49"; // the driver-facing table -- stops before the hidden engine columns
+
+  for (const sheetName of DAY_SHEET_NAMES) {
+    const src = workbook.getWorksheetOrNullObject(sheetName);
+    if (src.isNullObject) continue; // skip any name that doesn't exist, rather than failing the whole run
+
+    const exportName = ("Export - " + sheetName).trim().substring(0, 31); // sheet names cap at 31 chars
+    const oldExport = workbook.getWorksheetOrNullObject(exportName);
+    if (!oldExport.isNullObject) oldExport.delete();
+    const dst = workbook.addWorksheet(exportName);
+
+    const srcRange = src.getRange(EXPORT_RANGE);
+    const dstRange = dst.getRange(EXPORT_RANGE);
+
+    // two-step copy, same as the manual "Paste Special -> Values only" then
+    // "Paste Special -> Formatting only" -- values first so no formulas survive,
+    // then formatting on top so it still looks the same.
+    dstRange.copyFrom(srcRange, ExcelScript.RangeCopyType.values);
+    dstRange.copyFrom(srcRange, ExcelScript.RangeCopyType.formats);
+  }
+}

@@ -1,0 +1,207 @@
+// OFFICE SCRIPT — builds the random task-assignment engine (Roster/RosterRaw tabs,
+// hidden helper columns, Shuffle #, off-codes list, Roster reverse-fill) into a workbook
+// that already has the raw roster sheet and the day-of-week task sheets in it.
+//
+// HOW TO USE (in Excel Online):
+//   1. Make sure this workbook already has:
+//        - a raw monthly roster sheet (edit ROSTER_SHEET_NAME below to match its tab name)
+//        - one sheet per day of tasks (edit DAY_SHEET_NAMES below to match those tab names)
+//      Both need the SAME layout as the original template -- see the CONFIG section.
+//   2. Click the "Automate" tab in the ribbon.
+//   3. Click "New Script", delete the placeholder code, and paste this whole file in.
+//   4. Click "Run".
+//   5. Check the day tabs and the new "Roster" tab. If you get an error, copy the exact
+//      message and send it back for a fix.
+//
+// Running it twice is safe -- it deletes and rebuilds Roster/RosterRaw each time, and
+// simply overwrites the helper columns/formulas on the day tabs.
+
+function main(workbook: ExcelScript.Workbook) {
+  // ============ CONFIG -- edit these if your sheet names or layout differ ============
+  const ROSTER_SHEET_NAME = "OCT";                 // the raw monthly roster tab already in this file
+  const DAY_SHEET_NAMES = [
+    "TEST ", "TEST  (2)", "TEST  (3)", "TEST  (4)", "TEST  (5)", "TEST  (6)", "TEST  (7)"
+  ];                                                // the day-of-week task tabs
+  const OFF_CODES = [
+    "F", "V", "O", "VR", "T*", "VA", "A0", "SW", "S", "E", "EA", "AJ",
+    "P*", "R*", "L", "SD", "FD", "EF", "XS*"
+  ];                                                // codes that mean "not available" that day
+
+  const TASK_FIRST_ROW = 8;      // first row of the task list on each day tab
+  const TASK_LAST_ROW = 48;      // last row of the task list on each day tab
+
+  const ROSTER_CATEGORY_COL = 3;      // column C in the raw roster sheet = category
+  const ROSTER_ID_COL = 5;            // column E = staff id
+  const ROSTER_NAME_COL = 7;          // column G = staff name
+  const ROSTER_DATE_ROW = 3;          // row 3 = date headers
+  const ROSTER_DATE_FIRST_COL = 8;    // column H = day 1 of the month
+  const ROSTER_DATE_LAST_COL = 38;    // column AL = day 31
+  const ROSTER_FIRST_DATA_ROW = 6;    // first real driver row
+  const ROSTER_LAST_DATA_ROW = 104;   // last real driver row (rows after this are totals -- excluded)
+
+  // ============ helper: convert a 1-based column number to its letter(s) ============
+  function colLetter(n: number): string {
+    let letter = "";
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      letter = String.fromCharCode(65 + rem) + letter;
+      n = Math.floor((n - 1) / 26);
+    }
+    return letter;
+  }
+
+  // ============ 1. read the raw roster data ============
+  const rosterSheet = workbook.getWorksheet(ROSTER_SHEET_NAME);
+  const numDrivers = ROSTER_LAST_DATA_ROW - ROSTER_FIRST_DATA_ROW + 1;
+  const numDays = ROSTER_DATE_LAST_COL - ROSTER_DATE_FIRST_COL + 1;
+
+  const dateHeaders = rosterSheet
+    .getRangeByIndexes(ROSTER_DATE_ROW - 1, ROSTER_DATE_FIRST_COL - 1, 1, numDays)
+    .getValues()[0] as number[];
+
+  const catValues = rosterSheet
+    .getRangeByIndexes(ROSTER_FIRST_DATA_ROW - 1, ROSTER_CATEGORY_COL - 1, numDrivers, 1)
+    .getValues();
+  const idValues = rosterSheet
+    .getRangeByIndexes(ROSTER_FIRST_DATA_ROW - 1, ROSTER_ID_COL - 1, numDrivers, 1)
+    .getValues();
+  const nameValues = rosterSheet
+    .getRangeByIndexes(ROSTER_FIRST_DATA_ROW - 1, ROSTER_NAME_COL - 1, numDrivers, 1)
+    .getValues();
+  const codeValues = rosterSheet
+    .getRangeByIndexes(ROSTER_FIRST_DATA_ROW - 1, ROSTER_DATE_FIRST_COL - 1, numDrivers, numDays)
+    .getValues();
+
+  // ============ 2. (re)build RosterRaw (hidden, static) and Roster (visible) ============
+  const oldRaw = workbook.getWorksheetOrNullObject("RosterRaw");
+  if (!oldRaw.isNullObject) oldRaw.delete();
+  const rosterRaw = workbook.addWorksheet("RosterRaw");
+
+  const oldRoster = workbook.getWorksheetOrNullObject("Roster");
+  if (!oldRoster.isNullObject) oldRoster.delete();
+  const roster = workbook.addWorksheet("Roster");
+
+  const lastDataRow = 1 + numDrivers;             // row 100 in a 99-driver roster
+  const lastDateColLetter = colLetter(3 + numDays); // roster date columns run D onward
+
+  for (const sheet of [roster, rosterRaw]) {
+    sheet.getRange("A1").setValue("Category");
+    sheet.getRange("B1").setValue("Staff ID");
+    sheet.getRange("C1").setValue("Staff Name");
+
+    const dateHeaderRow = sheet.getRangeByIndexes(0, 3, 1, numDays);
+    dateHeaderRow.setValues([dateHeaders]);
+    dateHeaderRow.setNumberFormat(dateHeaders.map(() => ["dd-mmm"]) as unknown as string[][]);
+
+    sheet.getRangeByIndexes(1, 0, numDrivers, 1).setValues(catValues);
+    sheet.getRangeByIndexes(1, 1, numDrivers, 1).setValues(idValues);
+    sheet.getRangeByIndexes(1, 2, numDrivers, 1).setValues(nameValues);
+    sheet.getRangeByIndexes(1, 3, numDrivers, numDays).setValues(codeValues);
+  }
+
+  rosterRaw.setVisibility(ExcelScript.SheetVisibility.hidden);
+
+  roster.getRange("A1:C1").getFormat().getFont().setBold(true);
+  roster.getRange(`D1:${lastDateColLetter}1`).getFormat().getFont().setBold(true);
+  roster.getRange("C:C").getFormat().setColumnWidth(230);
+
+  const noteRow = lastDataRow + 2;
+  roster.getRange(`A${noteRow}`).setValue(
+    "GREEN BOLD task codes are auto-filled: if that driver drew a task on a date with a " +
+    "matching day tab, it shows here automatically. Everything else (F, V, O, etc, in black) " +
+    "is the original roster data, untouched."
+  );
+
+  // ============ 3. wire up each day sheet ============
+  const rosterNameRng = `RosterRaw!$C$2:$C$${lastDataRow}`;
+  const rosterCodeRng = `RosterRaw!$D$2:$${lastDateColLetter}$${lastDataRow}`;
+  const rosterDateHdrRng = `RosterRaw!$D$1:$${lastDateColLetter}$1`;
+  const poolLastRow = 7 + numDrivers;
+
+  for (const sheetName of DAY_SHEET_NAMES) {
+    const ws = workbook.getWorksheet(sheetName);
+
+    ws.getRange("AH7").setValue("Driver Pool");
+    ws.getRange("AJ7").setValue("Day Code");
+    ws.getRange("AK7").setValue("Rand Key");
+    ws.getRange("AL7").setValue("Rank");
+    for (const addr of ["AH7", "AJ7", "AK7", "AL7"]) {
+      const f = ws.getRange(addr).getFormat().getFont();
+      f.setBold(true);
+      f.setSize(9);
+    }
+
+    ws.getRange("AM1").setValue("OFF codes");
+    ws.getRange("AM1").getFormat().getFont().setBold(true);
+    ws.getRange("AN1").setValue(
+      "Edit this list to change which day-codes count as unavailable. Blank cells in the roster are treated as available."
+    );
+    ws.getRangeByIndexes(1, 38, OFF_CODES.length, 1).setValues(OFF_CODES.map((c) => [c]));
+
+    ws.getRange("AN7").setValue("Shuffle #:");
+    ws.getRange("AN7").getFormat().getFont().setBold(true);
+    const seedCell = ws.getRange("AO7");
+    seedCell.setValue("");
+    seedCell.getFormat().getFill().setColor("#FFFF00");
+    seedCell.getFormat().getFont().setBold(true);
+    ws.getRange("AP7").setValue(
+      "<- blank = no one assigned yet. Type a number (e.g. 1) to generate this day's assignment; change the number to reshuffle."
+    );
+
+    for (let r = TASK_FIRST_ROW; r <= poolLastRow; r++) {
+      const poolIdx = r - TASK_FIRST_ROW + 1;
+      ws.getRange(`AH${r}`).setFormula(`=INDEX(${rosterNameRng},${poolIdx})`);
+      ws.getRange(`AJ${r}`).setFormula(
+        `=IFERROR(INDEX(${rosterCodeRng},${poolIdx},MATCH($Z$5,${rosterDateHdrRng},0)),"")`
+      );
+      ws.getRange(`AK${r}`).setFormula(
+        `=IF(COUNTIF($AM$2:$AM$${1 + OFF_CODES.length},AJ${r})>0,1000+ROW(),MOD(SIN($AO$7*12.9898+ROW()*78.233)*43758.5453,1))`
+      );
+      ws.getRange(`AL${r}`).setFormula(`=RANK(AK${r},$AK$${TASK_FIRST_ROW}:$AK$${poolLastRow},1)`);
+    }
+
+    for (let r = TASK_FIRST_ROW; r <= TASK_LAST_ROW; r++) {
+      ws.getRange(`D${r}`).setFormula(
+        `=IF($AO$7="","",IFERROR(INDEX($AH$${TASK_FIRST_ROW}:$AH$${poolLastRow},` +
+          `MATCH(ROW()-${TASK_FIRST_ROW - 1},$AL$${TASK_FIRST_ROW}:$AL$${poolLastRow},0)),` +
+          `"- add more drivers -"))`
+      );
+    }
+
+    ws.getRange("D49").setValue("NAME");
+
+    for (const col of ["AH", "AJ", "AK", "AL"]) {
+      ws.getRange(`${col}:${col}`).getFormat().setColumnWidth(0);
+    }
+  }
+
+  // ============ 4. reverse-fill Roster from whatever date each day tab is set to ============
+  for (const sheetName of DAY_SHEET_NAMES) {
+    const ws = workbook.getWorksheet(sheetName);
+    const dateVal = ws.getRange("Z5").getValue() as number;
+
+    let colOffset = -1;
+    for (let i = 0; i < dateHeaders.length; i++) {
+      if (dateHeaders[i] === dateVal) {
+        colOffset = i;
+        break;
+      }
+    }
+    if (colOffset === -1) continue; // this day tab's date isn't in the roster -- skip it
+
+    const rosterColLetter = colLetter(4 + colOffset);
+
+    for (let r = 2; r <= lastDataRow; r++) {
+      const cell = roster.getRange(`${rosterColLetter}${r}`);
+      const existing = cell.getValue();
+      if (existing !== "" && existing !== null && existing !== undefined) continue;
+
+      const nameRng = `'${sheetName}'!$D$${TASK_FIRST_ROW}:$D$${TASK_LAST_ROW}`;
+      const codeRng = `'${sheetName}'!$C$${TASK_FIRST_ROW}:$C$${TASK_LAST_ROW}`;
+      cell.setFormula(`=IFERROR(INDEX(${codeRng},MATCH($C${r},${nameRng},0)),"")`);
+      const f = cell.getFormat().getFont();
+      f.setColor("#008000");
+      f.setBold(true);
+    }
+  }
+}
