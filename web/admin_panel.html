@@ -151,7 +151,7 @@
 
   .task-row {
     display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
-    border-bottom: 1px solid var(--grid-line); min-height: 44px;
+    border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
   .task-code { align-self: center; padding-left: 8px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
@@ -181,11 +181,22 @@
     border-radius: 3px; background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
     font-size: 11.5px; font-weight: 700; white-space: nowrap;
   }
-  .block-underline { position: absolute; bottom: -5px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
+  .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
+  .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
   .block-underline.day { background: var(--day-chip); }
   .block-underline.afternoon { background: var(--afternoon-chip); }
   .block-underline.night { background: var(--night-chip); }
-  .no-driver-block { position: absolute; top: 50%; transform: translateY(-50%); left: 4px; right: 4px; height: 26px; border: 1.5px dashed var(--bad); border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--bad); }
+  .time-label {
+    position: absolute; top: -13px; font-size: 8px; font-weight: 700; color: var(--ink-soft);
+    white-space: nowrap; pointer-events: none; transform: rotate(-58deg);
+  }
+  .time-label.start-label { left: -1px; transform-origin: left bottom; }
+  .time-label.end-label { right: -1px; transform-origin: right bottom; }
+  .no-driver-block {
+    position: absolute; top: 50%; transform: translateY(-50%); left: 4px; right: 4px; height: 26px;
+    border: 1.5px dashed var(--bad); border-radius: 3px; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--bad);
+  }
 
   .reserve-panel { padding: 16px 22px; border-top: 2px solid var(--grid-line); background: var(--reserve-bg); }
   .reserve-panel h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--olive-dark); }
@@ -689,11 +700,21 @@
         const shiftClass = hasName
           ? (assign ? assign.shiftType : classifyShift(startMin, monthResult.config.shiftWindows)).toLowerCase()
           : "";
+        const timeLabels =
+          `<div class="time-label start-label">${start}</div>` +
+          `<div class="time-label end-label">${end}</div>`;
         const block = hasName
-          ? `<div class="block" style="left:${leftPct}%; width:${widthPct}%;">${escapeAttr(code)}
+          ? `<div class="block" style="left:${leftPct}%; width:${widthPct}%;">
+               ${timeLabels}
+               ${escapeAttr(code)}
+               <div class="block-baseline"></div>
                <div class="block-underline ${shiftClass}"></div>
              </div>`
-          : `<div class="no-driver-block" style="left:${leftPct}%; width:${widthPct}%;">${escapeAttr(code)}</div>`;
+          : `<div class="no-driver-block" style="left:${leftPct}%; width:${widthPct}%;">
+               ${timeLabels}
+               ${escapeAttr(code)}
+               <div class="block-baseline"></div>
+             </div>`;
 
         return `
         <div class="task-row">
