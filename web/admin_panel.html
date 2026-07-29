@@ -138,16 +138,16 @@
   .day-date select { min-width: 150px; }
 
   .gantt-scroll { overflow-x: auto; }
-  .gantt { min-width: 1260px; }
+  .gantt { min-width: 1380px; }
   .hour-header {
-    display: grid; grid-template-columns: 84px 190px 70px repeat(24, 1fr) 70px;
+    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 84px 190px 70px repeat(24, 1fr) 70px;
+    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
     border-bottom: 1px solid var(--grid-line); min-height: 44px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -155,7 +155,19 @@
   .driver-name { align-self: center; padding: 0 6px; font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name.empty { color: var(--bad); font-style: italic; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
-  .track { grid-column: 4 / 28; position: relative; }
+  .track { grid-column: 5 / 29; position: relative; }
+
+  /* ---------------- editable row cells ---------------- */
+  .cell-input {
+    align-self: center; width: 100%; border: none; background: transparent; font-family: inherit;
+    color: inherit; border-radius: 3px; padding: 4px 5px; box-sizing: border-box;
+  }
+  .cell-input:hover { background: var(--bg-alt); }
+  .cell-input:focus { background: var(--bg); outline: 1.5px solid var(--olive); outline-offset: -1px; }
+  .task-code-input { font-size: 12px; font-weight: 700; color: var(--olive-dark); }
+  .driver-name-input { font-size: 11px; color: var(--ink); }
+  .driver-name-input:placeholder-shown { color: var(--bad); font-style: italic; }
+  .time-input { font-size: 11px; text-align: center; padding: 4px 2px; }
   .track::before {
     content: ""; position: absolute; inset: 0;
     background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
@@ -502,6 +514,7 @@
     document.getElementById("status-text").textContent = "Generating…";
     setTimeout(() => {
       monthResult = runMonth(config, seed);
+      Object.keys(dayOverrides).forEach((k) => delete dayOverrides[k]);
       const c = computeCompliance(monthResult.allStretches);
       const uncovered = monthResult.uncoveredTasks.length;
       const hasWarning = c.violations > 0 || uncovered > 0;
@@ -594,6 +607,26 @@
       .join("");
   }
 
+  // manual edits per day, keyed by the task's original index (so renaming a code doesn't
+  // break the lookup): dayOverrides[dayIdx][taskIdx] = { code, name, start, end }
+  const dayOverrides = {};
+
+  function minutesToHHMM(min) {
+    const m = ((min % 1440) + 1440) % 1440;
+    return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+  }
+
+  function escapeAttr(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function updateOverride(dayIdx, taskIdx, field, value) {
+    dayOverrides[dayIdx] = dayOverrides[dayIdx] || {};
+    dayOverrides[dayIdx][taskIdx] = dayOverrides[dayIdx][taskIdx] || {};
+    dayOverrides[dayIdx][taskIdx][field] = value;
+    renderDay();
+  }
+
   function renderDay() {
     const dayIdx = parseInt(document.getElementById("day-select").value, 10);
     const dt = new Date(REAL_DATA.dates[dayIdx] + "T00:00:00");
@@ -620,31 +653,50 @@
       else taskAssignment[val] = { driverIndex: s.driverIndex, shiftType: s.shiftType };
     });
 
+    const overridesForDay = dayOverrides[dayIdx] || {};
+
     rowsEl.innerHTML = REAL_DATA.tasks
-      .map((t) => {
+      .map((t, taskIdx) => {
+        const o = overridesForDay[taskIdx] || {};
         const assign = taskAssignment[t.code];
-        const startMin = timeToMinutes(t.start);
+        const code = o.code !== undefined ? o.code : t.code;
+        const start = o.start !== undefined ? o.start : t.start;
+        const defaultName = assign ? REAL_DATA.drivers[assign.driverIndex].name : "";
+        const name = o.name !== undefined ? o.name : defaultName;
+
+        const startMin = timeToMinutes(start);
         const duration = durationFor(t.code);
-        let endMin = startMin + duration;
+        const defaultEnd = minutesToHHMM(startMin + duration);
+        const end = o.end !== undefined ? o.end : defaultEnd;
+        const endMin = timeToMinutes(end);
+        const effectiveDuration = ((endMin - startMin + 1440) % 1440) || duration;
+
         const leftPct = (startMin / 1440) * 100;
-        const widthPct = (Math.min(duration, 1440 - startMin) / 1440) * 100;
-        const endLabel = new Date(0, 0, 0, 0, endMin % 1440).toTimeString().slice(0, 5);
-        const shiftClass = assign ? assign.shiftType.toLowerCase() : "";
-        const driverCell = assign
-          ? `<div class="driver-name">${REAL_DATA.drivers[assign.driverIndex].name}</div>`
-          : `<div class="driver-name empty">unfilled</div>`;
-        const block = assign
-          ? `<div class="block" style="left:${leftPct}%; width:${widthPct}%;">${t.code}
+        const widthPct = (Math.min(effectiveDuration, 1440 - startMin) / 1440) * 100;
+
+        const hasName = name.trim() !== "";
+        const shiftClass = hasName
+          ? (assign ? assign.shiftType : classifyShift(startMin, monthResult.config.shiftWindows)).toLowerCase()
+          : "";
+        const block = hasName
+          ? `<div class="block" style="left:${leftPct}%; width:${widthPct}%;">${escapeAttr(code)}
                <div class="block-underline ${shiftClass}"></div>
              </div>`
-          : `<div class="no-driver-block" style="left:${leftPct}%; width:${widthPct}%;">${t.code}</div>`;
+          : `<div class="no-driver-block" style="left:${leftPct}%; width:${widthPct}%;">${escapeAttr(code)}</div>`;
+
         return `
         <div class="task-row">
-          <div class="task-code">${t.code}</div>
-          ${driverCell}
+          <input class="cell-input task-code-input" value="${escapeAttr(code)}"
+                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'code', this.value)" />
+          <input class="cell-input driver-name-input" value="${escapeAttr(name)}" placeholder="unfilled"
+                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'name', this.value)" />
+          <input type="time" class="cell-input time-input" value="${start}"
+                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'start', this.value)" />
           <div class="madinah-tag">Madinah</div>
           <div class="track">${block}</div>
           <div class="madinah-tag">Madinah</div>
+          <input type="time" class="cell-input time-input" value="${end}"
+                 onchange="updateOverride(${dayIdx}, ${taskIdx}, 'end', this.value)" />
         </div>`;
       })
       .join("");
@@ -655,9 +707,9 @@
 
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell"></div>' +
+    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell">Start</div><div class="hcell"></div>' +
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
-    '<div class="hcell"></div>';
+    '<div class="hcell"></div><div class="hcell">End</div>';
 
   populateDaySelect();
   renderRoster();

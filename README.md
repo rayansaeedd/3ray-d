@@ -51,14 +51,14 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
-- **Manual task catalog** — letting a supervisor manually add/assign a specific real trip (e.g.
-  a specific Madinah route + trip number) isn't built yet; deferred pending the full catalog of
-  real trip/task names.
+- **Manual task catalog** — each task row's code, driver name, start, and end time are editable
+  directly in the Day Schedule view (a manual name overrides the auto-assignment for that
+  task/day). Adding a brand-new task row that didn't come from the real data isn't built yet.
 - **Full Gantt visual fidelity** — the original workbook's per-duty rows can show multiple trip
   segments with connector codes (A/K/L) between them; the current admin panel shows one
   representative trip block per task row rather than the full multi-segment detail.
-- **Persistence** — the admin panel doesn't save anything between page loads yet; every
-  "Generate month" click recomputes from scratch with a fresh random seed.
+- **Persistence** — manual edits to a task row survive switching days/tabs, but are cleared by
+  the next "Generate month" click or a page reload; nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 
