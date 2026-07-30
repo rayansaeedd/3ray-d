@@ -224,8 +224,12 @@
     padding: 3px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
   }
   .remove-task-btn:hover { background: var(--bad); color: #fff; }
-  .drag-handle { cursor: grab; color: var(--ink-soft); text-align: center; font-size: 13px; user-select: none; letter-spacing: -2px; }
-  .settings-table tr[draggable="true"]:active { opacity: 0.6; }
+  .drag-handle {
+    cursor: grab; color: var(--ink-soft); text-align: center; font-size: 15px; user-select: none;
+    letter-spacing: -2px; touch-action: none;
+  }
+  .settings-table tbody tr.drag-source-row { opacity: 0.4; }
+  .settings-table tbody tr.drag-over-row td { box-shadow: inset 0 2px 0 var(--olive), inset 0 -2px 0 var(--olive); }
 
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
@@ -859,22 +863,49 @@
     renderTaskSettings();
   }
 
-  // long-press-and-drag row reordering (Task Settings only -- the Day Schedule stays read-only)
-  let draggedTaskIndex = null;
-  function handleRowDragStart(e, index) {
-    draggedTaskIndex = index;
-    e.dataTransfer.effectAllowed = "move";
-  }
-  function handleRowDragOver(e) {
+  // long-press-and-drag row reordering (Task Settings only -- the Day Schedule stays read-only).
+  // Built on Pointer Events rather than the HTML5 drag-and-drop API: native drag-and-drop
+  // doesn't respond to touch/long-press on iPad/iPhone Safari, only to a mouse.
+  let dragFromIndex = null;
+  let dragOverIndex = null;
+
+  function taskRowPointerDown(e, index) {
     e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
+    dragFromIndex = index;
+    dragOverIndex = index;
+    document.body.style.userSelect = "none";
+    const rows = document.querySelectorAll("#task-settings-table tbody tr");
+    if (rows[index]) rows[index].classList.add("drag-source-row");
+    window.addEventListener("pointermove", taskRowPointerMove);
+    window.addEventListener("pointerup", taskRowPointerUp);
   }
-  function handleRowDrop(e, index) {
-    e.preventDefault();
-    if (draggedTaskIndex === null || draggedTaskIndex === index) return;
-    const [moved] = TASK_CATALOG.splice(draggedTaskIndex, 1);
-    TASK_CATALOG.splice(index, 0, moved);
-    draggedTaskIndex = null;
+
+  function taskRowPointerMove(e) {
+    if (dragFromIndex === null) return;
+    const rows = document.querySelectorAll("#task-settings-table tbody tr");
+    for (let i = 0; i < rows.length; i++) {
+      const rect = rows[i].getBoundingClientRect();
+      if (e.clientY >= rect.top && e.clientY <= rect.bottom) {
+        if (dragOverIndex !== i) {
+          dragOverIndex = i;
+          rows.forEach((r) => r.classList.remove("drag-over-row"));
+          rows[i].classList.add("drag-over-row");
+        }
+        break;
+      }
+    }
+  }
+
+  function taskRowPointerUp() {
+    window.removeEventListener("pointermove", taskRowPointerMove);
+    window.removeEventListener("pointerup", taskRowPointerUp);
+    document.body.style.userSelect = "";
+    if (dragFromIndex !== null && dragOverIndex !== null && dragFromIndex !== dragOverIndex) {
+      const [moved] = TASK_CATALOG.splice(dragFromIndex, 1);
+      TASK_CATALOG.splice(dragOverIndex, 0, moved);
+    }
+    dragFromIndex = null;
+    dragOverIndex = null;
     renderTaskSettings();
   }
 
@@ -919,9 +950,8 @@
           ? `<span style="color:var(--ink-soft)">--</span>`
           : `<input type="time" value="${escapeAttr(value)}" onchange="updateTaskCatalogEntry(${i}, '${field}', this.value)" />`;
 
-      html += `<tr draggable="true"
-          ondragstart="handleRowDragStart(event, ${i})" ondragover="handleRowDragOver(event)" ondrop="handleRowDrop(event, ${i})">
-        <td class="drag-handle" title="Long-press and drag to reorder">&#8942;&#8942;</td>
+      html += `<tr>
+        <td class="drag-handle" title="Press and drag to reorder" onpointerdown="taskRowPointerDown(event, ${i})">&#8942;&#8942;</td>
         <td><input value="${escapeAttr(t.code)}" onchange="updateTaskCatalogEntry(${i}, 'code', this.value)" style="width:90px" /></td>
         <td>
           <select onchange="updateTaskCatalogEntry(${i}, 'category', this.value)">
