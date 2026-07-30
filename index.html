@@ -182,9 +182,11 @@
     opacity: 0.3; pointer-events: none;
   }
   /* ---------------- driver duty: two trip legs + connector ---------------- */
+  /* each duty's pair of boxes is a fixed size, so every row lines up the same regardless of
+     that duty's actual duration -- only the pair's starting position (left%) is time-based */
   .block-pair { position: absolute; top: 50%; transform: translateY(-50%); height: 28px; display: flex; align-items: center; gap: 4px; }
   .leg-block {
-    flex: 1 1 0; height: 28px; min-width: 0; border: 1.5px solid var(--trip-border); border-radius: 3px;
+    flex: 0 0 92px; width: 92px; height: 28px; border: 1.5px solid var(--trip-border); border-radius: 3px;
     background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
     font-size: 10.5px; font-weight: 700; white-space: nowrap; overflow: hidden; position: relative;
   }
@@ -775,14 +777,11 @@
           const startMin = timeToMinutes(start);
           const defaultEnd = minutesToHHMM(startMin + defaultDuration);
           end = o.end !== undefined ? o.end : defaultEnd;
-          const endMin = timeToMinutes(end);
-          const effectiveDuration = ((endMin - startMin + 1440) % 1440) || defaultDuration;
 
           const leftPct = (startMin / 1440) * 100;
-          const widthPct = (Math.min(effectiveDuration, 1440 - startMin) / 1440) * 100;
 
           track = `
-            <div class="block-pair" style="left:${leftPct}%; width:${widthPct}%;">
+            <div class="block-pair" style="left:${leftPct}%;">
               <div class="time-label start-label">${start}</div>
               <div class="time-label end-label">${end}</div>
               <div class="leg-block">${escapeAttr(outboundLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
