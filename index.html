@@ -1,0 +1,734 @@
+<title>Driver Scheduling Engine — Admin Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --olive: #4b5320;
+    --olive-dark: #3a4019;
+    --accent-yellow: #fff176;
+    --grid-line: #7c9a5e;
+    --bg: #ffffff;
+    --bg-alt: #f4f5f0;
+    --panel-bg: #fbfbf8;
+    --panel-border: #e2e4da;
+    --ink: #1b1d16;
+    --ink-soft: #5a5d4f;
+    --trip-bg: #ffffff;
+    --trip-border: #26291f;
+    --reserve-bg: #f5f0e0;
+    --reserve-border: #9c8a3a;
+    --tag-bg: #ffffff;
+    --tag-border: #33361f;
+    --day-chip: #e0a72e;
+    --afternoon-chip: #4a7fb5;
+    --night-chip: #4b3f7a;
+    --ok: #3f7d3a;
+    --warn: #a5701e;
+    --bad: #a13b3b;
+    --task-color: #008000;
+    --reserve-color: #0070c0;
+    --input-bg: #ffffff;
+    --input-border: #ccd0c0;
+    --shadow: 0 1px 2px rgba(20, 22, 12, 0.06), 0 4px 14px rgba(20, 22, 12, 0.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --olive: #5c6626; --olive-dark: #3a4019; --accent-yellow: #ffe999; --grid-line: #4c5a3e;
+      --bg: #1c1e17; --bg-alt: #23261c; --panel-bg: #20221a; --panel-border: #34372a;
+      --ink: #ecece2; --ink-soft: #a8ab9a; --trip-bg: #262a1d; --trip-border: #cfd3c2;
+      --reserve-bg: #2c2a18; --reserve-border: #b8a24a;
+      --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
+      --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
+      --task-color: #6fd66f; --reserve-color: #7cb3e8;
+      --input-bg: #23261c; --input-border: #454a38;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --olive: #5c6626; --olive-dark: #3a4019; --accent-yellow: #ffe999; --grid-line: #4c5a3e;
+    --bg: #1c1e17; --bg-alt: #23261c; --panel-bg: #20221a; --panel-border: #34372a;
+    --ink: #ecece2; --ink-soft: #a8ab9a; --trip-bg: #262a1d; --trip-border: #cfd3c2;
+    --reserve-bg: #2c2a18; --reserve-border: #b8a24a;
+    --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
+    --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
+    --task-color: #6fd66f; --reserve-color: #7cb3e8;
+    --input-bg: #23261c; --input-border: #454a38;
+  }
+  :root[data-theme="light"] {
+    --olive: #4b5320; --olive-dark: #3a4019; --accent-yellow: #fff176; --grid-line: #7c9a5e;
+    --bg: #ffffff; --bg-alt: #f4f5f0; --panel-bg: #fbfbf8; --panel-border: #e2e4da;
+    --ink: #1b1d16; --ink-soft: #5a5d4f; --trip-bg: #ffffff; --trip-border: #26291f;
+    --reserve-bg: #f5f0e0; --reserve-border: #9c8a3a;
+    --tag-bg: #ffffff; --tag-border: #33361f; --day-chip: #e0a72e; --afternoon-chip: #4a7fb5;
+    --night-chip: #4b3f7a; --ok: #3f7d3a; --warn: #a5701e; --bad: #a13b3b;
+    --task-color: #008000; --reserve-color: #0070c0;
+    --input-bg: #ffffff; --input-border: #ccd0c0;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  .app.conditions-hidden { grid-template-columns: 0 1fr; }
+  .app.conditions-hidden .conditions { padding: 0; border-right: none; overflow: hidden; min-width: 0; }
+  .app.conditions-hidden .conditions > * { display: none; }
+  @media (max-width: 880px) {
+    .app { grid-template-columns: 1fr; }
+    .conditions { order: 2; } .schedule { order: 1; }
+  }
+
+  /* ---------------- Conditions panel ---------------- */
+  .conditions {
+    background: var(--panel-bg);
+    border-right: 1px solid var(--panel-border);
+    padding: 22px 20px 32px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .brand { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+  .brand .eyebrow {
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-soft); font-weight: 600;
+  }
+  .brand h1 { font-size: 18px; margin: 0; font-weight: 700; text-wrap: balance; }
+  .cond-group {
+    background: var(--bg); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 14px 16px 16px; box-shadow: var(--shadow);
+  }
+  .cond-group h2 {
+    font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px;
+    color: var(--ink-soft); font-weight: 700;
+  }
+  .shift-row { display: grid; grid-template-columns: 74px 1fr 1fr; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .shift-row:last-child { margin-bottom: 0; }
+  .shift-chip { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-align: center; color: #241f00; }
+  .shift-chip.day { background: var(--day-chip); }
+  .shift-chip.afternoon { background: var(--afternoon-chip); color: #fff; }
+  .shift-chip.night { background: var(--night-chip); color: #fff; }
+  input[type="time"], input[type="number"], select {
+    width: 100%; font-size: 12.5px; padding: 5px 6px; border-radius: 6px;
+    border: 1px solid var(--input-border); background: var(--input-bg); color: var(--ink);
+    font-variant-numeric: tabular-nums; font-family: inherit;
+  }
+  .ratio-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 8px; }
+  .ratio-row input { width: 52px; flex: none; }
+  .field-label { color: var(--ink-soft); font-size: 12.5px; }
+  .generate-btn {
+    background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 8px;
+    padding: 11px 14px; font-size: 13.5px; font-weight: 700; cursor: pointer; box-shadow: var(--shadow);
+  }
+  .generate-btn:hover { background: var(--olive-dark); }
+  .generate-btn:focus-visible { outline: 2px solid var(--afternoon-chip); outline-offset: 2px; }
+  .status-line { font-size: 12px; color: var(--ink-soft); display: flex; align-items: flex-start; gap: 6px; }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; margin-top: 4px; }
+  .status-dot.warn { background: var(--warn); }
+  .compliance { font-size: 11.5px; color: var(--ink-soft); line-height: 1.6; }
+  .compliance b { color: var(--ink); }
+
+  /* ---------------- Schedule view ---------------- */
+  .schedule { background: var(--bg); min-width: 0; }
+  .excel-header { background: var(--olive); color: #fff; padding: 14px 22px 16px; position: relative; }
+  .excel-header .op-label {
+    position: absolute; top: 12px; right: 22px; font-style: italic; font-size: 12px;
+    color: var(--accent-yellow); font-weight: 600;
+  }
+  .day-title-row { display: flex; align-items: center; justify-content: center; gap: 28px; margin-top: 6px; flex-wrap: wrap; }
+  .day-pill { background: #e9ebe3; color: var(--olive-dark); font-weight: 700; font-size: 15px; padding: 6px 26px; border-radius: 3px; }
+  .day-date { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; color: #fff; }
+  .day-date select { min-width: 150px; }
+
+  .gantt-scroll { overflow-x: auto; }
+  .gantt { min-width: 1380px; }
+  .hour-header {
+    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
+    border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
+  }
+  .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
+  .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
+
+  .task-row {
+    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
+    border-bottom: 1px solid var(--grid-line); min-height: 52px;
+  }
+  .task-row:nth-child(odd) { background: var(--bg-alt); }
+  .task-code { align-self: center; padding-left: 8px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
+  .driver-name { align-self: center; padding: 0 6px; font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .driver-name.empty { color: var(--bad); font-style: italic; }
+  .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
+  .track { grid-column: 5 / 29; position: relative; }
+
+  /* ---------------- editable row cells ---------------- */
+  .cell-input {
+    align-self: center; width: 100%; border: none; background: transparent; font-family: inherit;
+    color: inherit; border-radius: 3px; padding: 4px 5px; box-sizing: border-box;
+  }
+  .cell-input:hover { background: var(--bg-alt); }
+  .cell-input:focus { background: var(--bg); outline: 1.5px solid var(--olive); outline-offset: -1px; }
+  .task-code-input { font-size: 12px; font-weight: 700; color: var(--olive-dark); }
+  .driver-name-input { font-size: 11px; color: var(--ink); }
+  .driver-name-input:placeholder-shown { color: var(--bad); font-style: italic; }
+  .time-input { font-size: 11px; text-align: center; padding: 4px 2px; }
+  .track::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
+    opacity: 0.3; pointer-events: none;
+  }
+  /* ---------------- driver duty: two trip legs + connector ---------------- */
+  .block-pair { position: absolute; top: 50%; transform: translateY(-50%); height: 28px; display: flex; align-items: center; gap: 4px; }
+  .leg-block {
+    flex: 1 1 0; height: 28px; min-width: 0; border: 1.5px solid var(--trip-border); border-radius: 3px;
+    background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-weight: 700; white-space: nowrap; overflow: hidden; position: relative;
+  }
+  .connector-badge {
+    flex: 0 0 auto; width: 17px; height: 17px; border: 1px solid var(--trip-border); border-radius: 3px;
+    background: var(--task-color); color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 800;
+  }
+  .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
+  .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
+  .block-underline.outbound { background: var(--reserve-color); }
+  .block-underline.return { background: var(--task-color); }
+  .time-label {
+    position: absolute; top: -13px; font-size: 8px; font-weight: 700; color: var(--ink-soft);
+    white-space: nowrap; pointer-events: none; transform: rotate(-58deg);
+  }
+  .time-label.start-label { left: -1px; transform-origin: left bottom; }
+  .time-label.end-label { right: -1px; transform-origin: right bottom; }
+  .reserve-block {
+    position: absolute; top: 50%; transform: translateY(-50%); left: 10%; right: 10%; height: 26px;
+    border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
+    align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--reserve-color);
+  }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 13px; height: 4px; border-radius: 2px; }
+  .legend .swatch.outbound { background: var(--reserve-color); }
+  .legend .swatch.return { background: var(--task-color); }
+
+  /* ---------------- view tabs ---------------- */
+  .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
+  .view-tab {
+    background: transparent; border: none; color: var(--accent-yellow); opacity: 0.65;
+    font-size: 13px; font-weight: 700; padding: 9px 18px; border-radius: 6px 6px 0 0;
+    cursor: pointer; font-family: inherit;
+  }
+  .view-tab.active { background: var(--olive); opacity: 1; }
+  .view-tab:focus-visible { outline: 2px solid var(--accent-yellow); outline-offset: -2px; }
+  .view-tab.conditions-toggle { margin-left: auto; opacity: 0.85; }
+  .view-tab.conditions-toggle:hover { opacity: 1; }
+
+  /* ---------------- roster view ---------------- */
+  .roster-scroll { overflow: auto; max-height: 70vh; }
+  .roster-table { border-collapse: collapse; font-size: 11px; min-width: 100%; }
+  .roster-table th, .roster-table td {
+    border: 1px solid var(--grid-line); padding: 4px 7px; white-space: nowrap; text-align: center;
+  }
+  .roster-table thead th {
+    position: sticky; top: 0; background: var(--bg-alt); color: var(--olive-dark);
+    font-size: 10.5px; z-index: 2;
+  }
+  .roster-table .roster-name-cell {
+    position: sticky; left: 0; background: var(--bg); text-align: left; z-index: 1;
+    font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-weight: 600;
+  }
+  .roster-table thead th.roster-name-header { position: sticky; left: 0; top: 0; z-index: 3; text-align: left; background: var(--bg-alt); }
+  .roster-table tbody tr:nth-child(odd) td:not(.roster-name-cell) { background: var(--bg-alt); }
+  .roster-table tbody tr:nth-child(odd) .roster-name-cell { background: var(--bg-alt); }
+  .roster-cell-task { color: var(--task-color); font-weight: 700; }
+  .roster-cell-reserve { color: var(--reserve-color); font-weight: 700; }
+  .roster-cell-off { color: var(--ink); }
+  .roster-note { padding: 10px 22px; font-size: 11.5px; color: var(--ink-soft); }
+</style>
+
+<div class="app" id="app">
+  <aside class="conditions" aria-label="Scheduling conditions">
+    <div class="brand">
+      <span class="eyebrow">Driver Scheduling Engine</span>
+      <h1>Conditions</h1>
+    </div>
+
+    <div class="cond-group">
+      <h2>Shift time windows</h2>
+      <div class="shift-row">
+        <span class="shift-chip day">Day</span>
+        <input type="time" id="day-start" value="03:30" />
+        <input type="time" id="day-end" value="10:00" />
+      </div>
+      <div class="shift-row">
+        <span class="shift-chip afternoon">Afternoon</span>
+        <input type="time" id="afternoon-start" value="10:00" />
+        <input type="time" id="afternoon-end" value="17:00" />
+      </div>
+      <div class="shift-row">
+        <span class="shift-chip night">Night</span>
+        <input type="time" id="night-start" value="17:00" />
+        <input type="time" id="night-end" value="03:30" />
+      </div>
+    </div>
+
+    <div class="cond-group">
+      <h2>Shift-type stickiness</h2>
+      <div class="ratio-row">
+        <span class="field-label">Stay on the same type for</span>
+        <input type="number" id="sticky-min" min="1" max="8" value="2" />
+        <span class="field-label">stretches</span>
+      </div>
+    </div>
+
+    <div class="cond-group">
+      <h2>Trip / Reserve ratio</h2>
+      <div class="ratio-row">
+        <span class="field-label">Target</span>
+        <input type="number" id="target-trips" min="0" max="6" value="3" />
+        <span class="field-label">trips per 6-day stretch</span>
+      </div>
+    </div>
+
+    <button class="generate-btn" type="button" onclick="generate()">Generate month</button>
+    <div class="status-line"><span class="status-dot" id="status-dot"></span><span id="status-text">Not generated yet — click Generate month</span></div>
+    <div class="compliance" id="compliance"></div>
+  </aside>
+
+  <main class="schedule">
+    <div class="view-tabs">
+      <button class="view-tab active" id="tab-day" type="button" onclick="showView('day')">Day Schedule</button>
+      <button class="view-tab" id="tab-roster" type="button" onclick="showView('roster')">Full Roster</button>
+      <button class="view-tab conditions-toggle" id="conditions-toggle-btn" type="button" onclick="toggleConditions()">Hide Conditions</button>
+    </div>
+
+    <div id="day-view">
+      <div class="excel-header">
+        <span class="op-label">Technical Planning of the Operation</span>
+        <div class="day-title-row">
+          <div class="day-pill" id="day-pill">—</div>
+          <div class="day-date">DAY:
+            <select id="day-select" onchange="renderDay()"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="hour-header" id="hour-header"></div>
+          <div id="rows"></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="item"><span class="swatch outbound"></span> Outbound leg (Madinah &rarr; Kaia Station*)</div>
+        <div class="item"><span class="swatch return"></span> Return leg (Kaia Station* &rarr; Madinah)</div>
+        <div class="item">Connector: <b>K</b>* &middot; RESERVE = driver on standby, no trip today</div>
+        <div class="item" style="color:var(--ink-soft); font-style:italic;">*placeholder until real station/connector data is provided</div>
+      </div>
+    </div>
+
+    <div id="roster-view" style="display:none">
+      <div class="roster-note">
+        Green = task assigned by the engine &middot; blue = RESERVE &middot; black = original off-duty code (F/V/O/etc.) or fixed 830/7T assignment.
+      </div>
+      <div class="roster-scroll">
+        <table class="roster-table" id="roster-table"></table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="application/json" id="real-data-json">{"tasks": [{"code": "330/7S", "start": "03:30", "duration_minutes": 420}, {"code": "330/7RK", "start": "03:30", "duration_minutes": 420}, {"code": "330/7RS", "start": "03:30", "duration_minutes": 420}, {"code": "330/7RA", "start": "03:30", "duration_minutes": 420}, {"code": "400/7A", "start": "04:00", "duration_minutes": 420}, {"code": "530/7RA", "start": "05:30", "duration_minutes": 420}, {"code": "530/7L", "start": "05:30", "duration_minutes": 420}, {"code": "630/7L", "start": "06:30", "duration_minutes": 420}, {"code": "600/7A", "start": "06:00", "duration_minutes": 420}, {"code": "700/7RA", "start": "07:00", "duration_minutes": 420}, {"code": "700/7L", "start": "07:30", "duration_minutes": 420}, {"code": "800/7RA", "start": "08:00", "duration_minutes": 420}, {"code": "800/7RB", "start": "08:00", "duration_minutes": 420}, {"code": "700/7AB", "start": "07:00", "duration_minutes": 420}, {"code": "900/7RA", "start": "09:00", "duration_minutes": 420}, {"code": "900/7A", "start": "09:00", "duration_minutes": 420}, {"code": "1100/8RK", "start": "11:00", "duration_minutes": 510}, {"code": "1000/7RA", "start": "10:00", "duration_minutes": 420}, {"code": "1100/7A", "start": "11:00", "duration_minutes": 420}, {"code": "1200/7RA", "start": "12:00", "duration_minutes": 420}, {"code": "1230/7L", "start": "12:30", "duration_minutes": 420}, {"code": "1300/7LB", "start": "13:00", "duration_minutes": 420}, {"code": "1300/7A", "start": "13:00", "duration_minutes": 420}, {"code": "1300/7RA", "start": "13:00", "duration_minutes": 420}, {"code": "1300/7RB", "start": "13:00", "duration_minutes": 420}, {"code": "1330/7L", "start": "13:30", "duration_minutes": 420}, {"code": "1400/7LB", "start": "14:00", "duration_minutes": 420}, {"code": "1430/7L", "start": "14:30", "duration_minutes": 420}, {"code": "1430/7RB", "start": "14:00", "duration_minutes": 420}, {"code": "1500/7LB", "start": "15:00", "duration_minutes": 420}, {"code": "1500/7A", "start": "15:00", "duration_minutes": 420}, {"code": "1500/7RB", "start": "15:00", "duration_minutes": 420}, {"code": "1600/7LA", "start": "15:30", "duration_minutes": 420}, {"code": "1600/7RA", "start": "16:00", "duration_minutes": 420}, {"code": "1630/7LA", "start": "16:30", "duration_minutes": 420}, {"code": "1800/7RA", "start": "18:00", "duration_minutes": 420}, {"code": "1800/7LA", "start": "18:00", "duration_minutes": 420}, {"code": "1700/7A", "start": "17:00", "duration_minutes": 420}, {"code": "1900/7RA", "start": "19:00", "duration_minutes": 420}, {"code": "1900/7LA", "start": "19:00", "duration_minutes": 420}, {"code": "1900/7A", "start": "19:00", "duration_minutes": 420}], "dates": ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31"], "drivers": [{"name": "6126072-ABDULAZIZ ADNAN M ABDULRAHIM", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6868897-ABDULAZIZ MAHAL RASHED ALOUFI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", ""]}, {"name": "6145684-ABDULAZIZ RAJA SALMAN ALANAZI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", ""]}, {"name": "6853683-ABDULAZIZ RASHEED MOHAMMED MASSOUD", "codes": ["", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "F", "F", "", "", "", "", "", "F", "F"]}, {"name": "6883896-ABDULLAH ALI ALKHORAYEF", "codes": ["F", "", "", "", "", "", "", "F", "F", "V", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6145643-ABDULLAH SALEM ABDULLAH BASUWAYDAN", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6126023-ABDULRAHMAN OBAID S ALSHAMMARI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", ""]}, {"name": "6868889-ABDULRAHMAN OBAIDALLAH A ALHAZMI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "F", "F", "", "", ""]}, {"name": "6136485-ABDULRAHMAN RUZAYQ M ALHUSAYNI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6135909-ABEER AYIDH A ALALAWI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "T- 6149165-ABRAR HAMZAH ALSAEDI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6868848-AHMED IBRAHIM A ALHLEEW", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "F", "F", "", "", ""]}, {"name": "6126064-AHMED MOHAMMED S ALSHEHRI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6145650-AHMED SANAT BIN NAFI ALHARBI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", ""]}, {"name": "6146047-ALAA ABDULLAH M ZUAIR", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "T- 6149033-ALAA HAMID ALGHAMDI", "codes": ["830/7T", "F", "", "", "", "", "", "F", "F", "VR", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6145726-ALAA MOHAMMED BARNAWI", "codes": ["F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6146088-ALHANOUF MASRI MSLAH ALMUTAIRI", "codes": ["F", "F", "", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "T- 6148811-AMANI HAMDAN Z ALHARBI", "codes": ["", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6868913-AMMAR YASSER ALI ABU SALAMAH", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6868822-ANAS JAMAL MALIK MADAINI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6136048-ARWA ABDULAZIZ E ALSEHLI", "codes": ["", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", ""]}, {"name": "6145858-ASIM ADEL ALHEJAILI", "codes": ["V", "V", "V", "V", "V", "V", "F", "", "", "", "", "", "", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "6128706-AYMAN NASSER M ALMAGHTHAWI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F"]}, {"name": "6136030-BASHAYER FARIS T ALHARBI", "codes": ["830/7T", "F", "", "", "", "V", "V", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6145833-BASIM GHALLAB MUQBIL ALANAZI", "codes": ["", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6871834-EMAN MUTASIM A MUQADDAM", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", ""]}, {"name": "6145668-EYAD ABDULSHAKOUR M NEYAZ", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", ""]}, {"name": "6087241-FAHAD MOUSA H TUKRUNI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", ""]}, {"name": "6085989-FARIS ABDULLAH A ALREHAILI", "codes": ["", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "V", "V", "V", "V", "V", "V", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6126536-FARIS FAISAL G ALAHMADI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "6899579-FARIS SAMI M AKRAM", "codes": ["F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6135958-GHADEER MUSLEH S ALSUHAYMI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "T- 6148829-GHADI ABDULLAH H ALOSAIMI", "codes": ["", "F", "F", "", "", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", ""]}, {"name": "6146112-GHAIDA KHALED M ALOLOWI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6146062-GHAIDAA ALI M LAMI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", ""]}, {"name": "T- 6145742-GHASSAN MESHAL ALJUMAYDI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", ""]}, {"name": "T- 6148928-HAIFA SALEH M ALJABRI", "codes": ["V", "V", "V", "V", "V", "V", "F", "", "", "", "", "", "", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "6136055-HAJAR SAEED S ALOUFI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "T- 6145866-HATIM GHAZI MULAYH ALHARBI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "6128318-HATIM MOHAMMED M ALOUFI", "codes": ["F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "T- 6149140-HAYAM HALAWANI ABDULRAHMAN", "codes": ["", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "6135941-HIBAH YAHYA S ALSHANQITI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "F", "F", "", "", ""]}, {"name": "T- 6149025-HIND SALIH ALRADADI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", ""]}, {"name": "6858039-HUSSAM IBRAHIM B HAWSAWI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", ""]}, {"name": "6126460-IBRAHIM DAKHILALLAH G ALHARBI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "T- 6148944-JOUD ALI A ALSHEHRI", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6135883-KHADIJAH MOHAMMEDGHAZALI M SAHEL", "codes": ["830/7T", "V", "V", "V", "V", "V", "V", "F", "F", "", "V", "V", "V", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "F", "", "", "", "", "", ""]}, {"name": "T- 6148795-KHULUD SAUD D ALMUTAIRI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "T- 6148837-LAMYA SALEM M ALHARBI", "codes": ["", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", ""]}, {"name": "T- 6135925-LAYAN ABDULATIF B ALSUHAYMI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6126031-MAHMOUD ABDULLAH A ALMADANI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "T- 6148936-MARYAM HAMED A ALSOBHI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "V", "V", "V", "V", "V", "V", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6126528-MOHAMMED ABDULLAH M ALRUWAYTHI", "codes": ["", "", "", "", "", "F", "F", "VR", "VR", "VR", "VR", "VR", "VR", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6088058-MOHAMMED ABDULLAHI I  AL JUMAIAH", "codes": ["", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "T- 6145775-MOHAMMED OBAID SAAD ALRSHEDI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F"]}, {"name": "6146005-MUHAMMAD IBRAHIM A ALTEHINI", "codes": ["F", "F", "", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "6126478-MUHANNAD DAKHILLAH M ALHARBI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", ""]}, {"name": "6868954-MUHANNAD MOHAMMED SAEED ALZURARI", "codes": ["V", "V", "V", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", ""]}, {"name": "6135834-MURUJ NAZEER J ABDULGHANI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", ""]}, {"name": "6146096-NOOR ALI M ALHEJAILI", "codes": ["830/7T", "F", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6136022-NORAH MOHAMMED N ALTAWEEL", "codes": ["830/7T", "F", "", "", "", "", "F", "F", "VR", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "6135933-OMNIAH AMEEN I HAWSAH", "codes": ["830/7T", "F", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6126510-OSAMA BUNAYDIR M ALHAYSUNI", "codes": ["F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "6857775-OSAMA RASHED ZABIN ALMOTAIRY", "codes": ["", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6145759-QUSAI TARIQ M ALKHATRAWI", "codes": ["V", "V", "V", "V", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "F", "F", "V"]}, {"name": "T- 6148969-RAHAF IBRAHIM H ALAMRI", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "F"]}, {"name": "6136014-RAHAF NAFFAA F ALSUHAYMI", "codes": ["", "", "", "", "", "", "F", "F", "", "", "", "E", "E", "E", "F", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "F"]}, {"name": "6125892-RAKAN NAFEA N ALHAISONI", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", ""]}, {"name": "6136071-RAMA  ABDULMOHSEN H ALZIBALI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "6088942-RANA SALEM B ALKHAIBARI", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6145924-RAWAN KHALID A ALWUSAIDI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", ""]}, {"name": "6135891-RAWAN MOHAMMED M ALANAZI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", ""]}, {"name": "6126494-RAYAN ABDULAZIZ A ALMALKI", "codes": ["VR", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", ""]}, {"name": "6145882-RAYAN SAUD SAEED", "codes": ["830/7T", "F", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "6135826-REENAD ADNAN M ABDULRAHIM", "codes": ["830/7T", "F", "", "", "", "", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "6135842-REHAM ABDULLAH A ALBARIQI", "codes": ["830/7T", "F", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", ""]}, {"name": "6135867-RUA ABDULRAHMAN M ALHEJAILI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "6126106-SAAD MISHAL M ALENAZI", "codes": ["830/7T", "F", "V", "V", "V", "V", "V", "V", "F", "F", "F", "", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "F", "", "", "", "", ""]}, {"name": "6899561-SAFWAN IBRAHIM E ALJOHANI", "codes": ["", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", ""]}, {"name": "6111199-SAKHER MOHAMMED R ALJUHANI", "codes": ["", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "F", "F", "", "", ""]}, {"name": "6126056-SALMAN SHULAYWIH S ALHARBI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", ""]}, {"name": "T- 6149009-SAMA FAISAL ALFADDA", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "T- 6149074-SHAIMA OUDAH ATALLAH", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "T- 6148779-SHATHA SALEM S ALJOHANI", "codes": ["", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "T- 6865166-SHATHA SAUD ALMEHMADI", "codes": ["830/7T", "F", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F"]}, {"name": "T- 6149017-SHAZA MOHAMMAD JAWI", "codes": ["", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "", "", "F", "F"]}, {"name": "6146021-TAIF ABDULRAHMAN ALHUSAYNI", "codes": ["830/7T", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "F", "F", "", "", "", ""]}, {"name": "T- 6148894-TAIF MAJED J ALAMRI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "F", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", ""]}, {"name": "T- 6148738-WAAD ASAD D ALSUBHI", "codes": ["830/7T", "F", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", ""]}, {"name": "T- ⁠6148787-WEDYAN OBAID A ALHARBI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", ""]}, {"name": "6880652-WEJDAN ABDULRAHMAN M JABER", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6087266-YASER MOHAMMAD A AL HARBI", "codes": ["", "", "", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "", "", "", "", "", "", "F"]}, {"name": "6883854-YASIR MUBARIK R ALJEHANI", "codes": ["F", "", "", "", "", "", "", "F", "F", "V", "V", "V", "V", "V", "V", "F", "F", "", "", "", "", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F"]}, {"name": "6899470-YASSER HIDAR M ALHARAZI", "codes": ["F", "F", "", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "", "", ""]}, {"name": "6830194-YASSER MOHAMMAD HUSEIN", "codes": ["O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O", "O"]}, {"name": "6126015-ZAID HUSSAIN Z ALQAHTANI", "codes": ["V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "F", "F", "", "", ""]}, {"name": "6125900-ZIYAD MOEEDH A ALSEHLI", "codes": ["", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V", "V"]}, {"name": "6868855-ZIYAD SALEH HAMZAH ALREHAILI", "codes": ["", "", "", "", "F", "F", "", "", "", "", "", "", "F", "F", "", "", "F", "830/7T", "830/7T", "830/7T", "830/7T", "830/7T", "F", "", "", "", "", "VA", "F", "F", ""]}]}</script>
+<script>
+  const REAL_DATA = JSON.parse(document.getElementById("real-data-json").textContent);
+  const OFF_CODES = new Set(["F","V","O","VR","T*","VA","A0","SW","S","E","EA","AJ","P*","R*","L","SD","FD","EF","XS*"]);
+
+  let monthResult = null; // { stretchesByDriver, tasksByShift, config }
+
+  function timeToMinutes(hhmm) {
+    const [h, m] = hhmm.split(":").map(Number);
+    return h * 60 + m;
+  }
+
+  function classifyShift(startMinutes, windows) {
+    for (const w of windows) {
+      const s = timeToMinutes(w.start), e = timeToMinutes(w.end);
+      if (s <= e) { if (startMinutes >= s && startMinutes < e) return w.label; }
+      else { if (startMinutes >= s || startMinutes < e) return w.label; }
+    }
+    return "Unknown";
+  }
+
+  function isWorkday(code) { return !OFF_CODES.has(code); }
+
+  function detectStretches(driverIndex, codes) {
+    const stretches = [];
+    let current = [];
+    for (let i = 0; i < codes.length; i++) {
+      if (isWorkday(codes[i])) current.push(i);
+      else { if (current.length) { stretches.push({ driverIndex, days: current }); current = []; } }
+    }
+    if (current.length) stretches.push({ driverIndex, days: current });
+    return stretches;
+  }
+
+  function seededRandom(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  // real per-task duration from the source workbook (minutes); 7h for every task except
+  // 1100/8RK which runs 8h30
+  const DURATION_BY_CODE = {};
+  REAL_DATA.tasks.forEach((t) => (DURATION_BY_CODE[t.code] = t.duration_minutes));
+  function durationFor(code) {
+    return DURATION_BY_CODE[code];
+  }
+
+  function getConfig() {
+    return {
+      shiftWindows: [
+        { label: "Day", start: document.getElementById("day-start").value, end: document.getElementById("day-end").value },
+        { label: "Afternoon", start: document.getElementById("afternoon-start").value, end: document.getElementById("afternoon-end").value },
+        { label: "Night", start: document.getElementById("night-start").value, end: document.getElementById("night-end").value },
+      ],
+      stickyMin: parseInt(document.getElementById("sticky-min").value, 10) || 2,
+      targetTrips: parseInt(document.getElementById("target-trips").value, 10) || 3,
+    };
+  }
+
+  function runMonth(config, seed) {
+    const rand = seededRandom(seed);
+    const tasksByShift = {};
+    config.shiftWindows.forEach((w) => (tasksByShift[w.label] = []));
+    const tasksWithShift = REAL_DATA.tasks.map((t) => {
+      const label = classifyShift(timeToMinutes(t.start), config.shiftWindows);
+      if (!tasksByShift[label]) tasksByShift[label] = [];
+      const withShift = { ...t, shiftType: label };
+      tasksByShift[label].push(withShift);
+      return withShift;
+    });
+
+    let allStretches = [];
+    REAL_DATA.drivers.forEach((d, di) => {
+      allStretches = allStretches.concat(detectStretches(di, d.codes));
+    });
+
+    // Weight new shift-type picks by how many tasks that type actually needs to cover,
+    // not evenly across the 3 types -- otherwise a type with more real demand (e.g.
+    // Afternoon at 46% of tasks) ends up structurally under-supplied by a uniform pick.
+    const labels = config.shiftWindows.map((w) => w.label);
+    const weights = labels.map((l) => Math.max(1, (tasksByShift[l] || []).length));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    function weightedShiftPick() {
+      let r = rand() * totalWeight;
+      for (let i = 0; i < labels.length; i++) {
+        if (r < weights[i]) return labels[i];
+        r -= weights[i];
+      }
+      return labels[labels.length - 1];
+    }
+
+    const byDriver = {};
+    allStretches.forEach((s) => (byDriver[s.driverIndex] = byDriver[s.driverIndex] || []).push(s));
+    Object.values(byDriver).forEach((list) => {
+      list.sort((a, b) => a.days[0] - b.days[0]);
+      let lastType = null, run = 0;
+      list.forEach((s) => {
+        if (lastType && run < config.stickyMin) {
+          s.shiftType = lastType;
+          run += 1;
+        } else {
+          s.shiftType = weightedShiftPick();
+          lastType = s.shiftType;
+          run = 1;
+        }
+      });
+    });
+
+    allStretches.forEach((s) => {
+      const n = s.days.length;
+      s.targetTrips = Math.max(0, Math.min(n, Math.round((config.targetTrips * n) / 6)));
+    });
+
+    // Day-by-day, TASK-COVERAGE-FIRST assignment: every one of the day's real tasks is a
+    // train that has to run, so filling all 41 tasks outranks hitting the trip/reserve
+    // ratio exactly. The ratio target is used as a *preference* (fill from under-target
+    // drivers first) but a task never goes unfilled just because everyone eligible has
+    // already hit their target -- it falls back to an eligible driver over their target
+    // instead. Only a genuine same-day shortage of that shift type leaves a task unfilled.
+    allStretches.forEach((s) => {
+      s.assignments = {};
+      s.assignedTripCount = 0;
+    });
+    const uncoveredTasks = []; // {dayIdx, code} -- genuine shortages, for reporting
+
+    const numDays = REAL_DATA.dates.length;
+    for (let dayIdx = 0; dayIdx < numDays; dayIdx++) {
+      const activeByShift = {};
+      allStretches.forEach((s) => {
+        if (!s.days.includes(dayIdx)) return;
+        s.assignments[dayIdx] = "RESERVE"; // default; overwritten below if it gets a task
+        (activeByShift[s.shiftType] = activeByShift[s.shiftType] || []).push(s);
+      });
+
+      const tasksToday = [...REAL_DATA.tasks];
+      for (let i = tasksToday.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [tasksToday[i], tasksToday[j]] = [tasksToday[j], tasksToday[i]];
+      }
+
+      const assignedToday = new Set(); // stretch objects already given a task today
+      tasksToday.forEach((t) => {
+        const shiftType = classifyShift(timeToMinutes(t.start), config.shiftWindows);
+        const pool = (activeByShift[shiftType] || []).filter((s) => !assignedToday.has(s));
+        if (!pool.length) {
+          uncoveredTasks.push({ dayIdx, code: t.code, shiftType });
+          return;
+        }
+        const underTarget = pool.filter((s) => s.assignedTripCount < s.targetTrips);
+        const candidates = underTarget.length ? underTarget : pool;
+        const chosen = candidates[Math.floor(rand() * candidates.length)];
+        chosen.assignments[dayIdx] = t.code;
+        chosen.assignedTripCount += 1;
+        assignedToday.add(chosen);
+      });
+    }
+
+    return { allStretches, tasksByShift, config, uncoveredTasks };
+  }
+
+  function computeCompliance(allStretches) {
+    const byDriver = {};
+    allStretches.forEach((s) => (byDriver[s.driverIndex] = byDriver[s.driverIndex] || []).push(s));
+    let total = 0, exact = 0, violations = 0;
+    Object.values(byDriver).forEach((list) => {
+      list.sort((a, b) => a.days[0] - b.days[0]);
+      list.forEach((s, i) => {
+        total += 1;
+        const actual = Object.values(s.assignments).filter((v) => v !== "RESERVE").length;
+        if (actual === s.targetTrips) exact += 1;
+        if (i > 0 && list[i - 1].shiftType !== s.shiftType) {
+          let run = 1, j = i - 1;
+          while (j > 0 && list[j - 1].shiftType === list[j].shiftType) { run += 1; j -= 1; }
+          if (run < getConfig().stickyMin) violations += 1;
+        }
+      });
+    });
+    return { total, exact, violations };
+  }
+
+  function generate() {
+    const config = getConfig();
+    const seed = Math.floor(Math.random() * 1e9);
+    document.getElementById("status-text").textContent = "Generating…";
+    setTimeout(() => {
+      monthResult = runMonth(config, seed);
+      Object.keys(dayOverrides).forEach((k) => delete dayOverrides[k]);
+      const c = computeCompliance(monthResult.allStretches);
+      const uncovered = monthResult.uncoveredTasks.length;
+      const hasWarning = c.violations > 0 || uncovered > 0;
+      document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
+      document.getElementById("status-text").textContent =
+        "Generated — " + REAL_DATA.dates.length + " days, " + REAL_DATA.drivers.length + " drivers";
+      let complianceHtml =
+        "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
+        "<b>" + c.violations + "</b> stickiness violations (should be 0)<br/>" +
+        "<b>" + uncovered + "</b> task-days genuinely short a driver (real shift-type shortage)";
+      if (uncovered > 0) {
+        const sample = monthResult.uncoveredTasks.slice(0, 5)
+          .map((u) => `${REAL_DATA.dates[u.dayIdx]} ${u.code} (${u.shiftType})`)
+          .join("; ");
+        complianceHtml += `<br/><span style="color:var(--bad)">e.g. ${sample}${monthResult.uncoveredTasks.length > 5 ? "…" : ""}</span>`;
+      }
+      document.getElementById("compliance").innerHTML = complianceHtml;
+      renderDay();
+      renderRoster();
+    }, 250);
+  }
+
+  function showView(view) {
+    document.getElementById("day-view").style.display = view === "day" ? "" : "none";
+    document.getElementById("roster-view").style.display = view === "roster" ? "" : "none";
+    document.getElementById("tab-day").classList.toggle("active", view === "day");
+    document.getElementById("tab-roster").classList.toggle("active", view === "roster");
+  }
+
+  function toggleConditions() {
+    const hidden = document.getElementById("app").classList.toggle("conditions-hidden");
+    document.getElementById("conditions-toggle-btn").textContent = hidden ? "Show Conditions" : "Hide Conditions";
+  }
+
+  // stretch lookup per driver per day, built fresh each render so renderRoster stays cheap
+  function renderRoster() {
+    const table = document.getElementById("roster-table");
+    const dates = REAL_DATA.dates;
+    const drivers = REAL_DATA.drivers;
+
+    const headCells = dates
+      .map((d) => {
+        const dt = new Date(d + "T00:00:00");
+        return `<th>${dt.toLocaleDateString("en-US", { day: "2-digit", month: "short" })}</th>`;
+      })
+      .join("");
+    let html = `<thead><tr><th class="roster-name-header">Driver</th>${headCells}</tr></thead><tbody>`;
+
+    // driverIndex -> array (by dayIdx) of the stretch covering that day, for O(1) lookup below
+    const stretchByDriverDay = drivers.map(() => new Array(dates.length).fill(null));
+    if (monthResult) {
+      monthResult.allStretches.forEach((s) => {
+        s.days.forEach((dayIdx) => {
+          stretchByDriverDay[s.driverIndex][dayIdx] = s;
+        });
+      });
+    }
+
+    drivers.forEach((d, di) => {
+      let row = `<tr><td class="roster-name-cell">${d.name}</td>`;
+      d.codes.forEach((rawCode, dayIdx) => {
+        if (rawCode && OFF_CODES.has(rawCode)) {
+          row += `<td class="roster-cell-off">${rawCode}</td>`;
+          return;
+        }
+        if (rawCode === "830/7T") {
+          row += `<td class="roster-cell-off">${rawCode}</td>`;
+          return;
+        }
+        const stretch = stretchByDriverDay[di][dayIdx];
+        if (!stretch) {
+          row += `<td></td>`;
+          return;
+        }
+        const val = stretch.assignments[dayIdx];
+        if (val === "RESERVE") row += `<td class="roster-cell-reserve">RESERVE</td>`;
+        else row += `<td class="roster-cell-task">${val}</td>`;
+      });
+      row += `</tr>`;
+      html += row;
+    });
+
+    html += "</tbody>";
+    table.innerHTML = html;
+  }
+
+  function populateDaySelect() {
+    const sel = document.getElementById("day-select");
+    sel.innerHTML = REAL_DATA.dates
+      .map((d, i) => {
+        const dt = new Date(d + "T00:00:00");
+        const label = dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        return `<option value="${i}">${label}</option>`;
+      })
+      .join("");
+  }
+
+  // manual edits per day, keyed by driverIndex (one row per driver now):
+  // dayOverrides[dayIdx][driverIndex] = { code, name, start, end }
+  const dayOverrides = {};
+
+  // placeholder destination for the outbound leg until the real station/connector plan is
+  // provided -- every duty is shown as Madinah -> this station -> Madinah, split in half
+  const PLACEHOLDER_DESTINATION = "Kaia Station";
+  const PLACEHOLDER_CONNECTOR = "K";
+
+  function minutesToHHMM(min) {
+    const m = ((min % 1440) + 1440) % 1440;
+    return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+  }
+
+  function escapeAttr(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function updateOverride(dayIdx, driverIndex, field, value) {
+    dayOverrides[dayIdx] = dayOverrides[dayIdx] || {};
+    dayOverrides[dayIdx][driverIndex] = dayOverrides[dayIdx][driverIndex] || {};
+    dayOverrides[dayIdx][driverIndex][field] = value;
+    renderDay();
+  }
+
+  function renderDay() {
+    const dayIdx = parseInt(document.getElementById("day-select").value, 10);
+    const dt = new Date(REAL_DATA.dates[dayIdx] + "T00:00:00");
+    document.getElementById("day-pill").textContent = dt.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
+
+    const rowsEl = document.getElementById("rows");
+
+    if (!monthResult) {
+      rowsEl.innerHTML = "";
+      return;
+    }
+
+    const activeStretches = monthResult.allStretches
+      .filter((s) => s.days.includes(dayIdx))
+      .sort((a, b) => a.driverIndex - b.driverIndex);
+
+    const overridesForDay = dayOverrides[dayIdx] || {};
+
+    rowsEl.innerHTML = activeStretches
+      .map((s) => {
+        const driverIndex = s.driverIndex;
+        const o = overridesForDay[driverIndex] || {};
+        const assignedVal = s.assignments[dayIdx]; // "RESERVE" or a real task code
+        const code = o.code !== undefined ? o.code : assignedVal;
+        const name = o.name !== undefined ? o.name : REAL_DATA.drivers[driverIndex].name;
+        const isReserve = code.trim().toUpperCase() === "RESERVE";
+
+        let track, start = "", end = "";
+        if (isReserve) {
+          track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
+        } else {
+          const matchedTask = REAL_DATA.tasks.find((t) => t.code === assignedVal);
+          const defaultStart = matchedTask ? matchedTask.start : "07:00";
+          const defaultDuration = matchedTask ? matchedTask.duration_minutes : 420;
+
+          start = o.start !== undefined ? o.start : defaultStart;
+          const startMin = timeToMinutes(start);
+          const defaultEnd = minutesToHHMM(startMin + defaultDuration);
+          end = o.end !== undefined ? o.end : defaultEnd;
+          const endMin = timeToMinutes(end);
+          const effectiveDuration = ((endMin - startMin + 1440) % 1440) || defaultDuration;
+
+          const leftPct = (startMin / 1440) * 100;
+          const widthPct = (Math.min(effectiveDuration, 1440 - startMin) / 1440) * 100;
+
+          track = `
+            <div class="block-pair" style="left:${leftPct}%; width:${widthPct}%;">
+              <div class="time-label start-label">${start}</div>
+              <div class="time-label end-label">${end}</div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline outbound"></div></div>
+              <div class="connector-badge">${PLACEHOLDER_CONNECTOR}</div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline return"></div></div>
+            </div>`;
+        }
+
+        return `
+        <div class="task-row">
+          <input class="cell-input task-code-input" value="${escapeAttr(code)}"
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'code', this.value)" />
+          <input class="cell-input driver-name-input" value="${escapeAttr(name)}"
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'name', this.value)" />
+          <input type="time" class="cell-input time-input" value="${start}" ${isReserve ? "disabled" : ""}
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'start', this.value)" />
+          <div class="madinah-tag">Madinah</div>
+          <div class="track">${track}</div>
+          <div class="madinah-tag">Madinah</div>
+          <input type="time" class="cell-input time-input" value="${end}" ${isReserve ? "disabled" : ""}
+                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'end', this.value)" />
+        </div>`;
+      })
+      .join("");
+  }
+
+  // ---- static hour header (once) ----
+  document.getElementById("hour-header").innerHTML =
+    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell">Start</div><div class="hcell"></div>' +
+    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
+    '<div class="hcell"></div><div class="hcell">End</div>';
+
+  populateDaySelect();
+  renderRoster();
+</script>
