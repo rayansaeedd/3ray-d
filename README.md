@@ -25,13 +25,16 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   ported to JavaScript and runs client-side against the embedded real data in
   `web/real_data.json`. The **Day Schedule** view is one row per active driver for the selected
   day (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
-  (outbound leg + return leg) joined by a connector badge colored by destination, drivers on
-  standby show a single RESERVE box. **The Day Schedule is read-only** — it's a display of the
-  generated result, nothing on it can be clicked or edited. All editing lives in the **Task
-  Settings** tab instead: each duty (Trip No., Category, Origin, Destination, per-leg trip
-  numbers, per-leg Start/End) is editable there, rows can be reordered by long-pressing the
-  drag handle, and the Day Schedule is generated from this catalog, not a fixed list. A
-  **Roster Settings** tab is scaffolded and awaiting its spec.
+  (outbound leg + return leg), each with its own visible start/end time, joined by a connector
+  badge colored by destination; drivers on standby show a single RESERVE box. The driver column
+  clearly shows ID, full name, and a phone line (no phone data exists yet, so it reads "No phone
+  on file"). **The Day Schedule is read-only** — it's a display of the generated result, nothing
+  on it can be clicked or edited except a disabled Origin indicator next to the date, which just
+  mirrors whatever's set in Task Settings. All editing lives in the **Task Settings** tab
+  instead: each duty (Trip No., Category, Destination, per-leg trip numbers, per-leg Start/End)
+  is editable there, plus one schedule-wide Origin station (Madinah/Makkah/KAIA, since it's this
+  supervisor's own base). Rows can be reordered by long-pressing the drag handle. A **Roster
+  Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -66,9 +69,9 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   — every row currently shows "No phone on file". Needs a real source; nothing was invented for
   this, since it's real people's contact information.
 - **Manual task catalog** — done via the Task Settings tab: add/edit/remove/reorder duties
-  (Trip No., Category, Origin, Destination, per-leg trip numbers, per-leg Start/End), and the
-  Day Schedule schedules against that live catalog. The Day Schedule itself is read-only by
-  design — no editing happens there.
+  (Trip No., Category, Destination, per-leg trip numbers, per-leg Start/End), plus one
+  schedule-wide Origin station. The Day Schedule schedules against that live catalog. The Day
+  Schedule itself is read-only by design — no editing happens there.
 - **Real trip pairing / connector codes** — done. Destinations are Makkah (L, blue), KAIA (A,
   green), KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an
   early-morning monitoring run) per the user's legend. Each duty has independent outbound-leg

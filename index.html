@@ -144,18 +144,19 @@
   .day-pill { background: #e9ebe3; color: var(--olive-dark); font-weight: 700; font-size: 15px; padding: 6px 26px; border-radius: 3px; }
   .day-date { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 700; color: #fff; }
   .day-date select { min-width: 150px; }
+  .day-date select:disabled { opacity: 0.85; cursor: not-allowed; min-width: 110px; }
 
   .gantt-scroll { overflow-x: auto; }
-  .gantt { min-width: 1560px; }
+  .gantt { min-width: 1420px; }
   .hour-header {
-    display: grid; grid-template-columns: 84px 300px 70px repeat(24, 1fr) 70px;
+    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 84px 300px 70px repeat(24, 1fr) 70px;
+    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -168,7 +169,7 @@
   .driver-name .driver-fullname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name .driver-phone { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
-  .track { grid-column: 5 / 29; position: relative; }
+  .track { grid-column: 3 / 27; position: relative; }
 
   .track::before {
     content: ""; position: absolute; inset: 0;
@@ -192,7 +193,7 @@
     color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center;
   }
   .leg-time-text {
-    flex: 0 0 auto; font-size: 9.5px; font-weight: 600; color: var(--ink-soft); text-align: center; white-space: nowrap;
+    flex: 0 0 auto; font-size: 10.5px; font-weight: 700; color: var(--ink); text-align: center; white-space: nowrap;
   }
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
@@ -209,12 +210,13 @@
   /* ---------------- task settings ---------------- */
   .settings-note { padding: 12px 22px; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
   .settings-note b { color: var(--ink); }
-  .settings-toolbar { padding: 0 22px 12px; }
+  .settings-toolbar { padding: 0 22px 12px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
   .add-task-btn {
     background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 6px;
     padding: 8px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
   }
   .add-task-btn:hover { background: var(--olive-dark); }
+  .origin-select-label { font-size: 12.5px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; }
   .settings-scroll { overflow: auto; padding: 0 22px 24px; }
   .settings-table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
   .settings-table th, .settings-table td { border: 1px solid var(--grid-line); padding: 6px 8px; text-align: left; }
@@ -351,6 +353,9 @@
           <div class="day-date">DAY:
             <select id="day-select" onchange="renderDay()"></select>
           </div>
+          <div class="day-date">ORIGIN:
+            <select id="origin-badge" disabled title="Set in Task Settings, not here"></select>
+          </div>
         </div>
       </div>
 
@@ -375,16 +380,19 @@
 
     <div id="task-settings-view" style="display:none">
       <div class="settings-note">
-        <b>Origin</b> is choosable per task now (Madinah, Makkah, or KAIA).
-        <b>Trip</b> tasks have their own outbound leg (box #, start, end) and return leg
-        (box #, start, end) -- each editable independently. <b>Reserve</b> tasks only use the
-        "Out. Start"/"Out. End" columns as a plain Start/End. Long-press the &#8942;&#8942; handle
-        on the left of a row and drag to reorder. Changing anything here takes effect the next
-        time you click "Generate month". The Day Schedule itself is read-only -- all editing
-        happens here.
+        <b>Origin</b> is one station for the whole schedule (set below), since it's this
+        supervisor's own base. <b>Trip</b> tasks have their own outbound leg (box #, start, end)
+        and return leg (box #, start, end) -- each editable independently. <b>Reserve</b> tasks
+        only use the "Out. Start"/"Out. End" columns as a plain Start/End. Long-press the
+        &#8942;&#8942; handle on the left of a row and drag to reorder. Changing anything here
+        takes effect the next time you click "Generate month". The Day Schedule itself is
+        read-only -- all editing happens here.
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTaskCatalogEntry()">+ Add New Task</button>
+        <label class="origin-select-label">Origin station:
+          <select id="global-origin-select" onchange="updateGlobalOrigin(this.value)"></select>
+        </label>
       </div>
       <div class="settings-scroll">
         <table class="settings-table" id="task-settings-table"></table>
@@ -405,11 +413,13 @@
   const REAL_DATA = JSON.parse(document.getElementById("real-data-json").textContent);
   const OFF_CODES = new Set(["F","V","O","VR","T*","VA","A0","SW","S","E","EA","AJ","P*","R*","L","SD","FD","EF","XS*"]);
 
-  // Origin is choosable per task now (a supervisor at a different base station would pick
-  // their own origin) -- Letters/colors per the supervisor's own legend: L=Makkah(blue),
+  // Origin is one global choice for the whole schedule (this supervisor's own base station),
+  // set only in Task Settings -- shown as a disabled/read-only badge on the Day Schedule since
+  // that view is read-only. Letters/colors per the supervisor's own legend: L=Makkah(blue),
   // A=KAIA(green), K=KAEC(orange, unconfirmed). Black/"S" = sweep (monitoring) train, an
   // early-morning inspection run, not a passenger direction.
   const ORIGIN_OPTIONS = ["Madinah", "Makkah", "KAIA"];
+  let GLOBAL_ORIGIN = "Madinah";
   const DESTINATIONS = {
     MAK: { letter: "L", color: "var(--reserve-color)", label: "Makkah" },
     KAIA: { letter: "A", color: "var(--task-color)", label: "KAIA" },
@@ -434,7 +444,6 @@
     return {
       code: t.code,
       category: "trip",
-      origin: "Madinah",
       destination: "",
       outboundTripNo: "",
       returnTripNo: "",
@@ -802,7 +811,7 @@
         const rec = splitDriverRecord(driver.name);
         const isReserve = code.trim().toUpperCase() === "RESERVE";
 
-        let track, origin = "Madinah";
+        let track;
         if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
@@ -810,7 +819,6 @@
           const dest = destInfo(matchedTask ? matchedTask.destination : "");
           const outboundLabel = (matchedTask && matchedTask.outboundTripNo) || code;
           const returnLabel = (matchedTask && matchedTask.returnTripNo) || code;
-          origin = (matchedTask && matchedTask.origin) || "Madinah";
 
           const legTime = (field, fallback) => (matchedTask ? matchedTask[field] : fallback);
           const outboundStart = legTime("outboundStart", "07:00");
@@ -841,9 +849,7 @@
             <div class="driver-fullname">${escapeAttr(rec.fullName)}</div>
             <div class="driver-phone">${driver.phone ? escapeAttr(driver.phone) : "No phone on file"}</div>
           </div>
-          <div class="madinah-tag">${escapeAttr(origin)}</div>
           <div class="track">${track}</div>
-          <div class="madinah-tag">${escapeAttr(origin)}</div>
         </div>`;
       })
       .join("");
@@ -851,9 +857,8 @@
 
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell"></div>' +
-    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
-    '<div class="hcell"></div>';
+    '<div class="hcell"></div><div class="hcell label">Driver</div>' +
+    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("");
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
   document.getElementById("day-legend").innerHTML =
@@ -865,10 +870,24 @@
       .join("") +
     `<div class="item">RESERVE = driver on standby, no trip today</div>`;
 
+  // ---- Global origin: one value for the whole schedule, set only in Task Settings ----
+  function renderOriginBadge() {
+    const optionsHtml = ORIGIN_OPTIONS.map((o) => `<option value="${o}" ${o === GLOBAL_ORIGIN ? "selected" : ""}>${o}</option>`).join("");
+    document.getElementById("origin-badge").innerHTML = optionsHtml;
+    document.getElementById("global-origin-select").innerHTML = optionsHtml;
+  }
+
+  function updateGlobalOrigin(value) {
+    GLOBAL_ORIGIN = value;
+    renderOriginBadge();
+    renderDay();
+  }
+  renderOriginBadge();
+
   // ---- Task Settings ----
   function addTaskCatalogEntry() {
     TASK_CATALOG.push({
-      code: "", category: "trip", origin: "Madinah", destination: "", outboundTripNo: "", returnTripNo: "",
+      code: "", category: "trip", destination: "", outboundTripNo: "", returnTripNo: "",
       outboundStart: "", outboundEnd: "", returnStart: "", returnEnd: "",
     });
     renderTaskSettings();
@@ -942,12 +961,8 @@
       return opts;
     }
 
-    function originOptionsFor(selected) {
-      return ORIGIN_OPTIONS.map((o) => `<option value="${o}" ${selected === o ? "selected" : ""}>${o}</option>`).join("");
-    }
-
     let html = `<thead><tr>
-      <th></th><th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th>
+      <th></th><th>Trip No.</th><th>Category</th><th>Destination</th>
       <th>Outbound box #</th><th>Out. Start</th><th>Out. End</th>
       <th>Return box #</th><th>Ret. Start</th><th>Ret. End</th><th></th>
     </tr></thead><tbody>`;
@@ -980,7 +995,6 @@
             <option value="reserve" ${isReserve ? "selected" : ""}>Reserve</option>
           </select>
         </td>
-        <td><select onchange="updateTaskCatalogEntry(${i}, 'origin', this.value)">${originOptionsFor(t.origin)}</select></td>
         <td>${destCell}</td>
         <td>${legNoInput("outboundTripNo", t.outboundTripNo, t.code || "e.g. 07061")}</td>
         <td>${timeCell("outboundStart", t.outboundStart)}</td>
