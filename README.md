@@ -61,6 +61,10 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
+- **Driver phone numbers** — the Day Schedule now shows each driver's ID and full name clearly
+  (no more truncation), plus a phone line, but `web/real_data.json` has no phone numbers at all
+  — every row currently shows "No phone on file". Needs a real source; nothing was invented for
+  this, since it's real people's contact information.
 - **Manual task catalog** — done via the Task Settings tab: add/edit/remove/reorder duties
   (Trip No., Category, Origin, Destination, per-leg trip numbers, per-leg Start/End), and the
   Day Schedule schedules against that live catalog. The Day Schedule itself is read-only by
