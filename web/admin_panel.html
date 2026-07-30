@@ -26,6 +26,8 @@
     --bad: #a13b3b;
     --task-color: #008000;
     --reserve-color: #0070c0;
+    --dest-kaec: #c2660c;
+    --dest-sweep: #26291f;
     --input-bg: #ffffff;
     --input-border: #ccd0c0;
     --shadow: 0 1px 2px rgba(20, 22, 12, 0.06), 0 4px 14px rgba(20, 22, 12, 0.05);
@@ -39,6 +41,7 @@
       --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
       --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
       --task-color: #6fd66f; --reserve-color: #7cb3e8;
+      --dest-kaec: #e0985a; --dest-sweep: #cfd3c2;
       --input-bg: #23261c; --input-border: #454a38;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.35);
     }
@@ -51,6 +54,7 @@
     --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
     --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
     --task-color: #6fd66f; --reserve-color: #7cb3e8;
+    --dest-kaec: #e0985a; --dest-sweep: #cfd3c2;
     --input-bg: #23261c; --input-border: #454a38;
   }
   :root[data-theme="light"] {
@@ -61,6 +65,7 @@
     --tag-bg: #ffffff; --tag-border: #33361f; --day-chip: #e0a72e; --afternoon-chip: #4a7fb5;
     --night-chip: #4b3f7a; --ok: #3f7d3a; --warn: #a5701e; --bad: #a13b3b;
     --task-color: #008000; --reserve-color: #0070c0;
+    --dest-kaec: #c2660c; --dest-sweep: #26291f;
     --input-bg: #ffffff; --input-border: #ccd0c0;
   }
 
@@ -185,13 +190,11 @@
   }
   .connector-badge {
     flex: 0 0 auto; width: 17px; height: 17px; border: 1px solid var(--trip-border); border-radius: 3px;
-    background: var(--task-color); color: #fff; display: flex; align-items: center; justify-content: center;
+    color: #fff; display: flex; align-items: center; justify-content: center;
     font-size: 9px; font-weight: 800;
   }
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
-  .block-underline.outbound { background: var(--reserve-color); }
-  .block-underline.return { background: var(--task-color); }
   .time-label {
     position: absolute; top: -13px; font-size: 8px; font-weight: 700; color: var(--ink-soft);
     white-space: nowrap; pointer-events: none; transform: rotate(-58deg);
@@ -207,8 +210,31 @@
   .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
   .legend .item { display: flex; align-items: center; gap: 6px; }
   .legend .swatch { width: 13px; height: 4px; border-radius: 2px; }
-  .legend .swatch.outbound { background: var(--reserve-color); }
-  .legend .swatch.return { background: var(--task-color); }
+
+  /* ---------------- task settings ---------------- */
+  .settings-note { padding: 12px 22px; font-size: 12px; color: var(--ink-soft); line-height: 1.6; }
+  .settings-note b { color: var(--ink); }
+  .settings-toolbar { padding: 0 22px 12px; }
+  .add-task-btn {
+    background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .add-task-btn:hover { background: var(--olive-dark); }
+  .settings-scroll { overflow: auto; padding: 0 22px 24px; }
+  .settings-table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  .settings-table th, .settings-table td { border: 1px solid var(--grid-line); padding: 6px 8px; text-align: left; }
+  .settings-table th { background: var(--bg-alt); color: var(--olive-dark); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .settings-table input, .settings-table select { font-size: 12px; padding: 4px 5px; }
+  .dest-chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; padding: 2px 7px;
+    border-radius: 999px; border: 1px solid var(--trip-border); white-space: nowrap;
+  }
+  .dest-chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .remove-task-btn {
+    background: transparent; border: 1px solid var(--bad); color: var(--bad); border-radius: 5px;
+    padding: 3px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
+  }
+  .remove-task-btn:hover { background: var(--bad); color: #fff; }
 
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
@@ -325,12 +351,7 @@
         </div>
       </div>
 
-      <div class="legend">
-        <div class="item"><span class="swatch outbound"></span> Outbound leg (Madinah &rarr; Kaia Station*)</div>
-        <div class="item"><span class="swatch return"></span> Return leg (Kaia Station* &rarr; Madinah)</div>
-        <div class="item">Connector: <b>K</b>* &middot; RESERVE = driver on standby, no trip today</div>
-        <div class="item" style="color:var(--ink-soft); font-style:italic;">*placeholder until real station/connector data is provided</div>
-      </div>
+      <div class="legend" id="day-legend"></div>
     </div>
 
     <div id="roster-view" style="display:none">
@@ -343,9 +364,16 @@
     </div>
 
     <div id="task-settings-view" style="display:none">
-      <div class="settings-placeholder">
-        <h2>Task Settings</h2>
-        <p>Waiting on your sketch of what goes here -- nothing built yet.</p>
+      <div class="settings-note">
+        <b>Origin</b> is fixed to Madinah for every trip -- only the destination changes.
+        <b>Trip</b> tasks need a Trip No., Destination, Start, and End. <b>Reserve</b> tasks only need Start/End.
+        Changing anything here takes effect the next time you click "Generate month".
+      </div>
+      <div class="settings-toolbar">
+        <button class="add-task-btn" type="button" onclick="addTaskCatalogEntry()">+ Add New Task</button>
+      </div>
+      <div class="settings-scroll">
+        <table class="settings-table" id="task-settings-table"></table>
       </div>
     </div>
 
@@ -362,6 +390,39 @@
 <script>
   const REAL_DATA = JSON.parse(document.getElementById("real-data-json").textContent);
   const OFF_CODES = new Set(["F","V","O","VR","T*","VA","A0","SW","S","E","EA","AJ","P*","R*","L","SD","FD","EF","XS*"]);
+
+  // Origin is fixed to Madinah for every trip; only the destination varies.
+  // Letters/colors per the supervisor's own legend: L=Makkah(blue), A=KAIA(green), K=KAEC(orange, unconfirmed).
+  // Black/"S" = sweep (monitoring) train, an early-morning inspection run, not a passenger direction.
+  const ORIGIN_STATION = "Madinah";
+  const DESTINATIONS = {
+    MAK: { letter: "L", color: "var(--reserve-color)", label: "Makkah" },
+    KAIA: { letter: "A", color: "var(--task-color)", label: "KAIA" },
+    KAEC: { letter: "K", color: "var(--dest-kaec)", label: "KAEC" },
+    SWEEP: { letter: "S", color: "var(--dest-sweep)", label: "Sweep train" },
+  };
+  const UNASSIGNED_DEST = { letter: "?", color: "var(--ink-soft)", label: "Unassigned" };
+  function destInfo(key) { return DESTINATIONS[key] || UNASSIGNED_DEST; }
+
+  // Editable task catalog -- starts from the real 41-task list, each defaulting to an
+  // unassigned destination until classified here. Adding/editing a row here changes what
+  // "Generate month" schedules against.
+  let TASK_CATALOG = REAL_DATA.tasks.map((t) => ({
+    code: t.code,
+    category: "trip",
+    destination: "",
+    start: t.start,
+    end: minutesToHHMM(timeToMinutes(t.start) + t.duration_minutes),
+  }));
+
+  function activeTrips() {
+    return TASK_CATALOG.filter((t) => t.category === "trip" && t.code && t.start && t.end).map((t) => ({
+      code: t.code,
+      start: t.start,
+      duration_minutes: Math.max(1, ((timeToMinutes(t.end) - timeToMinutes(t.start) + 1440) % 1440) || 1440),
+      destination: t.destination,
+    }));
+  }
 
   let monthResult = null; // { stretchesByDriver, tasksByShift, config }
 
@@ -400,12 +461,10 @@
     };
   }
 
-  // real per-task duration from the source workbook (minutes); 7h for every task except
-  // 1100/8RK which runs 8h30
-  const DURATION_BY_CODE = {};
-  REAL_DATA.tasks.forEach((t) => (DURATION_BY_CODE[t.code] = t.duration_minutes));
+  // per-task duration, read live from the editable Task Settings catalog
   function durationFor(code) {
-    return DURATION_BY_CODE[code];
+    const t = activeTrips().find((x) => x.code === code);
+    return t ? t.duration_minutes : 420;
   }
 
   function getConfig() {
@@ -422,9 +481,10 @@
 
   function runMonth(config, seed) {
     const rand = seededRandom(seed);
+    const tasks = activeTrips();
     const tasksByShift = {};
     config.shiftWindows.forEach((w) => (tasksByShift[w.label] = []));
-    const tasksWithShift = REAL_DATA.tasks.map((t) => {
+    const tasksWithShift = tasks.map((t) => {
       const label = classifyShift(timeToMinutes(t.start), config.shiftWindows);
       if (!tasksByShift[label]) tasksByShift[label] = [];
       const withShift = { ...t, shiftType: label };
@@ -495,7 +555,7 @@
         (activeByShift[s.shiftType] = activeByShift[s.shiftType] || []).push(s);
       });
 
-      const tasksToday = [...REAL_DATA.tasks];
+      const tasksToday = [...tasks];
       for (let i = tasksToday.length - 1; i > 0; i--) {
         const j = Math.floor(rand() * (i + 1));
         [tasksToday[i], tasksToday[j]] = [tasksToday[j], tasksToday[i]];
@@ -518,7 +578,7 @@
       });
     }
 
-    return { allStretches, tasksByShift, config, uncoveredTasks };
+    return { allStretches, tasksByShift, config, uncoveredTasks, tasks };
   }
 
   function computeCompliance(allStretches) {
@@ -653,11 +713,6 @@
   // dayOverrides[dayIdx][driverIndex] = { code, name, start, end }
   const dayOverrides = {};
 
-  // placeholder destination for the outbound leg until the real station/connector plan is
-  // provided -- every duty is shown as Madinah -> this station -> Madinah, split in half
-  const PLACEHOLDER_DESTINATION = "Kaia Station";
-  const PLACEHOLDER_CONNECTOR = "K";
-
   function minutesToHHMM(min) {
     const m = ((min % 1440) + 1440) % 1440;
     return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
@@ -705,9 +760,10 @@
         if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
-          const matchedTask = REAL_DATA.tasks.find((t) => t.code === assignedVal);
+          const matchedTask = (monthResult.tasks || []).find((t) => t.code === assignedVal);
           const defaultStart = matchedTask ? matchedTask.start : "07:00";
           const defaultDuration = matchedTask ? matchedTask.duration_minutes : 420;
+          const dest = destInfo(matchedTask ? matchedTask.destination : "");
 
           start = o.start !== undefined ? o.start : defaultStart;
           const startMin = timeToMinutes(start);
@@ -723,9 +779,9 @@
             <div class="block-pair" style="left:${leftPct}%; width:${widthPct}%;">
               <div class="time-label start-label">${start}</div>
               <div class="time-label end-label">${end}</div>
-              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline outbound"></div></div>
-              <div class="connector-badge">${PLACEHOLDER_CONNECTOR}</div>
-              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline return"></div></div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
+              <div class="connector-badge" style="background:${dest.color}">${dest.letter}</div>
+              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
             </div>`;
         }
 
@@ -753,6 +809,77 @@
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
     '<div class="hcell"></div><div class="hcell">End</div>';
 
+  // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
+  document.getElementById("day-legend").innerHTML =
+    Object.entries(DESTINATIONS)
+      .map(
+        ([key, d]) =>
+          `<div class="item"><span class="swatch" style="background:${d.color}"></span> ${d.label} (letter ${d.letter})</div>`
+      )
+      .join("") +
+    `<div class="item">RESERVE = driver on standby, no trip today</div>`;
+
+  // ---- Task Settings ----
+  function addTaskCatalogEntry() {
+    TASK_CATALOG.push({ code: "", category: "trip", destination: "", start: "", end: "" });
+    renderTaskSettings();
+  }
+
+  function removeTaskCatalogEntry(index) {
+    TASK_CATALOG.splice(index, 1);
+    renderTaskSettings();
+  }
+
+  function updateTaskCatalogEntry(index, field, value) {
+    TASK_CATALOG[index][field] = value;
+    renderTaskSettings();
+  }
+
+  function renderTaskSettings() {
+    const table = document.getElementById("task-settings-table");
+
+    function destOptionsFor(selected) {
+      let opts = `<option value="" ${!selected ? "selected" : ""}>Unassigned</option>`;
+      Object.keys(DESTINATIONS).forEach((key) => {
+        const d = DESTINATIONS[key];
+        opts += `<option value="${key}" ${selected === key ? "selected" : ""}>${d.label} (${d.letter})</option>`;
+      });
+      return opts;
+    }
+
+    let html = `<thead><tr>
+      <th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th><th>Start</th><th>End</th><th></th>
+    </tr></thead><tbody>`;
+
+    TASK_CATALOG.forEach((t, i) => {
+      const isReserve = t.category === "reserve";
+      const dest = destInfo(t.destination);
+      const destCell = isReserve
+        ? `<span style="color:var(--ink-soft)">--</span>`
+        : `<select onchange="updateTaskCatalogEntry(${i}, 'destination', this.value)">${destOptionsFor(t.destination)}</select>
+           <span class="dest-chip" style="margin-left:6px"><span class="dot" style="background:${dest.color}"></span>${dest.letter}</span>`;
+
+      html += `<tr>
+        <td><input value="${escapeAttr(t.code)}" onchange="updateTaskCatalogEntry(${i}, 'code', this.value)" style="width:90px" /></td>
+        <td>
+          <select onchange="updateTaskCatalogEntry(${i}, 'category', this.value)">
+            <option value="trip" ${!isReserve ? "selected" : ""}>Trip</option>
+            <option value="reserve" ${isReserve ? "selected" : ""}>Reserve</option>
+          </select>
+        </td>
+        <td>${ORIGIN_STATION}</td>
+        <td>${destCell}</td>
+        <td><input type="time" value="${escapeAttr(t.start)}" onchange="updateTaskCatalogEntry(${i}, 'start', this.value)" /></td>
+        <td><input type="time" value="${escapeAttr(t.end)}" onchange="updateTaskCatalogEntry(${i}, 'end', this.value)" /></td>
+        <td><button class="remove-task-btn" type="button" onclick="removeTaskCatalogEntry(${i})">Remove</button></td>
+      </tr>`;
+    });
+
+    html += "</tbody>";
+    table.innerHTML = html;
+  }
+
   populateDaySelect();
   renderRoster();
+  renderTaskSettings();
 </script>

@@ -22,8 +22,12 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   ported to JavaScript and runs client-side against the embedded real data in
   `web/real_data.json`. The Day Schedule view is one row per active driver for the selected day
   (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
-  (outbound leg + return leg) joined by a connector badge, drivers on standby show a single
-  RESERVE box. Every field (duty code, driver name, start, end) is directly editable.
+  (outbound leg + return leg) joined by a connector badge colored by destination, drivers on
+  standby show a single RESERVE box. Every field (duty code, driver name, start, end) is
+  directly editable. The **Task Settings** tab is the editable catalog behind it all: each of
+  the 41 real duties (plus any new ones added there) has a Trip No., Category (Trip/Reserve),
+  Destination, Start, and End — the Day Schedule is generated from this catalog, not a fixed list.
+  A **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -52,15 +56,17 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
-- **Manual task catalog** — each driver row's duty code, name, start, and end time are editable
-  directly in the Day Schedule view (typing a code onto a RESERVE row assigns them a duty;
-  typing RESERVE onto a duty row puts them back on standby). Adding a brand-new duty that
-  didn't come from the real data isn't built yet.
-- **Real trip pairing / connector codes** — each working driver's duty is shown as two legs
-  (Madinah &rarr; a placeholder "Kaia Station" &rarr; Madinah) joined by a placeholder "K"
-  connector badge, split in half from the duty's one real start/end time. The real per-duty
-  train numbers for each leg, which connector letter (A/K/L) applies, and the real turnaround
-  timing between legs are still pending from the user's full plan.
+- **Manual task catalog** — done via the Task Settings tab: add/edit/remove duties (Trip No.,
+  Category, Destination, Start, End), and the Day Schedule schedules against that live catalog.
+  Driver rows in the Day Schedule are also directly editable (typing a code onto a RESERVE row
+  assigns them a duty; typing RESERVE onto a duty row puts them back on standby).
+- **Real trip pairing / connector codes** — destinations are Makkah (L, blue), KAIA (A, green),
+  KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an early-morning
+  monitoring run) per the user's legend. Each duty currently shows the *same* destination/color
+  on both its outbound and return leg boxes, split in half from the duty's one start/end time --
+  the 41 existing duties still need to be classified with a real destination in Task Settings
+  (they default to "Unassigned", shown with a "?" badge). Real per-leg train numbers and the
+  exact turnaround timing between legs are still pending.
 - **Persistence** — manual edits to a driver row survive switching days/tabs, but are cleared by
   the next "Generate month" click or a page reload; nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
