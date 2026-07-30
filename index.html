@@ -182,9 +182,12 @@
     opacity: 0.3; pointer-events: none;
   }
   /* ---------------- driver duty: two trip legs + connector ---------------- */
-  /* each duty's pair of boxes is a fixed size, so every row lines up the same regardless of
-     that duty's actual duration -- only the pair's starting position (left%) is time-based */
-  .block-pair { position: absolute; top: 50%; transform: translateY(-50%); height: 28px; display: flex; align-items: center; gap: 4px; }
+  /* every row's boxes sit in the same fixed "queue" position (centered in the track), instead
+     of floating left/right based on that duty's actual clock time -- so every row lines up */
+  .block-pair {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    height: 28px; display: flex; align-items: center; gap: 4px;
+  }
   .leg-block {
     flex: 0 0 92px; width: 92px; height: 28px; border: 1.5px solid var(--trip-border); border-radius: 3px;
     background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
@@ -204,7 +207,7 @@
   .time-label.start-label { left: -1px; transform-origin: left bottom; }
   .time-label.end-label { right: -1px; transform-origin: right bottom; }
   .reserve-block {
-    position: absolute; top: 50%; transform: translateY(-50%); left: 10%; right: 10%; height: 26px;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 210px; height: 26px;
     border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
     align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--reserve-color);
   }
@@ -778,10 +781,8 @@
           const defaultEnd = minutesToHHMM(startMin + defaultDuration);
           end = o.end !== undefined ? o.end : defaultEnd;
 
-          const leftPct = (startMin / 1440) * 100;
-
           track = `
-            <div class="block-pair" style="left:${leftPct}%;">
+            <div class="block-pair">
               <div class="time-label start-label">${start}</div>
               <div class="time-label end-label">${end}</div>
               <div class="leg-block">${escapeAttr(outboundLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
