@@ -13,8 +13,11 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 - **`engine/scheduler.py`** — the core engine. Detects each driver's 6-on/2-off work stretches
   from the roster, classifies tasks into shift types (Day/Afternoon/Night, configurable time
   windows) by start time, enforces a minimum-stretches-before-switching stickiness rule, and
-  targets a soft trip/reserve ratio per stretch. Task coverage is mandatory; the ratio target is
-  a preference that yields when there aren't enough eligible drivers of the right shift type.
+  targets a soft trip/reserve ratio per stretch. Also enforces a minimum rest period (default 12h,
+  configurable) between the end of one shift and the start of a driver's next one, tracked as an
+  absolute end-of-shift timestamp per driver so it holds across day/reserve boundaries within a
+  stretch. Task coverage is mandatory; the ratio target is a soft preference, but the rest rule is
+  a hard constraint — a task goes uncovered rather than assign a driver who hasn't rested enough.
 - **`engine/export_demo.py`** — runs the engine for a full month against the real roster and
   writes `Scheduling_Engine_Demo.xlsx`, including a compliance summary (exact-target rate,
   stickiness violations, genuine coverage shortages).
@@ -51,6 +54,7 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 | Night shift window | 17:00–03:30 (wraps past midnight) | Yes |
 | Minimum stretches before switching shift type | 2 | Yes |
 | Target trips per 6-day stretch | 3 (3 trips + 3 reserve) | Yes, plus per-driver override |
+| Minimum rest between shifts | 12 hours | Yes |
 | Task coverage | Mandatory | Not configurable — a real train always needs a driver |
 
 ## Known gaps / not yet built

@@ -310,6 +310,15 @@
       </div>
     </div>
 
+    <div class="cond-group">
+      <h2>Minimum rest between shifts</h2>
+      <div class="ratio-row">
+        <span class="field-label">At least</span>
+        <input type="number" id="min-rest-hours" min="0" max="48" step="0.5" value="12" />
+        <span class="field-label">hours since their last shift ended</span>
+      </div>
+    </div>
+
     <button class="generate-btn" type="button" onclick="generate()">Generate month</button>
     <div class="status-line"><span class="status-dot" id="status-dot"></span><span id="status-text">Not generated yet — click Generate month</span></div>
     <div class="compliance" id="compliance"></div>
@@ -496,6 +505,7 @@
       ],
       stickyMin: parseInt(document.getElementById("sticky-min").value, 10) || 2,
       targetTrips: parseInt(document.getElementById("target-trips").value, 10) || 3,
+      minRestHours: parseFloat(document.getElementById("min-rest-hours").value) || 0,
     };
   }
 
@@ -563,8 +573,10 @@
     allStretches.forEach((s) => {
       s.assignments = {};
       s.assignedTripCount = 0;
+      s.lastTaskEndAbsMin = null; // absolute minute (dayIdx*1440 + minute-of-day) their last real task ended
     });
     const uncoveredTasks = []; // {dayIdx, code} -- genuine shortages, for reporting
+    const minRestMinutes = Math.max(0, (config.minRestHours || 0) * 60);
 
     const numDays = REAL_DATA.dates.length;
     for (let dayIdx = 0; dayIdx < numDays; dayIdx++) {
@@ -584,7 +596,12 @@
       const assignedToday = new Set(); // stretch objects already given a task today
       tasksToday.forEach((t) => {
         const shiftType = classifyShift(timeToMinutes(t.start), config.shiftWindows);
-        const pool = (activeByShift[shiftType] || []).filter((s) => !assignedToday.has(s));
+        const taskStartAbsMin = dayIdx * 1440 + timeToMinutes(t.start);
+        const pool = (activeByShift[shiftType] || []).filter(
+          (s) =>
+            !assignedToday.has(s) &&
+            (s.lastTaskEndAbsMin === null || taskStartAbsMin - s.lastTaskEndAbsMin >= minRestMinutes)
+        );
         if (!pool.length) {
           uncoveredTasks.push({ dayIdx, code: t.code, shiftType });
           return;
@@ -594,6 +611,7 @@
         const chosen = candidates[Math.floor(rand() * candidates.length)];
         chosen.assignments[dayIdx] = t.code;
         chosen.assignedTripCount += 1;
+        chosen.lastTaskEndAbsMin = taskStartAbsMin + t.duration_minutes;
         assignedToday.add(chosen);
       });
     }
@@ -636,7 +654,7 @@
       let complianceHtml =
         "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
         "<b>" + c.violations + "</b> stickiness violations (should be 0)<br/>" +
-        "<b>" + uncovered + "</b> task-days genuinely short a driver (real shift-type shortage)";
+        "<b>" + uncovered + "</b> task-days genuinely short a driver (shift-type shortage or nobody rested enough)";
       if (uncovered > 0) {
         const sample = monthResult.uncoveredTasks.slice(0, 5)
           .map((u) => `${REAL_DATA.dates[u.dayIdx]} ${u.code} (${u.shiftType})`)

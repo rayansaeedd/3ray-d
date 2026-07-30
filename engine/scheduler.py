@@ -40,6 +40,9 @@ DRIVER_TARGET_OVERRIDES = {}
 
 STRETCH_MIN_CONSECUTIVE = 2  # must stay on a shift type for this many stretches before switching
 
+# ---- CONFIG: minimum rest between the end of one shift and the start of a driver's next one ----
+MIN_REST_HOURS = 12
+
 
 def classify_shift(start_time):
     for label, start, end in SHIFT_WINDOWS:
@@ -68,6 +71,7 @@ class Stretch:
     target_trips: int = None
     assigned_trip_count: int = 0
     assignments: dict = field(default_factory=dict)  # day_index -> task code or "RESERVE"
+    last_task_end_abs_min: int = None  # absolute minute (day_idx*1440 + minute-of-day) their last real task ended
 
 
 def _load_real_data():
@@ -176,7 +180,9 @@ def run_month():
     for s in all_stretches:
         s.assignments = {}
         s.assigned_trip_count = 0
+        s.last_task_end_abs_min = None
     uncovered_tasks = []  # (day_idx, task_code, shift_type) -- genuine shortages, for reporting
+    min_rest_minutes = max(0, MIN_REST_HOURS * 60)
 
     num_days = len(dates)
     for day_idx in range(num_days):
@@ -192,7 +198,12 @@ def run_month():
 
         assigned_today = set()
         for t in tasks_today:
-            pool = [s for s in active_by_shift.get(t.shift_type, []) if s not in assigned_today]
+            start_abs_min = day_idx * 1440 + t.start_time.hour * 60 + t.start_time.minute
+            pool = [
+                s for s in active_by_shift.get(t.shift_type, [])
+                if s not in assigned_today
+                and (s.last_task_end_abs_min is None or start_abs_min - s.last_task_end_abs_min >= min_rest_minutes)
+            ]
             if not pool:
                 uncovered_tasks.append((day_idx, t.code, t.shift_type))
                 continue
@@ -201,6 +212,7 @@ def run_month():
             chosen = random.choice(candidates)
             chosen.assignments[day_idx] = t.code
             chosen.assigned_trip_count += 1
+            chosen.last_task_end_abs_min = start_abs_min + (t.duration_minutes or 0)
             assigned_today.add(chosen)
 
     return dates, drivers, all_stretches, tasks_by_shift, uncovered_tasks
