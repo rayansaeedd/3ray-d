@@ -62,11 +62,11 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   assigns them a duty; typing RESERVE onto a duty row puts them back on standby).
 - **Real trip pairing / connector codes** — destinations are Makkah (L, blue), KAIA (A, green),
   KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an early-morning
-  monitoring run) per the user's legend. Each duty currently shows the *same* destination/color
-  on both its outbound and return leg boxes, split in half from the duty's one start/end time --
-  the 41 existing duties still need to be classified with a real destination in Task Settings
-  (they default to "Unassigned", shown with a "?" badge). Real per-leg train numbers and the
-  exact turnaround timing between legs are still pending.
+  monitoring run) per the user's legend. Task Settings has an "Outbound box #" and "Return box #"
+  field per duty so each leg box can show its own real trip number (falls back to the duty's
+  Trip No. if left blank); the 41 existing duties still need their destination and per-leg
+  numbers filled in (default to "Unassigned", shown with a "?" badge). The exact turnaround
+  timing between legs (rather than splitting the one start/end time in half) is still pending.
 - **Persistence** — manual edits to a driver row survive switching days/tabs, but are cleared by
   the next "Generate month" click or a page reload; nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a

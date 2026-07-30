@@ -411,6 +411,8 @@
     code: t.code,
     category: "trip",
     destination: "",
+    outboundTripNo: "",
+    returnTripNo: "",
     start: t.start,
     end: minutesToHHMM(timeToMinutes(t.start) + t.duration_minutes),
   }));
@@ -421,6 +423,8 @@
       start: t.start,
       duration_minutes: Math.max(1, ((timeToMinutes(t.end) - timeToMinutes(t.start) + 1440) % 1440) || 1440),
       destination: t.destination,
+      outboundTripNo: t.outboundTripNo,
+      returnTripNo: t.returnTripNo,
     }));
   }
 
@@ -764,6 +768,8 @@
           const defaultStart = matchedTask ? matchedTask.start : "07:00";
           const defaultDuration = matchedTask ? matchedTask.duration_minutes : 420;
           const dest = destInfo(matchedTask ? matchedTask.destination : "");
+          const outboundLabel = (matchedTask && matchedTask.outboundTripNo) || code;
+          const returnLabel = (matchedTask && matchedTask.returnTripNo) || code;
 
           start = o.start !== undefined ? o.start : defaultStart;
           const startMin = timeToMinutes(start);
@@ -779,9 +785,9 @@
             <div class="block-pair" style="left:${leftPct}%; width:${widthPct}%;">
               <div class="time-label start-label">${start}</div>
               <div class="time-label end-label">${end}</div>
-              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
+              <div class="leg-block">${escapeAttr(outboundLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
               <div class="connector-badge" style="background:${dest.color}">${dest.letter}</div>
-              <div class="leg-block">${escapeAttr(code)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
+              <div class="leg-block">${escapeAttr(returnLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
             </div>`;
         }
 
@@ -821,7 +827,9 @@
 
   // ---- Task Settings ----
   function addTaskCatalogEntry() {
-    TASK_CATALOG.push({ code: "", category: "trip", destination: "", start: "", end: "" });
+    TASK_CATALOG.push({
+      code: "", category: "trip", destination: "", outboundTripNo: "", returnTripNo: "", start: "", end: "",
+    });
     renderTaskSettings();
   }
 
@@ -848,7 +856,8 @@
     }
 
     let html = `<thead><tr>
-      <th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th><th>Start</th><th>End</th><th></th>
+      <th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th>
+      <th>Outbound box #</th><th>Return box #</th><th>Start</th><th>End</th><th></th>
     </tr></thead><tbody>`;
 
     TASK_CATALOG.forEach((t, i) => {
@@ -858,6 +867,11 @@
         ? `<span style="color:var(--ink-soft)">--</span>`
         : `<select onchange="updateTaskCatalogEntry(${i}, 'destination', this.value)">${destOptionsFor(t.destination)}</select>
            <span class="dest-chip" style="margin-left:6px"><span class="dot" style="background:${dest.color}"></span>${dest.letter}</span>`;
+      const legInput = (field, value, placeholder) =>
+        isReserve
+          ? `<span style="color:var(--ink-soft)">--</span>`
+          : `<input value="${escapeAttr(value)}" placeholder="${placeholder}"
+                    onchange="updateTaskCatalogEntry(${i}, '${field}', this.value)" style="width:70px" />`;
 
       html += `<tr>
         <td><input value="${escapeAttr(t.code)}" onchange="updateTaskCatalogEntry(${i}, 'code', this.value)" style="width:90px" /></td>
@@ -869,6 +883,8 @@
         </td>
         <td>${ORIGIN_STATION}</td>
         <td>${destCell}</td>
+        <td>${legInput("outboundTripNo", t.outboundTripNo, t.code || "e.g. 07061")}</td>
+        <td>${legInput("returnTripNo", t.returnTripNo, t.code || "e.g. 00061")}</td>
         <td><input type="time" value="${escapeAttr(t.start)}" onchange="updateTaskCatalogEntry(${i}, 'start', this.value)" /></td>
         <td><input type="time" value="${escapeAttr(t.end)}" onchange="updateTaskCatalogEntry(${i}, 'end', this.value)" /></td>
         <td><button class="remove-task-btn" type="button" onclick="removeTaskCatalogEntry(${i})">Remove</button></td>
