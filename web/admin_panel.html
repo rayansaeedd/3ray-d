@@ -161,20 +161,9 @@
   .task-row:nth-child(odd) { background: var(--bg-alt); }
   .task-code { align-self: center; padding-left: 8px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
   .driver-name { align-self: center; padding: 0 6px; font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .driver-name.empty { color: var(--bad); font-style: italic; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
   .track { grid-column: 5 / 29; position: relative; }
 
-  /* ---------------- editable row cells ---------------- */
-  .cell-input {
-    align-self: center; width: 100%; border: none; background: transparent; font-family: inherit;
-    color: inherit; border-radius: 3px; padding: 4px 5px; box-sizing: border-box;
-  }
-  .cell-input:hover { background: var(--bg-alt); }
-  .cell-input:focus { background: var(--bg); outline: 1.5px solid var(--olive); outline-offset: -1px; }
-  .task-code-input { font-size: 12px; font-weight: 700; color: var(--olive-dark); }
-  .driver-name-input { font-size: 11px; color: var(--ink); }
-  .driver-name-input:placeholder-shown { color: var(--bad); font-style: italic; }
   .track::before {
     content: ""; position: absolute; inset: 0;
     background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
@@ -194,12 +183,10 @@
   }
   .connector-badge {
     flex: 0 0 auto; width: 30px; height: 22px; border: 1px solid var(--trip-border); border-radius: 3px;
-    color: #fff; font-size: 11px; font-weight: 800; text-align: center; text-align-last: center;
-    padding: 0; appearance: none; -webkit-appearance: none; cursor: pointer;
+    color: #fff; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center;
   }
-  .leg-time-input {
-    flex: 0 0 56px; width: 56px; font-size: 9.5px; padding: 2px 1px; border: 1px solid var(--input-border);
-    border-radius: 3px; background: var(--input-bg); color: var(--ink); text-align: center; font-family: inherit;
+  .leg-time-text {
+    flex: 0 0 auto; font-size: 9.5px; font-weight: 600; color: var(--ink-soft); text-align: center; white-space: nowrap;
   }
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
@@ -237,6 +224,8 @@
     padding: 3px 9px; font-size: 11px; cursor: pointer; font-family: inherit;
   }
   .remove-task-btn:hover { background: var(--bad); color: #fff; }
+  .drag-handle { cursor: grab; color: var(--ink-soft); text-align: center; font-size: 13px; user-select: none; letter-spacing: -2px; }
+  .settings-table tr[draggable="true"]:active { opacity: 0.6; }
 
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
@@ -367,11 +356,13 @@
 
     <div id="task-settings-view" style="display:none">
       <div class="settings-note">
-        <b>Origin</b> is fixed to Madinah for every trip -- only the destination changes.
+        <b>Origin</b> is choosable per task now (Madinah, Makkah, or KAIA).
         <b>Trip</b> tasks have their own outbound leg (box #, start, end) and return leg
         (box #, start, end) -- each editable independently. <b>Reserve</b> tasks only use the
-        "Out. Start"/"Out. End" columns as a plain Start/End. Changing anything here takes
-        effect the next time you click "Generate month".
+        "Out. Start"/"Out. End" columns as a plain Start/End. Long-press the &#8942;&#8942; handle
+        on the left of a row and drag to reorder. Changing anything here takes effect the next
+        time you click "Generate month". The Day Schedule itself is read-only -- all editing
+        happens here.
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTaskCatalogEntry()">+ Add New Task</button>
@@ -395,10 +386,11 @@
   const REAL_DATA = JSON.parse(document.getElementById("real-data-json").textContent);
   const OFF_CODES = new Set(["F","V","O","VR","T*","VA","A0","SW","S","E","EA","AJ","P*","R*","L","SD","FD","EF","XS*"]);
 
-  // Origin is fixed to Madinah for every trip; only the destination varies.
-  // Letters/colors per the supervisor's own legend: L=Makkah(blue), A=KAIA(green), K=KAEC(orange, unconfirmed).
-  // Black/"S" = sweep (monitoring) train, an early-morning inspection run, not a passenger direction.
-  const ORIGIN_STATION = "Madinah";
+  // Origin is choosable per task now (a supervisor at a different base station would pick
+  // their own origin) -- Letters/colors per the supervisor's own legend: L=Makkah(blue),
+  // A=KAIA(green), K=KAEC(orange, unconfirmed). Black/"S" = sweep (monitoring) train, an
+  // early-morning inspection run, not a passenger direction.
+  const ORIGIN_OPTIONS = ["Madinah", "Makkah", "KAIA"];
   const DESTINATIONS = {
     MAK: { letter: "L", color: "var(--reserve-color)", label: "Makkah" },
     KAIA: { letter: "A", color: "var(--task-color)", label: "KAIA" },
@@ -423,6 +415,7 @@
     return {
       code: t.code,
       category: "trip",
+      origin: "Madinah",
       destination: "",
       outboundTripNo: "",
       returnTripNo: "",
@@ -634,7 +627,6 @@
     document.getElementById("status-text").textContent = "Generating…";
     setTimeout(() => {
       monthResult = runMonth(config, seed);
-      Object.keys(dayOverrides).forEach((k) => delete dayOverrides[k]);
       const c = computeCompliance(monthResult.allStretches);
       const uncovered = monthResult.uncoveredTasks.length;
       const hasWarning = c.violations > 0 || uncovered > 0;
@@ -736,10 +728,8 @@
       .join("");
   }
 
-  // manual edits per day, keyed by driverIndex (one row per driver now):
-  // dayOverrides[dayIdx][driverIndex] = { code, name, start, end }
-  const dayOverrides = {};
-
+  // The Day Schedule is a read-only view of the generated result -- all editing happens in
+  // Task Settings (the catalog) instead, never here.
   function minutesToHHMM(min) {
     const m = ((min % 1440) + 1440) % 1440;
     return String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
@@ -747,13 +737,6 @@
 
   function escapeAttr(str) {
     return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  function updateOverride(dayIdx, driverIndex, field, value) {
-    dayOverrides[dayIdx] = dayOverrides[dayIdx] || {};
-    dayOverrides[dayIdx][driverIndex] = dayOverrides[dayIdx][driverIndex] || {};
-    dayOverrides[dayIdx][driverIndex][field] = value;
-    renderDay();
   }
 
   function renderDay() {
@@ -772,66 +755,52 @@
       .filter((s) => s.days.includes(dayIdx))
       .sort((a, b) => a.driverIndex - b.driverIndex);
 
-    const overridesForDay = dayOverrides[dayIdx] || {};
-
     rowsEl.innerHTML = activeStretches
       .map((s) => {
         const driverIndex = s.driverIndex;
-        const o = overridesForDay[driverIndex] || {};
         const assignedVal = s.assignments[dayIdx]; // "RESERVE" or a real task code
-        const code = o.code !== undefined ? o.code : assignedVal;
-        const name = o.name !== undefined ? o.name : REAL_DATA.drivers[driverIndex].name;
+        const code = assignedVal;
+        const name = REAL_DATA.drivers[driverIndex].name;
         const isReserve = code.trim().toUpperCase() === "RESERVE";
 
-        let track;
+        let track, origin = "Madinah";
         if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
           const matchedTask = (monthResult.tasks || []).find((t) => t.code === assignedVal);
-          const dest = destInfo(o.destination !== undefined ? o.destination : matchedTask ? matchedTask.destination : "");
+          const dest = destInfo(matchedTask ? matchedTask.destination : "");
           const outboundLabel = (matchedTask && matchedTask.outboundTripNo) || code;
           const returnLabel = (matchedTask && matchedTask.returnTripNo) || code;
+          origin = (matchedTask && matchedTask.origin) || "Madinah";
 
-          const legTime = (field, fallback) =>
-            o[field] !== undefined ? o[field] : matchedTask ? matchedTask[field] : fallback;
+          const legTime = (field, fallback) => (matchedTask ? matchedTask[field] : fallback);
           const outboundStart = legTime("outboundStart", "07:00");
           const outboundEnd = legTime("outboundEnd", "09:00");
           const returnStart = legTime("returnStart", "12:00");
           const returnEnd = legTime("returnEnd", "14:00");
+          const connectorLetter = matchedTask && matchedTask.destination ? dest.letter : "?";
 
-          const connectorKey = o.destination !== undefined ? o.destination : matchedTask ? matchedTask.destination : "";
-          const connectorOptions =
-            `<option value="" ${!connectorKey ? "selected" : ""}>?</option>` +
-            CONNECTOR_KEYS
-              .map((k) => `<option value="${k}" ${connectorKey === k ? "selected" : ""}>${DESTINATIONS[k].letter}</option>`)
-              .join("");
-
-          const legTimeInput = (field, value) =>
-            `<input type="time" class="leg-time-input" value="${escapeAttr(value)}"
-                    onchange="updateOverride(${dayIdx}, ${driverIndex}, '${field}', this.value)" />`;
+          const legTimeText = (value) => `<span class="leg-time-text">${escapeAttr(value)}</span>`;
 
           track = `
             <div class="block-pair">
-              ${legTimeInput("outboundStart", outboundStart)}
+              ${legTimeText(outboundStart)}
               <div class="leg-block">${escapeAttr(outboundLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
-              ${legTimeInput("outboundEnd", outboundEnd)}
-              <select class="connector-badge" style="background:${dest.color}"
-                      onchange="updateOverride(${dayIdx}, ${driverIndex}, 'destination', this.value)">${connectorOptions}</select>
-              ${legTimeInput("returnStart", returnStart)}
+              ${legTimeText(outboundEnd)}
+              <div class="connector-badge" style="background:${dest.color}">${connectorLetter}</div>
+              ${legTimeText(returnStart)}
               <div class="leg-block">${escapeAttr(returnLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
-              ${legTimeInput("returnEnd", returnEnd)}
+              ${legTimeText(returnEnd)}
             </div>`;
         }
 
         return `
         <div class="task-row">
-          <input class="cell-input task-code-input" value="${escapeAttr(code)}"
-                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'code', this.value)" />
-          <input class="cell-input driver-name-input" value="${escapeAttr(name)}"
-                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'name', this.value)" />
-          <div class="madinah-tag">Madinah</div>
+          <div class="task-code">${escapeAttr(code)}</div>
+          <div class="driver-name">${escapeAttr(name)}</div>
+          <div class="madinah-tag">${escapeAttr(origin)}</div>
           <div class="track">${track}</div>
-          <div class="madinah-tag">Madinah</div>
+          <div class="madinah-tag">${escapeAttr(origin)}</div>
         </div>`;
       })
       .join("");
@@ -856,7 +825,7 @@
   // ---- Task Settings ----
   function addTaskCatalogEntry() {
     TASK_CATALOG.push({
-      code: "", category: "trip", destination: "", outboundTripNo: "", returnTripNo: "",
+      code: "", category: "trip", origin: "Madinah", destination: "", outboundTripNo: "", returnTripNo: "",
       outboundStart: "", outboundEnd: "", returnStart: "", returnEnd: "",
     });
     renderTaskSettings();
@@ -872,6 +841,25 @@
     renderTaskSettings();
   }
 
+  // long-press-and-drag row reordering (Task Settings only -- the Day Schedule stays read-only)
+  let draggedTaskIndex = null;
+  function handleRowDragStart(e, index) {
+    draggedTaskIndex = index;
+    e.dataTransfer.effectAllowed = "move";
+  }
+  function handleRowDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+  function handleRowDrop(e, index) {
+    e.preventDefault();
+    if (draggedTaskIndex === null || draggedTaskIndex === index) return;
+    const [moved] = TASK_CATALOG.splice(draggedTaskIndex, 1);
+    TASK_CATALOG.splice(index, 0, moved);
+    draggedTaskIndex = null;
+    renderTaskSettings();
+  }
+
   function renderTaskSettings() {
     const table = document.getElementById("task-settings-table");
 
@@ -884,8 +872,12 @@
       return opts;
     }
 
+    function originOptionsFor(selected) {
+      return ORIGIN_OPTIONS.map((o) => `<option value="${o}" ${selected === o ? "selected" : ""}>${o}</option>`).join("");
+    }
+
     let html = `<thead><tr>
-      <th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th>
+      <th></th><th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th>
       <th>Outbound box #</th><th>Out. Start</th><th>Out. End</th>
       <th>Return box #</th><th>Ret. Start</th><th>Ret. End</th><th></th>
     </tr></thead><tbody>`;
@@ -909,7 +901,9 @@
           ? `<span style="color:var(--ink-soft)">--</span>`
           : `<input type="time" value="${escapeAttr(value)}" onchange="updateTaskCatalogEntry(${i}, '${field}', this.value)" />`;
 
-      html += `<tr>
+      html += `<tr draggable="true"
+          ondragstart="handleRowDragStart(event, ${i})" ondragover="handleRowDragOver(event)" ondrop="handleRowDrop(event, ${i})">
+        <td class="drag-handle" title="Long-press and drag to reorder">&#8942;&#8942;</td>
         <td><input value="${escapeAttr(t.code)}" onchange="updateTaskCatalogEntry(${i}, 'code', this.value)" style="width:90px" /></td>
         <td>
           <select onchange="updateTaskCatalogEntry(${i}, 'category', this.value)">
@@ -917,7 +911,7 @@
             <option value="reserve" ${isReserve ? "selected" : ""}>Reserve</option>
           </select>
         </td>
-        <td>${ORIGIN_STATION}</td>
+        <td><select onchange="updateTaskCatalogEntry(${i}, 'origin', this.value)">${originOptionsFor(t.origin)}</select></td>
         <td>${destCell}</td>
         <td>${legNoInput("outboundTripNo", t.outboundTripNo, t.code || "e.g. 07061")}</td>
         <td>${timeCell("outboundStart", t.outboundStart)}</td>

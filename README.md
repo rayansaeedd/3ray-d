@@ -20,14 +20,15 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   stickiness violations, genuine coverage shortages).
 - **`web/admin_panel.html`** — a self-contained prototype admin panel. The same engine logic is
   ported to JavaScript and runs client-side against the embedded real data in
-  `web/real_data.json`. The Day Schedule view is one row per active driver for the selected day
-  (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
+  `web/real_data.json`. The **Day Schedule** view is one row per active driver for the selected
+  day (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
   (outbound leg + return leg) joined by a connector badge colored by destination, drivers on
-  standby show a single RESERVE box. Every field (duty code, driver name, start, end) is
-  directly editable. The **Task Settings** tab is the editable catalog behind it all: each of
-  the 41 real duties (plus any new ones added there) has a Trip No., Category (Trip/Reserve),
-  Destination, Start, and End — the Day Schedule is generated from this catalog, not a fixed list.
-  A **Roster Settings** tab is scaffolded and awaiting its spec.
+  standby show a single RESERVE box. **The Day Schedule is read-only** — it's a display of the
+  generated result, nothing on it can be clicked or edited. All editing lives in the **Task
+  Settings** tab instead: each duty (Trip No., Category, Origin, Destination, per-leg trip
+  numbers, per-leg Start/End) is editable there, rows can be reordered by long-pressing the
+  drag handle, and the Day Schedule is generated from this catalog, not a fixed list. A
+  **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -56,20 +57,18 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
-- **Manual task catalog** — done via the Task Settings tab: add/edit/remove duties (Trip No.,
-  Category, Destination, Start, End), and the Day Schedule schedules against that live catalog.
-  Driver rows in the Day Schedule are also directly editable (typing a code onto a RESERVE row
-  assigns them a duty; typing RESERVE onto a duty row puts them back on standby).
+- **Manual task catalog** — done via the Task Settings tab: add/edit/remove/reorder duties
+  (Trip No., Category, Origin, Destination, per-leg trip numbers, per-leg Start/End), and the
+  Day Schedule schedules against that live catalog. The Day Schedule itself is read-only by
+  design — no editing happens there.
 - **Real trip pairing / connector codes** — done. Destinations are Makkah (L, blue), KAIA (A,
   green), KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an
   early-morning monitoring run) per the user's legend. Each duty has independent outbound-leg
   and return-leg Start/End times (no longer a 50/50 split of one range) plus its own per-leg
-  trip number, all editable directly inline on the Day Schedule row (the connector letter is a
-  live dropdown between the two boxes; the four leg times are live time inputs before/after each
-  box) or in bulk via Task Settings. The 41 existing duties still default to "Unassigned" (shown
-  as "?") until classified.
-- **Persistence** — manual edits to a driver row survive switching days/tabs, but are cleared by
-  the next "Generate month" click or a page reload; nothing is saved to disk yet.
+  trip number and origin station (Madinah/Makkah/KAIA), all editable in Task Settings. The 41
+  existing duties still default to "Unassigned" (shown as "?") until classified.
+- **Persistence** — edits to the Task Settings catalog only live in memory; a page reload resets
+  it back to the real 41-task list. Nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 
