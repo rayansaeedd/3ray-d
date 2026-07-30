@@ -147,36 +147,42 @@
   .day-date select:disabled { opacity: 0.85; cursor: not-allowed; min-width: 110px; }
 
   .gantt-scroll { overflow-x: auto; }
-  .gantt { min-width: 0; }
+  .gantt { min-width: 1420px; }
   .hour-header {
-    display: flex; align-items: center; gap: 10px; padding: 7px 10px;
+    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
-  .hour-header .hcell { font-size: 11px; font-weight: 700; color: var(--olive-dark); }
-  .hour-header .hcell.task-col { flex: 0 0 70px; }
-  .hour-header .hcell.label { flex: 0 0 300px; }
-  .hour-header .hcell.duty-col { flex: 1; }
+  .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
+  .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
-  .task-code { flex: 0 0 70px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
+  .task-code { align-self: center; padding-left: 8px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
   .driver-name {
-    flex: 0 0 300px; font-size: 11px; color: var(--ink); overflow: hidden;
+    align-self: center; padding: 0 6px; font-size: 11px; color: var(--ink); overflow: hidden;
     display: flex; flex-direction: column; gap: 1px; line-height: 1.25;
   }
   .driver-name .driver-id { font-size: 9.5px; font-weight: 700; color: var(--ink-soft); white-space: nowrap; }
   .driver-name .driver-fullname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name .driver-phone { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
-  .track { flex: 1; display: flex; align-items: center; min-width: 0; }
+  .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
+  .track { grid-column: 3 / 27; position: relative; }
 
+  .track::before {
+    content: ""; position: absolute; inset: 0;
+    background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
+    opacity: 0.3; pointer-events: none;
+  }
   /* ---------------- driver duty: two trip legs + connector ---------------- */
-  /* a plain left-to-right flex row now (start time right after the driver name, end time
-     right after the second box) instead of a wide, absolutely-positioned Gantt track --
-     avoids needing to scroll sideways just to see the times */
-  .block-pair { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  /* every row's boxes sit in the same fixed "queue" position (centered in the track), instead
+     of floating left/right based on that duty's actual clock time -- so every row lines up */
+  .block-pair {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    height: 28px; display: flex; align-items: center; gap: 3px;
+  }
   .leg-block {
     flex: 0 0 74px; width: 74px; height: 28px; border: 1.5px solid var(--trip-border); border-radius: 3px;
     background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
@@ -192,9 +198,9 @@
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
   .reserve-block {
-    width: 210px; height: 26px; border: 1.5px solid var(--trip-border); border-radius: 3px;
-    background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700; color: var(--reserve-color); position: relative;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 210px; height: 26px;
+    border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
+    align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--reserve-color);
   }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
@@ -849,9 +855,10 @@
       .join("");
   }
 
-  // ---- static header row (once) ----
+  // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell task-col">Task</div><div class="hcell label">Driver</div><div class="hcell duty-col">Duty (start &middot; outbound &middot; return &middot; end)</div>';
+    '<div class="hcell"></div><div class="hcell label">Driver</div>' +
+    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("");
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
   document.getElementById("day-legend").innerHTML =
