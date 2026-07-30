@@ -60,13 +60,14 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   Category, Destination, Start, End), and the Day Schedule schedules against that live catalog.
   Driver rows in the Day Schedule are also directly editable (typing a code onto a RESERVE row
   assigns them a duty; typing RESERVE onto a duty row puts them back on standby).
-- **Real trip pairing / connector codes** — destinations are Makkah (L, blue), KAIA (A, green),
-  KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an early-morning
-  monitoring run) per the user's legend. Task Settings has an "Outbound box #" and "Return box #"
-  field per duty so each leg box can show its own real trip number (falls back to the duty's
-  Trip No. if left blank); the 41 existing duties still need their destination and per-leg
-  numbers filled in (default to "Unassigned", shown with a "?" badge). The exact turnaround
-  timing between legs (rather than splitting the one start/end time in half) is still pending.
+- **Real trip pairing / connector codes** — done. Destinations are Makkah (L, blue), KAIA (A,
+  green), KAEC (K, orange -- unconfirmed, ask to verify), and Sweep train (S, black, an
+  early-morning monitoring run) per the user's legend. Each duty has independent outbound-leg
+  and return-leg Start/End times (no longer a 50/50 split of one range) plus its own per-leg
+  trip number, all editable directly inline on the Day Schedule row (the connector letter is a
+  live dropdown between the two boxes; the four leg times are live time inputs before/after each
+  box) or in bulk via Task Settings. The 41 existing duties still default to "Unassigned" (shown
+  as "?") until classified.
 - **Persistence** — manual edits to a driver row survive switching days/tabs, but are cleared by
   the next "Generate month" click or a page reload; nothing is saved to disk yet.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a

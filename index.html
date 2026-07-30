@@ -148,14 +148,14 @@
   .gantt-scroll { overflow-x: auto; }
   .gantt { min-width: 1380px; }
   .hour-header {
-    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
+    display: grid; grid-template-columns: 84px 190px 70px repeat(24, 1fr) 70px;
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 84px 190px 60px 70px repeat(24, 1fr) 70px 60px;
+    display: grid; grid-template-columns: 84px 190px 70px repeat(24, 1fr) 70px;
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -175,7 +175,6 @@
   .task-code-input { font-size: 12px; font-weight: 700; color: var(--olive-dark); }
   .driver-name-input { font-size: 11px; color: var(--ink); }
   .driver-name-input:placeholder-shown { color: var(--bad); font-style: italic; }
-  .time-input { font-size: 11px; text-align: center; padding: 4px 2px; }
   .track::before {
     content: ""; position: absolute; inset: 0;
     background-image: repeating-linear-gradient(to right, var(--grid-line) 0, var(--grid-line) 1px, transparent 1px, transparent calc(100% / 24));
@@ -186,26 +185,24 @@
      of floating left/right based on that duty's actual clock time -- so every row lines up */
   .block-pair {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    height: 28px; display: flex; align-items: center; gap: 4px;
+    height: 28px; display: flex; align-items: center; gap: 3px;
   }
   .leg-block {
-    flex: 0 0 92px; width: 92px; height: 28px; border: 1.5px solid var(--trip-border); border-radius: 3px;
+    flex: 0 0 74px; width: 74px; height: 28px; border: 1.5px solid var(--trip-border); border-radius: 3px;
     background: var(--trip-bg); display: flex; align-items: center; justify-content: center;
-    font-size: 10.5px; font-weight: 700; white-space: nowrap; overflow: hidden; position: relative;
+    font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; position: relative;
   }
   .connector-badge {
-    flex: 0 0 auto; width: 17px; height: 17px; border: 1px solid var(--trip-border); border-radius: 3px;
-    color: #fff; display: flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 800;
+    flex: 0 0 auto; width: 30px; height: 22px; border: 1px solid var(--trip-border); border-radius: 3px;
+    color: #fff; font-size: 11px; font-weight: 800; text-align: center; text-align-last: center;
+    padding: 0; appearance: none; -webkit-appearance: none; cursor: pointer;
+  }
+  .leg-time-input {
+    flex: 0 0 56px; width: 56px; font-size: 9.5px; padding: 2px 1px; border: 1px solid var(--input-border);
+    border-radius: 3px; background: var(--input-bg); color: var(--ink); text-align: center; font-family: inherit;
   }
   .block-baseline { position: absolute; bottom: -8px; left: 0; right: 0; height: 2px; background: var(--trip-border); }
   .block-underline { position: absolute; bottom: -7px; left: 3px; right: 3px; height: 3px; border-radius: 2px; }
-  .time-label {
-    position: absolute; top: -13px; font-size: 8px; font-weight: 700; color: var(--ink-soft);
-    white-space: nowrap; pointer-events: none; transform: rotate(-58deg);
-  }
-  .time-label.start-label { left: -1px; transform-origin: left bottom; }
-  .time-label.end-label { right: -1px; transform-origin: right bottom; }
   .reserve-block {
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 210px; height: 26px;
     border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
@@ -371,8 +368,10 @@
     <div id="task-settings-view" style="display:none">
       <div class="settings-note">
         <b>Origin</b> is fixed to Madinah for every trip -- only the destination changes.
-        <b>Trip</b> tasks need a Trip No., Destination, Start, and End. <b>Reserve</b> tasks only need Start/End.
-        Changing anything here takes effect the next time you click "Generate month".
+        <b>Trip</b> tasks have their own outbound leg (box #, start, end) and return leg
+        (box #, start, end) -- each editable independently. <b>Reserve</b> tasks only use the
+        "Out. Start"/"Out. End" columns as a plain Start/End. Changing anything here takes
+        effect the next time you click "Generate month".
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTaskCatalogEntry()">+ Add New Task</button>
@@ -408,28 +407,47 @@
   };
   const UNASSIGNED_DEST = { letter: "?", color: "var(--ink-soft)", label: "Unassigned" };
   function destInfo(key) { return DESTINATIONS[key] || UNASSIGNED_DEST; }
+  // the three connector letters the supervisor picks between directly on the schedule
+  // (Sweep/"S" is set via Destination in Task Settings, not this quick inline picker)
+  const CONNECTOR_KEYS = ["MAK", "KAIA", "KAEC"];
 
   // Editable task catalog -- starts from the real 41-task list, each defaulting to an
   // unassigned destination until classified here. Adding/editing a row here changes what
-  // "Generate month" schedules against.
-  let TASK_CATALOG = REAL_DATA.tasks.map((t) => ({
-    code: t.code,
-    category: "trip",
-    destination: "",
-    outboundTripNo: "",
-    returnTripNo: "",
-    start: t.start,
-    end: minutesToHHMM(timeToMinutes(t.start) + t.duration_minutes),
-  }));
+  // "Generate month" schedules against. Each duty has its own outbound leg (start/end) and
+  // return leg (start/end) -- they default to splitting the original single time range in
+  // half, but are independently editable from there.
+  let TASK_CATALOG = REAL_DATA.tasks.map((t) => {
+    const startMin = timeToMinutes(t.start);
+    const midMin = startMin + Math.round(t.duration_minutes / 2);
+    const endMin = startMin + t.duration_minutes;
+    return {
+      code: t.code,
+      category: "trip",
+      destination: "",
+      outboundTripNo: "",
+      returnTripNo: "",
+      outboundStart: t.start,
+      outboundEnd: minutesToHHMM(midMin),
+      returnStart: minutesToHHMM(midMin),
+      returnEnd: minutesToHHMM(endMin),
+    };
+  });
 
   function activeTrips() {
-    return TASK_CATALOG.filter((t) => t.category === "trip" && t.code && t.start && t.end).map((t) => ({
+    return TASK_CATALOG.filter((t) => t.category === "trip" && t.code && t.outboundStart && t.returnEnd).map((t) => ({
       code: t.code,
-      start: t.start,
-      duration_minutes: Math.max(1, ((timeToMinutes(t.end) - timeToMinutes(t.start) + 1440) % 1440) || 1440),
+      start: t.outboundStart,
+      duration_minutes: Math.max(
+        1,
+        ((timeToMinutes(t.returnEnd) - timeToMinutes(t.outboundStart) + 1440) % 1440) || 1440
+      ),
       destination: t.destination,
       outboundTripNo: t.outboundTripNo,
       returnTripNo: t.returnTripNo,
+      outboundStart: t.outboundStart,
+      outboundEnd: t.outboundEnd,
+      returnStart: t.returnStart,
+      returnEnd: t.returnEnd,
     }));
   }
 
@@ -765,29 +783,43 @@
         const name = o.name !== undefined ? o.name : REAL_DATA.drivers[driverIndex].name;
         const isReserve = code.trim().toUpperCase() === "RESERVE";
 
-        let track, start = "", end = "";
+        let track;
         if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
           const matchedTask = (monthResult.tasks || []).find((t) => t.code === assignedVal);
-          const defaultStart = matchedTask ? matchedTask.start : "07:00";
-          const defaultDuration = matchedTask ? matchedTask.duration_minutes : 420;
-          const dest = destInfo(matchedTask ? matchedTask.destination : "");
+          const dest = destInfo(o.destination !== undefined ? o.destination : matchedTask ? matchedTask.destination : "");
           const outboundLabel = (matchedTask && matchedTask.outboundTripNo) || code;
           const returnLabel = (matchedTask && matchedTask.returnTripNo) || code;
 
-          start = o.start !== undefined ? o.start : defaultStart;
-          const startMin = timeToMinutes(start);
-          const defaultEnd = minutesToHHMM(startMin + defaultDuration);
-          end = o.end !== undefined ? o.end : defaultEnd;
+          const legTime = (field, fallback) =>
+            o[field] !== undefined ? o[field] : matchedTask ? matchedTask[field] : fallback;
+          const outboundStart = legTime("outboundStart", "07:00");
+          const outboundEnd = legTime("outboundEnd", "09:00");
+          const returnStart = legTime("returnStart", "12:00");
+          const returnEnd = legTime("returnEnd", "14:00");
+
+          const connectorKey = o.destination !== undefined ? o.destination : matchedTask ? matchedTask.destination : "";
+          const connectorOptions =
+            `<option value="" ${!connectorKey ? "selected" : ""}>?</option>` +
+            CONNECTOR_KEYS
+              .map((k) => `<option value="${k}" ${connectorKey === k ? "selected" : ""}>${DESTINATIONS[k].letter}</option>`)
+              .join("");
+
+          const legTimeInput = (field, value) =>
+            `<input type="time" class="leg-time-input" value="${escapeAttr(value)}"
+                    onchange="updateOverride(${dayIdx}, ${driverIndex}, '${field}', this.value)" />`;
 
           track = `
             <div class="block-pair">
-              <div class="time-label start-label">${start}</div>
-              <div class="time-label end-label">${end}</div>
+              ${legTimeInput("outboundStart", outboundStart)}
               <div class="leg-block">${escapeAttr(outboundLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
-              <div class="connector-badge" style="background:${dest.color}">${dest.letter}</div>
+              ${legTimeInput("outboundEnd", outboundEnd)}
+              <select class="connector-badge" style="background:${dest.color}"
+                      onchange="updateOverride(${dayIdx}, ${driverIndex}, 'destination', this.value)">${connectorOptions}</select>
+              ${legTimeInput("returnStart", returnStart)}
               <div class="leg-block">${escapeAttr(returnLabel)}<div class="block-baseline"></div><div class="block-underline" style="background:${dest.color}"></div></div>
+              ${legTimeInput("returnEnd", returnEnd)}
             </div>`;
         }
 
@@ -797,13 +829,9 @@
                  onchange="updateOverride(${dayIdx}, ${driverIndex}, 'code', this.value)" />
           <input class="cell-input driver-name-input" value="${escapeAttr(name)}"
                  onchange="updateOverride(${dayIdx}, ${driverIndex}, 'name', this.value)" />
-          <input type="time" class="cell-input time-input" value="${start}" ${isReserve ? "disabled" : ""}
-                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'start', this.value)" />
           <div class="madinah-tag">Madinah</div>
           <div class="track">${track}</div>
           <div class="madinah-tag">Madinah</div>
-          <input type="time" class="cell-input time-input" value="${end}" ${isReserve ? "disabled" : ""}
-                 onchange="updateOverride(${dayIdx}, ${driverIndex}, 'end', this.value)" />
         </div>`;
       })
       .join("");
@@ -811,9 +839,9 @@
 
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell">Start</div><div class="hcell"></div>' +
+    '<div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell"></div>' +
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
-    '<div class="hcell"></div><div class="hcell">End</div>';
+    '<div class="hcell"></div>';
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
   document.getElementById("day-legend").innerHTML =
@@ -828,7 +856,8 @@
   // ---- Task Settings ----
   function addTaskCatalogEntry() {
     TASK_CATALOG.push({
-      code: "", category: "trip", destination: "", outboundTripNo: "", returnTripNo: "", start: "", end: "",
+      code: "", category: "trip", destination: "", outboundTripNo: "", returnTripNo: "",
+      outboundStart: "", outboundEnd: "", returnStart: "", returnEnd: "",
     });
     renderTaskSettings();
   }
@@ -857,7 +886,8 @@
 
     let html = `<thead><tr>
       <th>Trip No.</th><th>Category</th><th>Origin</th><th>Destination</th>
-      <th>Outbound box #</th><th>Return box #</th><th>Start</th><th>End</th><th></th>
+      <th>Outbound box #</th><th>Out. Start</th><th>Out. End</th>
+      <th>Return box #</th><th>Ret. Start</th><th>Ret. End</th><th></th>
     </tr></thead><tbody>`;
 
     TASK_CATALOG.forEach((t, i) => {
@@ -867,11 +897,17 @@
         ? `<span style="color:var(--ink-soft)">--</span>`
         : `<select onchange="updateTaskCatalogEntry(${i}, 'destination', this.value)">${destOptionsFor(t.destination)}</select>
            <span class="dest-chip" style="margin-left:6px"><span class="dot" style="background:${dest.color}"></span>${dest.letter}</span>`;
-      const legInput = (field, value, placeholder) =>
+      const legNoInput = (field, value, placeholder) =>
         isReserve
           ? `<span style="color:var(--ink-soft)">--</span>`
           : `<input value="${escapeAttr(value)}" placeholder="${placeholder}"
                     onchange="updateTaskCatalogEntry(${i}, '${field}', this.value)" style="width:70px" />`;
+      const timeCell = (field, value) =>
+        // Reserve rows only use outboundStart/returnEnd (as plain Start/End); the two inner
+        // fields (outboundEnd/returnStart) don't apply since Reserve has no "legs"
+        isReserve && (field === "outboundEnd" || field === "returnStart")
+          ? `<span style="color:var(--ink-soft)">--</span>`
+          : `<input type="time" value="${escapeAttr(value)}" onchange="updateTaskCatalogEntry(${i}, '${field}', this.value)" />`;
 
       html += `<tr>
         <td><input value="${escapeAttr(t.code)}" onchange="updateTaskCatalogEntry(${i}, 'code', this.value)" style="width:90px" /></td>
@@ -883,10 +919,12 @@
         </td>
         <td>${ORIGIN_STATION}</td>
         <td>${destCell}</td>
-        <td>${legInput("outboundTripNo", t.outboundTripNo, t.code || "e.g. 07061")}</td>
-        <td>${legInput("returnTripNo", t.returnTripNo, t.code || "e.g. 00061")}</td>
-        <td><input type="time" value="${escapeAttr(t.start)}" onchange="updateTaskCatalogEntry(${i}, 'start', this.value)" /></td>
-        <td><input type="time" value="${escapeAttr(t.end)}" onchange="updateTaskCatalogEntry(${i}, 'end', this.value)" /></td>
+        <td>${legNoInput("outboundTripNo", t.outboundTripNo, t.code || "e.g. 07061")}</td>
+        <td>${timeCell("outboundStart", t.outboundStart)}</td>
+        <td>${timeCell("outboundEnd", t.outboundEnd)}</td>
+        <td>${legNoInput("returnTripNo", t.returnTripNo, t.code || "e.g. 00061")}</td>
+        <td>${timeCell("returnStart", t.returnStart)}</td>
+        <td>${timeCell("returnEnd", t.returnEnd)}</td>
         <td><button class="remove-task-btn" type="button" onclick="removeTaskCatalogEntry(${i})">Remove</button></td>
       </tr>`;
     });
