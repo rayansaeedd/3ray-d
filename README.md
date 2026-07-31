@@ -71,7 +71,17 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   to just the stretch(es) the training actually touches -- if that stretch is too long or the gap
   to the next one is too short, the affected training day(s) turn amber (instead of the normal
   purple) and a popup tells the supervisor exactly which driver and which dates need a second
-  look. A **Roster Settings** tab is scaffolded and awaiting its spec.
+  look. The **Full Roster** view now mirrors the supervisor's real Excel roster directly: the
+  same off-duty codes (F, V, O, 830/7T, T*, VA, A0, SW, S, E, EA, AJ, P*, R*, L, SD, FD, EF, XS*)
+  use the same colors pulled straight from that workbook's own conditional formatting, each
+  driver row has editable **Phone 1/2, Category, Email, ID, and Saudi** columns sourced from the
+  real roster, and the right side has the same per-driver tally columns as the original sheet
+  (per-code absence counts, manual Excess 1/2/3 + computed Total, manual Granted, computed
+  No Tasks/Tasks, and Avg A0/V/S percentages) -- all editable or computed live, matching the
+  original formulas. A **+ Month** control lets the supervisor add or switch to any calendar
+  month with the identical fixed layout; only October 2026 has real day-by-day data today, so
+  other months start with every driver row blank, ready to fill in by hand or generate against
+  once populated. A **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -101,10 +111,11 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this
   data exists in another system already; needs that source before designing the schema.
-- **Driver phone numbers** — the Day Schedule now shows each driver's ID and full name clearly
-  (no more truncation), plus a phone line, but `web/real_data.json` has no phone numbers at all
-  — every row currently shows "No phone on file". Needs a real source; nothing was invented for
-  this, since it's real people's contact information.
+- **Driver contact info** — done. Real Phone 1/2, Category, Email, ID, and Saudi-status fields
+  were pulled from the supervisor's own Excel roster export and merged into `web/real_data.json`
+  by matching driver name; all six are editable directly in the Full Roster, and the Day
+  Schedule's driver column now shows the real Phone 1 number too (it only falls back to "No
+  phone on file" if that field is blank for a given driver).
 - **Manual task catalog** — done via the Task Settings tab: add/edit/remove/reorder duties
   (Trip No., Category, Destination, per-leg trip numbers, per-leg Start/End), plus one
   schedule-wide Origin station. The Day Schedule schedules against that live catalog. The Day
@@ -121,11 +132,22 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   per-device storage, not a shared database -- it won't show up on a different computer or after
   clearing browser data. Unsaved Task Settings edits still only live in memory until saved this
   way.
-- **Schedule dates are capped by real roster data** — the Start date/End date pickers in Task
-  Settings only allow dates within October 2026 because `web/real_data.json` currently contains
-  real roster data for that single month only. It cannot yet generate a genuinely *different*
-  calendar month (e.g. September or December) since there's no real day-by-day roster for those
-  months to schedule against -- that needs new roster data supplied for that month first.
+- **Schedule dates follow whichever month is selected on Full Roster** — the Start date/End date
+  pickers in Task Settings are bounded to the currently active month (switch or add one with
+  **+ Month** on the Full Roster tab). Only October 2026 has real day-by-day roster data today;
+  any other month starts completely blank (every driver row empty) since there's no real data
+  for it yet -- generating against a blank month is technically possible but produces a
+  meaningless result until real off-duty codes are filled in for that month.
+- **Two things from the original Excel roster were deliberately not replicated 1:1** when the
+  real roster columns/tallies were ported in: (1) the sheet has two back-to-back "F" tally
+  columns from what looks like a copy/paste accident -- only one is shown here, so the No Tasks
+  total is computed without double-counting F. (2) The sheet's bottom summary block (Day Off,
+  Eid Day, Vacations, Total Absence, Staff Per Day, Per Shift, Absence Per Day, etc., rows
+  105-118) uses `COUNTIF` ranges that are inconsistently shifted row-by-row in the original file
+  (e.g. mixing `H7:H99`, `H10:H105`, `H13:H110` for what should all be the same 99 driver rows),
+  which produces visibly wrong numbers (negative "Staff Per Day", `#DIV/0!`) in the source itself.
+  That block wasn't ported in as-is to avoid baking in those bugs -- say the word if you want it
+  added with the ranges corrected instead.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 - **Training capacity isn't enforced** — the Training catalog's Capacity field is informational
