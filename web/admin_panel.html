@@ -132,6 +132,28 @@
   .status-dot.warn { background: var(--warn); }
   .compliance { font-size: 11.5px; color: var(--ink-soft); line-height: 1.6; }
   .compliance b { color: var(--ink); }
+  .field-note { font-size: 11px; color: var(--ink-soft); margin-top: 6px; line-height: 1.5; }
+  #schedule-length { width: 100%; }
+  .save-btn {
+    width: 100%; background: var(--bg); color: var(--olive-dark); border: 1.5px solid var(--olive);
+    border-radius: 8px; padding: 9px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .save-btn:hover:not(:disabled) { background: var(--olive); color: var(--accent-yellow); }
+  .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .saved-schedules-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .saved-schedule-item {
+    background: var(--bg); border: 1px solid var(--panel-border); border-radius: 6px; padding: 7px 9px;
+    font-size: 11.5px; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  }
+  .saved-schedule-item .name { font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .saved-schedule-item .actions { display: flex; gap: 4px; flex: none; }
+  .saved-schedule-item button {
+    background: transparent; border: 1px solid var(--panel-border); border-radius: 4px; padding: 3px 7px;
+    font-size: 10.5px; cursor: pointer; font-family: inherit; color: var(--ink-soft);
+  }
+  .saved-schedule-item button.load-btn:hover { border-color: var(--olive); color: var(--olive-dark); }
+  .saved-schedule-item button.delete-btn:hover { border-color: var(--bad); color: var(--bad); }
+  .no-saved-note { font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
 
   /* ---------------- Schedule view ---------------- */
   .schedule { background: var(--bg); min-width: 0; }
@@ -331,9 +353,21 @@
       </div>
     </div>
 
-    <button class="generate-btn" type="button" onclick="generate()">Generate month</button>
-    <div class="status-line"><span class="status-dot" id="status-dot"></span><span id="status-text">Not generated yet — click Generate month</span></div>
+    <div class="cond-group">
+      <h2>Schedule length</h2>
+      <select id="schedule-length"></select>
+      <div class="field-note">Longer than this needs real roster data beyond what we have (only Oct 2026 exists right now) -- ask if you want more months added.</div>
+    </div>
+
+    <button class="generate-btn" type="button" onclick="generate()">Generate schedule</button>
+    <div class="status-line"><span class="status-dot" id="status-dot"></span><span id="status-text">Not generated yet — click Generate schedule</span></div>
     <div class="compliance" id="compliance"></div>
+
+    <div class="cond-group">
+      <h2>Saved schedules</h2>
+      <button class="save-btn" type="button" onclick="saveCurrentSchedule()" id="save-btn" disabled>Save this schedule</button>
+      <div id="saved-schedules-list" class="saved-schedules-list"></div>
+    </div>
   </aside>
 
   <main class="schedule">
@@ -525,6 +559,7 @@
       stickyMin: parseInt(document.getElementById("sticky-min").value, 10) || 2,
       targetTrips: parseInt(document.getElementById("target-trips").value, 10) || 3,
       minRestHours: parseFloat(document.getElementById("min-rest-hours").value) || 0,
+      numDays: Math.min(parseInt(document.getElementById("schedule-length").value, 10) || REAL_DATA.dates.length, REAL_DATA.dates.length),
     };
   }
 
@@ -597,7 +632,7 @@
     const uncoveredTasks = []; // {dayIdx, code} -- genuine shortages, for reporting
     const minRestMinutes = Math.max(0, (config.minRestHours || 0) * 60);
 
-    const numDays = REAL_DATA.dates.length;
+    const numDays = Math.min(config.numDays || REAL_DATA.dates.length, REAL_DATA.dates.length);
     for (let dayIdx = 0; dayIdx < numDays; dayIdx++) {
       const activeByShift = {};
       allStretches.forEach((s) => {
@@ -635,7 +670,7 @@
       });
     }
 
-    return { allStretches, tasksByShift, config, uncoveredTasks, tasks };
+    return { allStretches, tasksByShift, config, uncoveredTasks, tasks, numDays };
   }
 
   function computeCompliance(allStretches) {
@@ -669,7 +704,8 @@
       const hasWarning = c.violations > 0 || uncovered > 0;
       document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
       document.getElementById("status-text").textContent =
-        "Generated — " + REAL_DATA.dates.length + " days, " + REAL_DATA.drivers.length + " drivers";
+        "Generated " + dateRangeLabel(monthResult.numDays) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
+      document.getElementById("save-btn").disabled = false;
       let complianceHtml =
         "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
         "<b>" + c.violations + "</b> stickiness violations (should be 0)<br/>" +
@@ -681,6 +717,7 @@
         complianceHtml += `<br/><span style="color:var(--bad)">e.g. ${sample}${monthResult.uncoveredTasks.length > 5 ? "…" : ""}</span>`;
       }
       document.getElementById("compliance").innerHTML = complianceHtml;
+      populateDaySelect();
       renderDay();
       renderRoster();
     }, 250);
@@ -743,7 +780,8 @@
           return;
         }
         const val = stretch.assignments[dayIdx];
-        if (val === "RESERVE") row += `<td class="roster-cell-reserve">RESERVE</td>`;
+        if (val === undefined) row += `<td></td>`; // beyond the generated schedule length
+        else if (val === "RESERVE") row += `<td class="roster-cell-reserve">RESERVE</td>`;
         else row += `<td class="roster-cell-task">${val}</td>`;
       });
       row += `</tr>`;
@@ -756,12 +794,175 @@
 
   function populateDaySelect() {
     const sel = document.getElementById("day-select");
+    const numDays = monthResult ? monthResult.numDays : REAL_DATA.dates.length;
+    const prevIndex = parseInt(sel.value, 10);
     sel.innerHTML = REAL_DATA.dates
+      .slice(0, numDays)
       .map((d, i) => {
         const dt = new Date(d + "T00:00:00");
         const label = dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
         return `<option value="${i}">${label}</option>`;
       })
+      .join("");
+    sel.value = !isNaN(prevIndex) && prevIndex < numDays ? String(prevIndex) : "0";
+  }
+
+  // Options are capped to what REAL_DATA actually covers (Oct 2026, 31 days) -- "2 months"
+  // is listed but disabled since no real roster data exists for a second month yet.
+  function populateScheduleLengthOptions() {
+    const sel = document.getElementById("schedule-length");
+    const total = REAL_DATA.dates.length;
+    const fmtShort = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const startDate = new Date(REAL_DATA.dates[0] + "T00:00:00");
+    const choices = [
+      { days: 7, label: "1 week" },
+      { days: 14, label: "2 weeks" },
+      { days: 21, label: "3 weeks" },
+      { days: total, label: "1 month" },
+    ].filter((o) => o.days <= total);
+
+    sel.innerHTML =
+      choices
+        .map((o) => {
+          const endDate = new Date(REAL_DATA.dates[Math.min(o.days, total) - 1] + "T00:00:00");
+          const label = `${o.label} (${fmtShort(startDate)}–${fmtShort(endDate)})`;
+          return `<option value="${o.days}" ${o.days === total ? "selected" : ""}>${label}</option>`;
+        })
+        .join("") + `<option value="" disabled>2 months (need more roster data)</option>`;
+  }
+
+  function dateRangeLabel(numDays) {
+    const total = REAL_DATA.dates.length;
+    const start = new Date(REAL_DATA.dates[0] + "T00:00:00");
+    const end = new Date(REAL_DATA.dates[Math.min(numDays, total) - 1] + "T00:00:00");
+    const fmt = (d) => d.toLocaleDateString("en-US", { month: "long", day: "numeric" });
+    return fmt(start) + " to " + fmt(end);
+  }
+
+  // ---- Saved schedules: named snapshots stored in localStorage (this tool has no server) ----
+  const SAVED_SCHEDULES_KEY = "driverSchedulingEngine.savedSchedules";
+
+  function loadSavedSchedulesFromStorage() {
+    try {
+      const raw = localStorage.getItem(SAVED_SCHEDULES_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function persistSavedSchedules() {
+    try {
+      localStorage.setItem(SAVED_SCHEDULES_KEY, JSON.stringify(SAVED_SCHEDULES));
+    } catch (e) {
+      alert("Could not save this schedule -- your browser's local storage may be full or disabled.");
+    }
+  }
+
+  let SAVED_SCHEDULES = loadSavedSchedulesFromStorage();
+
+  function saveCurrentSchedule() {
+    if (!monthResult) return;
+    const defaultName = dateRangeLabel(monthResult.numDays);
+    const typed = prompt("Name this saved schedule:", defaultName);
+    if (typed === null) return; // cancelled
+    const name = typed.trim() || defaultName;
+
+    const existingIndex = SAVED_SCHEDULES.findIndex((s) => s.name === name);
+    if (existingIndex !== -1 && !confirm(`A saved schedule named "${name}" already exists. Overwrite it?`)) return;
+
+    const entry = {
+      id: existingIndex !== -1 ? SAVED_SCHEDULES[existingIndex].id : "sched_" + Date.now(),
+      name,
+      savedAt: new Date().toISOString(),
+      dateRangeLabel: dateRangeLabel(monthResult.numDays),
+      globalOrigin: GLOBAL_ORIGIN,
+      taskCatalog: JSON.parse(JSON.stringify(TASK_CATALOG)),
+      config: {
+        dayStart: document.getElementById("day-start").value,
+        dayEnd: document.getElementById("day-end").value,
+        afternoonStart: document.getElementById("afternoon-start").value,
+        afternoonEnd: document.getElementById("afternoon-end").value,
+        nightStart: document.getElementById("night-start").value,
+        nightEnd: document.getElementById("night-end").value,
+        stickyMin: document.getElementById("sticky-min").value,
+        targetTrips: document.getElementById("target-trips").value,
+        minRestHours: document.getElementById("min-rest-hours").value,
+        scheduleLength: document.getElementById("schedule-length").value,
+      },
+      monthResult,
+    };
+
+    if (existingIndex !== -1) SAVED_SCHEDULES[existingIndex] = entry;
+    else SAVED_SCHEDULES.push(entry);
+
+    persistSavedSchedules();
+    renderSavedSchedulesList();
+  }
+
+  function loadSavedSchedule(id) {
+    const entry = SAVED_SCHEDULES.find((s) => s.id === id);
+    if (!entry) return;
+
+    TASK_CATALOG.length = 0;
+    entry.taskCatalog.forEach((t) => TASK_CATALOG.push(t));
+    GLOBAL_ORIGIN = entry.globalOrigin;
+
+    document.getElementById("day-start").value = entry.config.dayStart;
+    document.getElementById("day-end").value = entry.config.dayEnd;
+    document.getElementById("afternoon-start").value = entry.config.afternoonStart;
+    document.getElementById("afternoon-end").value = entry.config.afternoonEnd;
+    document.getElementById("night-start").value = entry.config.nightStart;
+    document.getElementById("night-end").value = entry.config.nightEnd;
+    document.getElementById("sticky-min").value = entry.config.stickyMin;
+    document.getElementById("target-trips").value = entry.config.targetTrips;
+    document.getElementById("min-rest-hours").value = entry.config.minRestHours;
+    document.getElementById("schedule-length").value = entry.config.scheduleLength;
+
+    monthResult = entry.monthResult;
+
+    renderOriginBadge();
+    renderTaskSettings();
+    populateDaySelect();
+    renderDay();
+    renderRoster();
+
+    const c = computeCompliance(monthResult.allStretches);
+    const uncovered = monthResult.uncoveredTasks.length;
+    document.getElementById("status-dot").className = "status-dot" + (c.violations > 0 || uncovered > 0 ? " warn" : "");
+    document.getElementById("status-text").textContent = `Loaded "${entry.name}" — ${entry.dateRangeLabel}`;
+    document.getElementById("save-btn").disabled = false;
+
+    showView("day");
+  }
+
+  function deleteSavedSchedule(id) {
+    const entry = SAVED_SCHEDULES.find((s) => s.id === id);
+    if (!entry) return;
+    if (!confirm(`Delete saved schedule "${entry.name}"? This cannot be undone.`)) return;
+    SAVED_SCHEDULES = SAVED_SCHEDULES.filter((s) => s.id !== id);
+    persistSavedSchedules();
+    renderSavedSchedulesList();
+  }
+
+  function renderSavedSchedulesList() {
+    const el = document.getElementById("saved-schedules-list");
+    if (!SAVED_SCHEDULES.length) {
+      el.innerHTML = `<div class="no-saved-note">No saved schedules yet -- generate one above, then click "Save this schedule".</div>`;
+      return;
+    }
+    el.innerHTML = SAVED_SCHEDULES.slice()
+      .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt))
+      .map(
+        (s) => `
+      <div class="saved-schedule-item">
+        <span class="name" title="${escapeAttr(s.name)}">${escapeAttr(s.name)}</span>
+        <span class="actions">
+          <button class="load-btn" type="button" onclick="loadSavedSchedule('${s.id}')">Load</button>
+          <button class="delete-btn" type="button" onclick="deleteSavedSchedule('${s.id}')">Delete</button>
+        </span>
+      </div>`
+      )
       .join("");
   }
 
@@ -805,7 +1006,7 @@
     rowsEl.innerHTML = activeStretches
       .map((s) => {
         const driverIndex = s.driverIndex;
-        const assignedVal = s.assignments[dayIdx]; // "RESERVE" or a real task code
+        const assignedVal = s.assignments[dayIdx] ?? "RESERVE"; // "RESERVE" or a real task code
         const code = assignedVal;
         const driver = REAL_DATA.drivers[driverIndex];
         const rec = splitDriverRecord(driver.name);
@@ -1010,7 +1211,9 @@
     table.innerHTML = html;
   }
 
+  populateScheduleLengthOptions();
   populateDaySelect();
   renderRoster();
   renderTaskSettings();
+  renderSavedSchedulesList();
 </script>
