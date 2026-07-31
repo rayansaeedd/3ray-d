@@ -43,7 +43,16 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   &times; to delete it, so several schedules (different weeks, a full month, etc.) can be kept
   side by side. A **Print / Export** button on the Day Schedule view opens the browser's print
   dialog (which on most devices can also save straight to PDF) for handing a loaded schedule to
-  drivers. A **Roster Settings** tab is scaffolded and awaiting its spec.
+  drivers. A new **Training** tab defines courses (Code, Start/End date, Time From/To, Course
+  Name, Capacity) the same way Task Settings defines duties; typing a training's code into a
+  driver's day cell(s) on the **Full Roster** view (every cell there is now editable) sends that
+  driver to the course instead of a shift -- the engine excludes them from task/reserve
+  assignment on those days, on both a fresh generate and any roster edit made after the fact. If
+  the driver already had a real trip that day, saving the edit tries to backfill it from another
+  driver on Reserve that day in the same shift type who's rested enough (min-rest rule still
+  applies); if nobody qualifies, that driver's cell turns red with the stranded trip's code so
+  the supervisor can reassign it by hand. A **Roster Settings** tab is scaffolded and awaiting its
+  spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -100,6 +109,9 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   months to schedule against -- that needs new roster data supplied for that month first.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
+- **Training capacity isn't enforced** — the Training catalog's Capacity field is informational
+  only (how many seats a course has); the engine doesn't cap how many drivers can be sent to the
+  same training code, since assignment is manual (typed into the roster) rather than automatic.
 
 ## Running the engine locally
 

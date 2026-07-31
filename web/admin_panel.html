@@ -26,6 +26,7 @@
     --bad: #a13b3b;
     --task-color: #008000;
     --reserve-color: #0070c0;
+    --training-color: #7a3fa0;
     --dest-kaec: #c2660c;
     --dest-sweep: #26291f;
     --input-bg: #ffffff;
@@ -40,7 +41,7 @@
       --reserve-bg: #2c2a18; --reserve-border: #b8a24a;
       --tag-bg: #262a1d; --tag-border: #9fa38c; --day-chip: #caa246; --afternoon-chip: #6f9cd1;
       --night-chip: #8b7cc4; --ok: #6fbf68; --warn: #d99a4e; --bad: #d97a7a;
-      --task-color: #6fd66f; --reserve-color: #7cb3e8;
+      --task-color: #6fd66f; --reserve-color: #7cb3e8; --training-color: #c491e6;
       --dest-kaec: #e0985a; --dest-sweep: #cfd3c2;
       --input-bg: #23261c; --input-border: #454a38;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.35);
@@ -266,6 +267,15 @@
     border: 1.5px solid var(--trip-border); border-radius: 3px; background: var(--trip-bg); display: flex;
     align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--reserve-color);
   }
+  .training-block {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 210px; height: 26px;
+    border: 1.5px solid var(--training-color); border-radius: 3px; background: var(--trip-bg); display: flex;
+    align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--training-color);
+    gap: 5px; padding: 0 6px; white-space: nowrap; overflow: hidden;
+  }
+  .training-block-uncovered {
+    background: var(--bad); border-color: var(--bad); color: #fff;
+  }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
   .legend .item { display: flex; align-items: center; gap: 6px; }
@@ -335,6 +345,19 @@
   .roster-cell-task { color: var(--task-color); font-weight: 700; }
   .roster-cell-reserve { color: var(--reserve-color); font-weight: 700; }
   .roster-cell-off { color: var(--ink); }
+  .roster-cell-training { background: rgba(122, 63, 160, 0.25); color: var(--training-color); font-weight: 700; }
+  .roster-cell-uncovered { background: var(--bad); color: #fff; font-weight: 700; }
+  .roster-cell-input {
+    width: 100%; min-width: 44px; border: none; background: transparent; color: inherit;
+    font: inherit; font-weight: inherit; text-align: center; padding: 2px 3px; border-radius: 3px;
+  }
+  .roster-cell-input:focus { outline: 2px solid var(--olive); background: var(--input-bg); color: var(--ink); }
+  .roster-toolbar { padding: 0 22px 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .save-roster-btn {
+    background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .save-roster-btn:hover { background: var(--olive-dark); }
   .roster-note { padding: 10px 22px; font-size: 11.5px; color: var(--ink-soft); }
 
   .settings-placeholder { padding: 40px 22px; color: var(--ink-soft); }
@@ -416,6 +439,7 @@
       <button class="view-tab active" id="tab-day" type="button" onclick="showView('day')">Day Schedule</button>
       <button class="view-tab" id="tab-roster" type="button" onclick="showView('roster')">Full Roster</button>
       <button class="view-tab" id="tab-task-settings" type="button" onclick="showView('task-settings')">Task Settings</button>
+      <button class="view-tab" id="tab-training" type="button" onclick="showView('training')">Training</button>
       <button class="view-tab" id="tab-roster-settings" type="button" onclick="showView('roster-settings')">Roster Settings</button>
       <button class="view-tab conditions-toggle" id="conditions-toggle-btn" type="button" onclick="toggleConditions()">Hide Conditions</button>
     </div>
@@ -447,7 +471,13 @@
 
     <div id="roster-view" style="display:none">
       <div class="roster-note">
-        Green = task assigned by the engine &middot; blue = RESERVE &middot; black = original off-duty code (F/V/O/etc.) or fixed 830/7T assignment.
+        Green = task assigned by the engine &middot; blue = RESERVE &middot; black = original off-duty code (F/V/O/etc.) or fixed 830/7T assignment
+        &middot; purple = a Training code you've placed &middot; red = a trip that lost its driver to training and still needs one.
+        Every box is editable: type a training code (defined in the Training tab) over a driver's day(s) to send them to a course --
+        click <b>Save roster changes</b> when done.
+      </div>
+      <div class="roster-toolbar">
+        <button class="save-roster-btn" type="button" onclick="saveRosterEdits()">Save roster changes</button>
       </div>
       <div class="roster-scroll">
         <table class="roster-table" id="roster-table"></table>
@@ -477,6 +507,22 @@
       </div>
       <div class="settings-scroll">
         <table class="settings-table" id="task-settings-table"></table>
+      </div>
+    </div>
+
+    <div id="training-view" style="display:none">
+      <div class="settings-note">
+        Define a course here (its own <b>Code</b>, date range, time window, name, and seat capacity),
+        then go to <b>Full Roster</b> and type that code into a driver's day(s) to send them to it --
+        the engine will keep that driver off the task schedule on those days. If the driver already
+        had a real trip that day, the engine tries to backfill it from another driver on Reserve that
+        same day/shift; if nobody's free, that box turns red so you know to reassign it by hand.
+      </div>
+      <div class="settings-toolbar">
+        <button class="add-task-btn" type="button" onclick="addTrainingCatalogEntry()">+ Add New Training</button>
+      </div>
+      <div class="settings-scroll">
+        <table class="settings-table" id="training-settings-table"></table>
       </div>
     </div>
 
@@ -562,6 +608,20 @@
       returnStart: t.returnStart,
       returnEnd: t.returnEnd,
     }));
+  }
+
+  // ---- Training catalog: courses a driver can be sent to, defined once and referenced by code
+  // from the Full Roster (same idea as a task code, but it takes a driver OUT of the schedule
+  // instead of assigning them a trip). TRAINING_OVERRIDES holds the actual per-driver/day
+  // assignments made in the roster: { [driverIndex]: { [dayIdx]: { code, uncoveredTask } } }.
+  // uncoveredTask is set when a driver was pulled off a real trip to attend training and no
+  // Reserve driver could be found to backfill it -- that trip still needs a manual reassignment.
+  let TRAINING_CATALOG = [];
+  let TRAINING_OVERRIDES = {};
+
+  function trainingCourseName(code) {
+    const t = TRAINING_CATALOG.find((x) => x.code && x.code.toUpperCase() === String(code).toUpperCase());
+    return t && t.courseName ? t.courseName : code;
   }
 
   let monthResult = null; // { stretchesByDriver, tasksByShift, config }
@@ -710,6 +770,8 @@
       const activeByShift = {};
       allStretches.forEach((s) => {
         if (!s.days.includes(dayIdx)) return;
+        const trainingOverride = TRAINING_OVERRIDES[s.driverIndex] && TRAINING_OVERRIDES[s.driverIndex][dayIdx];
+        if (trainingOverride) return; // at training this day -- left unassigned; rendering shows the training code instead
         s.assignments[dayIdx] = "RESERVE"; // default; overwritten below if it gets a task
         (activeByShift[s.shiftType] = activeByShift[s.shiftType] || []).push(s);
       });
@@ -800,10 +862,12 @@
     document.getElementById("day-view").style.display = view === "day" ? "" : "none";
     document.getElementById("roster-view").style.display = view === "roster" ? "" : "none";
     document.getElementById("task-settings-view").style.display = view === "task-settings" ? "" : "none";
+    document.getElementById("training-view").style.display = view === "training" ? "" : "none";
     document.getElementById("roster-settings-view").style.display = view === "roster-settings" ? "" : "none";
     document.getElementById("tab-day").classList.toggle("active", view === "day");
     document.getElementById("tab-roster").classList.toggle("active", view === "roster");
     document.getElementById("tab-task-settings").classList.toggle("active", view === "task-settings");
+    document.getElementById("tab-training").classList.toggle("active", view === "training");
     document.getElementById("tab-roster-settings").classList.toggle("active", view === "roster-settings");
   }
 
@@ -836,26 +900,36 @@
       });
     }
 
+    const cellInput = (di, dayIdx, value, cls, titleText) =>
+      `<td><input class="roster-cell-input${cls ? " " + cls : ""}" data-driver="${di}" data-day="${dayIdx}"` +
+      (titleText ? ` title="${escapeAttr(titleText)}"` : "") +
+      ` value="${escapeAttr(value)}" /></td>`;
+
     drivers.forEach((d, di) => {
       let row = `<tr><td class="roster-name-cell">${d.name}</td>`;
       d.codes.forEach((rawCode, dayIdx) => {
-        if (rawCode && OFF_CODES.has(rawCode)) {
-          row += `<td class="roster-cell-off">${rawCode}</td>`;
+        const override = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+        if (override) {
+          const cls = override.uncoveredTask ? "roster-cell-uncovered" : "roster-cell-training";
+          const titleText = override.uncoveredTask
+            ? `${override.uncoveredTask} still needs a driver -- reassign manually`
+            : `Training: ${trainingCourseName(override.code)}`;
+          row += cellInput(di, dayIdx, override.code, cls, titleText);
           return;
         }
-        if (rawCode === "830/7T") {
-          row += `<td class="roster-cell-off">${rawCode}</td>`;
+        if ((rawCode && OFF_CODES.has(rawCode)) || rawCode === "830/7T") {
+          row += cellInput(di, dayIdx, rawCode, "roster-cell-off");
           return;
         }
         const stretch = stretchByDriverDay[di][dayIdx];
         if (!stretch) {
-          row += `<td></td>`;
+          row += cellInput(di, dayIdx, "");
           return;
         }
         const val = stretch.assignments[dayIdx];
-        if (val === undefined) row += `<td></td>`; // beyond the generated schedule length
-        else if (val === "RESERVE") row += `<td class="roster-cell-reserve">RESERVE</td>`;
-        else row += `<td class="roster-cell-task">${val}</td>`;
+        if (val === undefined) row += cellInput(di, dayIdx, ""); // beyond the generated schedule length
+        else if (val === "RESERVE") row += cellInput(di, dayIdx, "RESERVE", "roster-cell-reserve");
+        else row += cellInput(di, dayIdx, val, "roster-cell-task");
       });
       row += `</tr>`;
       html += row;
@@ -863,6 +937,152 @@
 
     html += "</tbody>";
     table.innerHTML = html;
+  }
+
+  // Walks backwards through a stretch's own days (rest resets between stretches, same as the
+  // main engine) to find the absolute end-minute of the driver's last real task before dayIdx.
+  function lastTaskEndBeforeDay(stretch, dayIdx, tasksByCode) {
+    const priorDays = stretch.days.filter((d) => d < dayIdx).sort((a, b) => b - a);
+    for (const d of priorDays) {
+      const val = stretch.assignments[d];
+      if (val && val !== "RESERVE") {
+        const task = tasksByCode[val];
+        if (task) return d * 1440 + timeToMinutes(task.start) + task.duration_minutes;
+      }
+    }
+    return null;
+  }
+
+  // A driver was just pulled off a real trip to attend training -- look for another driver who's
+  // on Reserve that same day, in the same shift type, who's rested enough to take it over.
+  function tryBackfillTask(driverIndex, dayIdx, vacatedTaskCode) {
+    if (!monthResult) return { success: false };
+    const config = monthResult.config;
+    const tasksByCode = {};
+    monthResult.tasks.forEach((t) => (tasksByCode[t.code] = t));
+    const vacatedTask = tasksByCode[vacatedTaskCode];
+    if (!vacatedTask) return { success: false };
+    const shiftType = classifyShift(timeToMinutes(vacatedTask.start), config.shiftWindows);
+    const taskStartAbsMin = dayIdx * 1440 + timeToMinutes(vacatedTask.start);
+    const minRestMinutes = Math.max(0, (config.minRestHours || 0) * 60);
+
+    const candidates = monthResult.allStretches.filter((s) => {
+      if (s.driverIndex === driverIndex) return false;
+      if (!s.days.includes(dayIdx)) return false;
+      if (s.assignments[dayIdx] !== "RESERVE") return false;
+      // a driver whose roster cell shows a fixed "830/7T" code always displays that code
+      // verbatim (see renderRoster), so picking them would reassign the trip invisibly
+      if (REAL_DATA.drivers[s.driverIndex].codes[dayIdx] === "830/7T") return false;
+      if (s.shiftType !== shiftType) return false;
+      const lastEnd = lastTaskEndBeforeDay(s, dayIdx, tasksByCode);
+      if (lastEnd !== null && taskStartAbsMin - lastEnd < minRestMinutes) return false;
+      return true;
+    });
+    if (!candidates.length) return { success: false };
+    const underTarget = candidates.filter((s) => s.assignedTripCount < s.targetTrips);
+    const chosen = (underTarget.length ? underTarget : candidates)[0];
+    chosen.assignments[dayIdx] = vacatedTaskCode;
+    chosen.assignedTripCount += 1;
+    return { success: true, chosen };
+  }
+
+  // Reads every roster cell, applies whatever changed against the generated schedule: a
+  // recognized Training code pulls that driver off the day entirely (and tries to backfill any
+  // real trip it vacated); anything else is just a plain manual override of that cell.
+  function saveRosterEdits() {
+    if (!monthResult) return;
+    const inputs = document.querySelectorAll("#roster-table .roster-cell-input");
+
+    // Pass 1: diff every cell against its pre-edit state and collect the real changes only.
+    // This has to finish *before* any mutation starts -- applying a training edit can itself
+    // reassign a different driver's cell (the backfill substitute), and if that were done
+    // interleaved with reading the DOM, that substitute's own still-stale input would look like
+    // a separate "change back to RESERVE" a moment later and immediately undo the reassignment.
+    const edits = [];
+    inputs.forEach((inp) => {
+      const di = parseInt(inp.dataset.driver, 10);
+      const dayIdx = parseInt(inp.dataset.day, 10);
+      const newValue = inp.value.trim();
+      const rawCode = REAL_DATA.drivers[di].codes[dayIdx];
+      if ((rawCode && OFF_CODES.has(rawCode)) || rawCode === "830/7T") return; // off-days aren't editable targets
+
+      const stretch = monthResult.allStretches.find((s) => s.driverIndex === di && s.days.includes(dayIdx));
+      if (!stretch) return;
+
+      const existingOverride = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+      const currentDisplay = existingOverride ? existingOverride.code : stretch.assignments[dayIdx] ?? "";
+      if (newValue === currentDisplay) return; // unchanged
+
+      edits.push({ di, dayIdx, newValue, stretch });
+    });
+
+    // Pass 2: apply the collected changes.
+    let uncoveredCount = 0;
+    edits.forEach(({ di, dayIdx, newValue, stretch }) => {
+      const trainingMatch = TRAINING_CATALOG.find((t) => t.code && t.code.toUpperCase() === newValue.toUpperCase());
+      if (trainingMatch) {
+        const vacated = stretch.assignments[dayIdx];
+        const wasRealTask = vacated && vacated !== "RESERVE";
+        if (wasRealTask && stretch.assignedTripCount > 0) stretch.assignedTripCount -= 1;
+        delete stretch.assignments[dayIdx];
+        TRAINING_OVERRIDES[di] = TRAINING_OVERRIDES[di] || {};
+        TRAINING_OVERRIDES[di][dayIdx] = { code: trainingMatch.code, uncoveredTask: null };
+        if (wasRealTask) {
+          const result = tryBackfillTask(di, dayIdx, vacated);
+          if (!result.success) {
+            TRAINING_OVERRIDES[di][dayIdx].uncoveredTask = vacated;
+            uncoveredCount += 1;
+          }
+        }
+      } else {
+        const existingOverride = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+        if (existingOverride) delete TRAINING_OVERRIDES[di][dayIdx];
+        stretch.assignments[dayIdx] = newValue || "RESERVE";
+      }
+    });
+
+    renderRoster();
+    renderDay();
+    document.getElementById("status-text").textContent =
+      "Roster changes saved" +
+      (uncoveredCount ? ` — ${uncoveredCount} trip${uncoveredCount > 1 ? "s" : ""} lost a driver to training and still need one (shown in red).` : ".");
+  }
+
+  // ---- Training Settings ----
+  function renderTrainingSettings() {
+    const table = document.getElementById("training-settings-table");
+    let html =
+      "<thead><tr><th>Code</th><th>Start Date</th><th>End Date</th><th>Time From</th><th>Time To</th>" +
+      "<th>Course Name</th><th>Capacity</th><th></th></tr></thead><tbody>";
+    TRAINING_CATALOG.forEach((t, i) => {
+      html += `<tr>
+        <td><input value="${escapeAttr(t.code)}" onchange="updateTrainingCatalogEntry(${i}, 'code', this.value)" /></td>
+        <td><input type="date" value="${escapeAttr(t.startDate)}" onchange="updateTrainingCatalogEntry(${i}, 'startDate', this.value)" /></td>
+        <td><input type="date" value="${escapeAttr(t.endDate)}" onchange="updateTrainingCatalogEntry(${i}, 'endDate', this.value)" /></td>
+        <td><input type="time" value="${escapeAttr(t.timeFrom)}" onchange="updateTrainingCatalogEntry(${i}, 'timeFrom', this.value)" /></td>
+        <td><input type="time" value="${escapeAttr(t.timeTo)}" onchange="updateTrainingCatalogEntry(${i}, 'timeTo', this.value)" /></td>
+        <td><input value="${escapeAttr(t.courseName)}" onchange="updateTrainingCatalogEntry(${i}, 'courseName', this.value)" /></td>
+        <td><input type="number" min="0" value="${escapeAttr(t.capacity)}" onchange="updateTrainingCatalogEntry(${i}, 'capacity', this.value)" /></td>
+        <td><button class="remove-task-btn" type="button" onclick="removeTrainingCatalogEntry(${i})">Remove</button></td>
+      </tr>`;
+    });
+    html += "</tbody>";
+    table.innerHTML = html;
+  }
+
+  function addTrainingCatalogEntry() {
+    TRAINING_CATALOG.push({ code: "", startDate: "", endDate: "", timeFrom: "", timeTo: "", courseName: "", capacity: "" });
+    renderTrainingSettings();
+  }
+
+  function removeTrainingCatalogEntry(index) {
+    TRAINING_CATALOG.splice(index, 1);
+    renderTrainingSettings();
+  }
+
+  function updateTrainingCatalogEntry(index, field, value) {
+    TRAINING_CATALOG[index][field] = value;
+    renderTrainingSettings();
   }
 
   function populateDaySelect() {
@@ -1012,6 +1232,8 @@
       dateRangeLabel: dateRangeLabel(monthResult.startIdx, monthResult.endIdx),
       globalOrigin: GLOBAL_ORIGIN,
       taskCatalog: JSON.parse(JSON.stringify(TASK_CATALOG)),
+      trainingCatalog: JSON.parse(JSON.stringify(TRAINING_CATALOG)),
+      trainingOverrides: JSON.parse(JSON.stringify(TRAINING_OVERRIDES)),
       config: {
         dayStart: document.getElementById("day-start").value,
         dayEnd: document.getElementById("day-end").value,
@@ -1041,6 +1263,9 @@
 
     TASK_CATALOG.length = 0;
     entry.taskCatalog.forEach((t) => TASK_CATALOG.push(t));
+    TRAINING_CATALOG.length = 0;
+    (entry.trainingCatalog || []).forEach((t) => TRAINING_CATALOG.push(t));
+    TRAINING_OVERRIDES = entry.trainingOverrides || {};
     GLOBAL_ORIGIN = entry.globalOrigin;
 
     document.getElementById("day-start").value = entry.config.dayStart;
@@ -1060,6 +1285,7 @@
 
     renderOriginBadge();
     renderTaskSettings();
+    renderTrainingSettings();
     populateDaySelect();
     renderDay();
     renderRoster();
@@ -1141,14 +1367,21 @@
     rowsEl.innerHTML = activeStretches
       .map((s) => {
         const driverIndex = s.driverIndex;
-        const assignedVal = s.assignments[dayIdx] ?? "RESERVE"; // "RESERVE" or a real task code
+        const trainingOverride = TRAINING_OVERRIDES[driverIndex] && TRAINING_OVERRIDES[driverIndex][dayIdx];
+        const assignedVal = trainingOverride ? trainingOverride.code : s.assignments[dayIdx] ?? "RESERVE"; // "RESERVE", a real task code, or a training code
         const code = assignedVal;
         const driver = REAL_DATA.drivers[driverIndex];
         const rec = splitDriverRecord(driver.name);
-        const isReserve = code.trim().toUpperCase() === "RESERVE";
+        const isReserve = !trainingOverride && code.trim().toUpperCase() === "RESERVE";
 
         let track;
-        if (isReserve) {
+        if (trainingOverride) {
+          const flagClass = trainingOverride.uncoveredTask ? " training-block-uncovered" : "";
+          const titleText = trainingOverride.uncoveredTask
+            ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
+            : "";
+          track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
+        } else if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
           const matchedTask = (monthResult.tasks || []).find((t) => t.code === assignedVal);
@@ -1350,5 +1583,6 @@
   populateDaySelect();
   renderRoster();
   renderTaskSettings();
+  renderTrainingSettings();
   renderSavedSchedulesList();
 </script>
