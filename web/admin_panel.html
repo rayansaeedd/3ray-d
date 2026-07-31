@@ -222,17 +222,18 @@
   .gantt-scroll { overflow-x: auto; }
   .gantt { min-width: 1420px; }
   .hour-header {
-    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px repeat(24, 1fr);
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 84px 300px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px repeat(24, 1fr);
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
+  .row-number { align-self: center; text-align: center; font-size: 11px; font-weight: 700; color: var(--ink-soft); }
   .task-code { align-self: center; padding-left: 8px; font-size: 12px; font-weight: 700; color: var(--olive-dark); }
   .driver-name {
     align-self: center; padding: 0 6px; font-size: 11px; color: var(--ink); overflow: hidden;
@@ -242,7 +243,7 @@
   .driver-name .driver-fullname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name .driver-phone { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
-  .track { grid-column: 3 / 27; position: relative; }
+  .track { grid-column: 4 / 28; position: relative; }
 
   .track::before {
     content: ""; position: absolute; inset: 0;
@@ -1615,7 +1616,7 @@
       .sort((a, b) => a.driverIndex - b.driverIndex);
 
     rowsEl.innerHTML = activeStretches
-      .map((s) => {
+      .map((s, rowIdx) => {
         const driverIndex = s.driverIndex;
         const trainingOverride = TRAINING_OVERRIDES[driverIndex] && TRAINING_OVERRIDES[driverIndex][dayIdx];
         const assignedVal = trainingOverride ? trainingOverride.code : s.assignments[dayIdx] ?? "RESERVE"; // "RESERVE", a real task code, or a training code
@@ -1662,6 +1663,7 @@
 
         return `
         <div class="task-row">
+          <div class="row-number">${rowIdx + 1}</div>
           <div class="task-code">${escapeAttr(code)}</div>
           <div class="driver-name">
             <div class="driver-id">${escapeAttr(rec.id)}${rec.tag ? " &middot; " + escapeAttr(rec.tag) : ""}</div>
@@ -1676,7 +1678,7 @@
 
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell"></div><div class="hcell label">Driver</div>' +
+    '<div class="hcell"></div><div class="hcell"></div><div class="hcell label">Driver</div>' +
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("");
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
