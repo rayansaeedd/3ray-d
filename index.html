@@ -321,6 +321,29 @@
   .settings-table tbody tr.drag-source-row { opacity: 0.4; }
   .settings-table tbody tr.drag-over-row td { box-shadow: inset 0 2px 0 var(--olive), inset 0 -2px 0 var(--olive); }
 
+  /* ---------------- training driver picker ---------------- */
+  .training-drivers-cell { min-width: 220px; }
+  .driver-picker { position: relative; }
+  .driver-search-input { width: 100%; }
+  .driver-search-results {
+    display: none; position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 2px;
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 6px;
+    box-shadow: var(--shadow); max-height: 180px; overflow-y: auto;
+  }
+  .driver-search-results.open { display: block; }
+  .driver-search-item { padding: 6px 9px; font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .driver-search-item:hover { background: var(--olive); color: var(--accent-yellow); }
+  .driver-search-empty { padding: 6px 9px; font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
+  .assigned-drivers-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .driver-chip {
+    display: inline-flex; align-items: center; gap: 4px; background: rgba(122, 63, 160, 0.18);
+    color: var(--training-color); border: 1px solid var(--training-color); border-radius: 999px;
+    font-size: 10.5px; font-weight: 700; padding: 2px 4px 2px 8px; white-space: nowrap;
+  }
+  .driver-chip button {
+    background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; padding: 0 3px; font-family: inherit;
+  }
+
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
   .view-tab {
@@ -528,10 +551,13 @@
     <div id="training-view" style="display:none">
       <div class="settings-note">
         Define a course here (its own <b>Code</b>, date range, time window, name, and seat capacity),
-        then go to <b>Full Roster</b> and type that code into a driver's day(s) to send them to it --
-        the engine will keep that driver off the task schedule on those days. If the driver already
-        had a real trip that day, the engine tries to backfill it from another driver on Reserve that
-        same day/shift; if nobody's free, that box turns red so you know to reassign it by hand.
+        then search for drivers by name under <b>Assigned Drivers</b> and pick who's going -- that
+        code gets written straight into their roster for every day in the course's date range, no
+        manual typing required. (Typing the code into a Full Roster cell yourself still works too,
+        for a single day at a time, and keeps this list in sync.) The engine keeps a trained driver
+        off the task schedule for those days. If a driver already had a real trip that day, the
+        engine tries to backfill it from another driver on Reserve that same day/shift; if nobody's
+        free, that box turns red so you know to reassign it by hand.
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTrainingCatalogEntry()">+ Add New Training</button>
@@ -849,12 +875,14 @@
     document.getElementById("status-text").textContent = "Generating…";
     setTimeout(() => {
       monthResult = runMonth(config, seed);
+      const trainingResult = applyAllTrainingAssignments();
       const c = computeCompliance(monthResult.allStretches);
       const uncovered = monthResult.uncoveredTasks.length;
-      const hasWarning = c.violations > 0 || uncovered > 0;
+      const hasWarning = c.violations > 0 || uncovered > 0 || trainingResult.uncovered > 0;
       document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
       document.getElementById("status-text").textContent =
-        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
+        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers" +
+        (trainingResult.applied ? ` (${trainingResult.applied} training day${trainingResult.applied > 1 ? "s" : ""} applied${trainingResult.uncovered ? `, ${trainingResult.uncovered} still need a driver` : ""})` : "");
       document.getElementById("save-btn").disabled = false;
       let complianceHtml =
         "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
@@ -1043,21 +1071,13 @@
     // Pass 2: apply the collected changes.
     let uncoveredCount = 0;
     edits.forEach(({ di, dayIdx, newValue, stretch }) => {
-      const trainingMatch = TRAINING_CATALOG.find((t) => t.code && t.code.toUpperCase() === newValue.toUpperCase());
-      if (trainingMatch) {
-        const vacated = stretch.assignments[dayIdx];
-        const wasRealTask = vacated && vacated !== "RESERVE";
-        if (wasRealTask && stretch.assignedTripCount > 0) stretch.assignedTripCount -= 1;
-        delete stretch.assignments[dayIdx];
-        TRAINING_OVERRIDES[di] = TRAINING_OVERRIDES[di] || {};
-        TRAINING_OVERRIDES[di][dayIdx] = { code: trainingMatch.code, uncoveredTask: null };
-        if (wasRealTask) {
-          const result = tryBackfillTask(di, dayIdx, vacated);
-          if (!result.success) {
-            TRAINING_OVERRIDES[di][dayIdx].uncoveredTask = vacated;
-            uncoveredCount += 1;
-          }
-        }
+      const trainingIndex = TRAINING_CATALOG.findIndex((t) => t.code && t.code.toUpperCase() === newValue.toUpperCase());
+      if (trainingIndex !== -1) {
+        const t = TRAINING_CATALOG[trainingIndex];
+        const result = applyTrainingOverride(di, dayIdx, t.code);
+        if (result && result.success === false) uncoveredCount += 1;
+        t.assignedDrivers = t.assignedDrivers || [];
+        if (!t.assignedDrivers.includes(di)) t.assignedDrivers.push(di); // keep the Training tab's chip list in sync
       } else {
         const existingOverride = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
         if (existingOverride) delete TRAINING_OVERRIDES[di][dayIdx];
@@ -1073,12 +1093,24 @@
   }
 
   // ---- Training Settings ----
+  function driverShortLabel(di) {
+    const driver = REAL_DATA.drivers[di];
+    if (!driver) return "";
+    return splitDriverRecord(driver.name).fullName;
+  }
+
   function renderTrainingSettings() {
     const table = document.getElementById("training-settings-table");
     let html =
       "<thead><tr><th>Code</th><th>Start Date</th><th>End Date</th><th>Time From</th><th>Time To</th>" +
-      "<th>Course Name</th><th>Capacity</th><th></th></tr></thead><tbody>";
+      "<th>Course Name</th><th>Capacity</th><th>Assigned Drivers</th><th></th></tr></thead><tbody>";
     TRAINING_CATALOG.forEach((t, i) => {
+      const chips = (t.assignedDrivers || [])
+        .map(
+          (di) =>
+            `<span class="driver-chip">${escapeAttr(driverShortLabel(di))}<button type="button" onclick="removeDriverFromTraining(${i}, ${di})">&times;</button></span>`
+        )
+        .join("");
       html += `<tr>
         <td><input value="${escapeAttr(t.code)}" onchange="updateTrainingCatalogEntry(${i}, 'code', this.value)" /></td>
         <td><input type="date" value="${escapeAttr(t.startDate)}" onchange="updateTrainingCatalogEntry(${i}, 'startDate', this.value)" /></td>
@@ -1087,6 +1119,16 @@
         <td><input type="time" value="${escapeAttr(t.timeTo)}" onchange="updateTrainingCatalogEntry(${i}, 'timeTo', this.value)" /></td>
         <td><input value="${escapeAttr(t.courseName)}" onchange="updateTrainingCatalogEntry(${i}, 'courseName', this.value)" /></td>
         <td><input type="number" min="0" value="${escapeAttr(t.capacity)}" onchange="updateTrainingCatalogEntry(${i}, 'capacity', this.value)" /></td>
+        <td class="training-drivers-cell">
+          <div class="driver-picker">
+            <input type="text" class="driver-search-input" placeholder="Search driver name..."
+              oninput="onDriverSearchInput(${i}, this.value)"
+              onfocus="onDriverSearchInput(${i}, this.value)"
+              onblur="setTimeout(() => closeDriverSearch(${i}), 150)" />
+            <div class="driver-search-results" id="driver-search-results-${i}"></div>
+          </div>
+          <div class="assigned-drivers-chips">${chips || '<span class="no-saved-note">No drivers yet</span>'}</div>
+        </td>
         <td><button class="remove-task-btn" type="button" onclick="removeTrainingCatalogEntry(${i})">Remove</button></td>
       </tr>`;
     });
@@ -1095,7 +1137,7 @@
   }
 
   function addTrainingCatalogEntry() {
-    TRAINING_CATALOG.push({ code: "", startDate: "", endDate: "", timeFrom: "", timeTo: "", courseName: "", capacity: "" });
+    TRAINING_CATALOG.push({ code: "", startDate: "", endDate: "", timeFrom: "", timeTo: "", courseName: "", capacity: "", assignedDrivers: [] });
     renderTrainingSettings();
   }
 
@@ -1107,6 +1149,164 @@
   function updateTrainingCatalogEntry(index, field, value) {
     TRAINING_CATALOG[index][field] = value;
     renderTrainingSettings();
+  }
+
+  // ---- Searching drivers by name and wiring a picked one straight into the roster ----
+  function onDriverSearchInput(trainingIndex, query) {
+    const resultsEl = document.getElementById(`driver-search-results-${trainingIndex}`);
+    if (!resultsEl) return;
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      resultsEl.innerHTML = "";
+      resultsEl.classList.remove("open");
+      return;
+    }
+    const matches = REAL_DATA.drivers
+      .map((d, di) => ({ di, name: d.name }))
+      .filter((d) => d.name.toLowerCase().includes(q))
+      .slice(0, 8);
+    resultsEl.innerHTML = matches.length
+      ? matches
+          .map(
+            (d) =>
+              `<div class="driver-search-item" onmousedown="event.preventDefault(); selectDriverForTraining(${trainingIndex}, ${d.di})">${escapeAttr(d.name)}</div>`
+          )
+          .join("")
+      : `<div class="driver-search-empty">No matching driver</div>`;
+    resultsEl.classList.add("open");
+  }
+
+  function closeDriverSearch(trainingIndex) {
+    const resultsEl = document.getElementById(`driver-search-results-${trainingIndex}`);
+    if (resultsEl) {
+      resultsEl.innerHTML = "";
+      resultsEl.classList.remove("open");
+    }
+  }
+
+  function selectDriverForTraining(trainingIndex, driverIndex) {
+    addDriverToTraining(trainingIndex, driverIndex);
+  }
+
+  // Turns REAL_DATA.dates[startDate..endDate] into day indexes, tolerating a blank or swapped range.
+  function dayIndicesInRange(startDate, endDate) {
+    const dates = REAL_DATA.dates;
+    let startIdx = dates.indexOf(startDate);
+    let endIdx = dates.indexOf(endDate);
+    if (startIdx === -1) startIdx = 0;
+    if (endIdx === -1) endIdx = dates.length - 1;
+    if (endIdx < startIdx) [startIdx, endIdx] = [endIdx, startIdx];
+    const result = [];
+    for (let i = startIdx; i <= endIdx; i++) result.push(i);
+    return result;
+  }
+
+  // Pulls one driver off their normal schedule for one day and marks them at training,
+  // backfilling any real trip they held that day. Returns null if the driver wasn't active
+  // that day (an off-day or outside their stretch), so there was nothing to change.
+  function applyTrainingOverride(driverIndex, dayIdx, trainingCode) {
+    if (!monthResult) return null;
+    const stretch = monthResult.allStretches.find((s) => s.driverIndex === driverIndex && s.days.includes(dayIdx));
+    if (!stretch) return null;
+    const rawCode = REAL_DATA.drivers[driverIndex].codes[dayIdx];
+    if ((rawCode && OFF_CODES.has(rawCode)) || rawCode === "830/7T") return null; // not editable
+
+    const vacated = stretch.assignments[dayIdx];
+    const wasRealTask = vacated && vacated !== "RESERVE";
+    if (wasRealTask && stretch.assignedTripCount > 0) stretch.assignedTripCount -= 1;
+    delete stretch.assignments[dayIdx];
+    TRAINING_OVERRIDES[driverIndex] = TRAINING_OVERRIDES[driverIndex] || {};
+    TRAINING_OVERRIDES[driverIndex][dayIdx] = { code: trainingCode, uncoveredTask: null };
+    if (wasRealTask) {
+      const result = tryBackfillTask(driverIndex, dayIdx, vacated);
+      if (!result.success) {
+        TRAINING_OVERRIDES[driverIndex][dayIdx].uncoveredTask = vacated;
+        return { success: false };
+      }
+    }
+    return { success: true };
+  }
+
+  function addDriverToTraining(trainingIndex, driverIndex) {
+    const t = TRAINING_CATALOG[trainingIndex];
+    if (!t) return;
+    if (!t.code) {
+      showAlertModal("Give this training a Code first, then pick drivers for it.");
+      return;
+    }
+    t.assignedDrivers = t.assignedDrivers || [];
+    if (!t.assignedDrivers.includes(driverIndex)) t.assignedDrivers.push(driverIndex);
+
+    if (!monthResult) {
+      renderTrainingSettings();
+      document.getElementById("status-text").textContent =
+        `Added ${driverShortLabel(driverIndex)} to ${t.code} -- will apply once you generate a schedule.`;
+      return;
+    }
+
+    let applied = 0, uncovered = 0;
+    dayIndicesInRange(t.startDate, t.endDate)
+      .filter((dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx)
+      .forEach((dayIdx) => {
+        const result = applyTrainingOverride(driverIndex, dayIdx, t.code);
+        if (result) {
+          applied += 1;
+          if (result.success === false) uncovered += 1;
+        }
+      });
+
+    renderTrainingSettings();
+    renderRoster();
+    renderDay();
+    document.getElementById("status-text").textContent =
+      `Added ${driverShortLabel(driverIndex)} to ${t.code}` +
+      (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
+      (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
+  }
+
+  function removeDriverFromTraining(trainingIndex, driverIndex) {
+    const t = TRAINING_CATALOG[trainingIndex];
+    if (!t) return;
+    t.assignedDrivers = (t.assignedDrivers || []).filter((di) => di !== driverIndex);
+
+    if (monthResult) {
+      dayIndicesInRange(t.startDate, t.endDate).forEach((dayIdx) => {
+        const override = TRAINING_OVERRIDES[driverIndex] && TRAINING_OVERRIDES[driverIndex][dayIdx];
+        if (override && t.code && override.code.toUpperCase() === t.code.toUpperCase()) {
+          delete TRAINING_OVERRIDES[driverIndex][dayIdx];
+          const stretch = monthResult.allStretches.find((s) => s.driverIndex === driverIndex && s.days.includes(dayIdx));
+          if (stretch) stretch.assignments[dayIdx] = "RESERVE";
+        }
+      });
+      renderRoster();
+      renderDay();
+    }
+    renderTrainingSettings();
+  }
+
+  // Re-applies every training's assigned-driver list against a freshly generated schedule, so
+  // picking drivers before ever clicking Generate still takes effect (not just edits made after).
+  function applyAllTrainingAssignments() {
+    if (!monthResult) return { applied: 0, uncovered: 0 };
+    let applied = 0, uncovered = 0;
+    TRAINING_CATALOG.forEach((t) => {
+      if (!t.code || !(t.assignedDrivers || []).length) return;
+      const dayIndices = dayIndicesInRange(t.startDate, t.endDate).filter(
+        (dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx
+      );
+      t.assignedDrivers.forEach((di) => {
+        dayIndices.forEach((dayIdx) => {
+          const existing = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+          if (existing && existing.code.toUpperCase() === t.code.toUpperCase()) return; // already applied
+          const result = applyTrainingOverride(di, dayIdx, t.code);
+          if (result) {
+            applied += 1;
+            if (result.success === false) uncovered += 1;
+          }
+        });
+      });
+    });
+    return { applied, uncovered };
   }
 
   function populateDaySelect() {
