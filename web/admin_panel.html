@@ -222,14 +222,14 @@
   .gantt-scroll { overflow-x: auto; }
   .gantt { min-width: 1420px; }
   .hour-header {
-    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px;
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px 70px;
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px;
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px 70px;
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -249,6 +249,9 @@
     border: 1px solid var(--input-border); background: var(--input-bg); color: var(--ink); font-family: inherit;
   }
   .shift-start-input:focus, .shift-end-input:focus { outline: 2px solid var(--olive); }
+  .shift-total-cell {
+    align-self: center; text-align: center; padding: 0 4px; font-size: 11px; font-weight: 700; color: var(--ink-soft);
+  }
   .track { grid-column: 5 / 29; position: relative; }
 
   .track::before {
@@ -711,6 +714,15 @@
   function timeToMinutes(hhmm) {
     const [h, m] = hhmm.split(":").map(Number);
     return h * 60 + m;
+  }
+
+  // "7h 30m" / "8h" -- wraps past midnight for night shifts (end time earlier than start time).
+  function formatDurationHM(startHHMM, endHHMM) {
+    if (!startHHMM || !endHHMM) return "";
+    const minutes = ((timeToMinutes(endHHMM) - timeToMinutes(startHHMM)) % 1440 + 1440) % 1440;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m === 0 ? `${h}h` : `${h}h ${m}m`;
   }
 
   function classifyShift(startMinutes, windows) {
@@ -1705,6 +1717,7 @@
 
         const shiftStartValue = shiftStartOverride || shiftStartDefault;
         const shiftEndValue = shiftEndOverride || shiftEndDefault;
+        const totalText = formatDurationHM(shiftStartValue, shiftEndValue);
 
         return `
         <div class="task-row">
@@ -1724,6 +1737,7 @@
             <input type="time" class="shift-end-input" value="${escapeAttr(shiftEndValue)}"
               data-driver="${driverIndex}" data-day="${dayIdx}" onchange="updateShiftEnd(this)" />
           </div>
+          <div class="shift-total-cell">${escapeAttr(totalText)}</div>
         </div>`;
       })
       .join("");
@@ -1733,7 +1747,7 @@
   document.getElementById("hour-header").innerHTML =
     '<div class="hcell"></div><div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell label">Start</div>' +
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
-    '<div class="hcell label">End</div>';
+    '<div class="hcell label">End</div><div class="hcell label">Total</div>';
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
   document.getElementById("day-legend").innerHTML =

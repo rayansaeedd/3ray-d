@@ -34,9 +34,11 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   shift's start/end -- Start sits right after the driver's name, End sits at the far right after
   hour column 23. For a real trip they default to the duty's outbound start and return end, and
   once changed also update the matching visible time on the trip box itself; for a Reserve driver
-  both start blank so a standby shift's start/end can be logged if needed. Everything else lives
-  in the **Task Settings** tab instead: each duty (Trip No., Category, Destination,
-  per-leg trip numbers, per-leg Start/End)
+  both start blank so a standby shift's start/end can be logged if needed. A read-only **Total**
+  column after End shows that shift's length (e.g. "7h" or "7h 30m", wrapping correctly past
+  midnight for night shifts) computed live from whatever Start/End currently say -- pure
+  reference, nothing to edit there. Everything else lives in the **Task Settings** tab instead:
+  each duty (Trip No., Category, Destination, per-leg trip numbers, per-leg Start/End)
   is editable there, plus one schedule-wide Origin station (Madinah/Makkah/KAIA, since it's this
   supervisor's own base). Rows can be reordered by long-pressing the drag handle. Task Settings
   also has real **Start date / End date** calendar pickers (native `<input type="date">`, so
