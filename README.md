@@ -51,8 +51,10 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   the driver already had a real trip that day, saving the edit tries to backfill it from another
   driver on Reserve that day in the same shift type who's rested enough (min-rest rule still
   applies); if nobody qualifies, that driver's cell turns red with the stranded trip's code so
-  the supervisor can reassign it by hand. A **Roster Settings** tab is scaffolded and awaiting its
-  spec.
+  the supervisor can reassign it by hand. Every training code -- in its Full Roster cell or its
+  Day Schedule block -- has a small &#9432; button that pops up the course's full details (dates,
+  time window, name, capacity), since a hover tooltip never shows up on a touch device like an
+  iPad. A **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the

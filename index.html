@@ -197,6 +197,14 @@
   .modal-btn-secondary:hover { border-color: var(--ink-soft); }
   .modal-btn-primary { background: var(--olive); color: var(--accent-yellow); border-color: var(--olive); }
   .modal-btn-primary:hover { background: var(--olive-dark); }
+  .training-info-title { font-weight: 700; color: var(--olive-dark); margin-bottom: 8px; font-size: 13px; }
+  .training-info-row {
+    display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px;
+    padding: 5px 0; border-bottom: 1px solid var(--panel-border);
+  }
+  .training-info-row:last-of-type { border-bottom: none; }
+  .training-info-row span { color: var(--ink-soft); }
+  .training-info-row b { color: var(--ink); text-align: right; }
 
   /* ---------------- Schedule view ---------------- */
   .schedule { background: var(--bg); min-width: 0; }
@@ -271,7 +279,7 @@
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 210px; height: 26px;
     border: 1.5px solid var(--training-color); border-radius: 3px; background: var(--trip-bg); display: flex;
     align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--training-color);
-    gap: 5px; padding: 0 6px; white-space: nowrap; overflow: hidden;
+    gap: 5px; padding: 0 6px; white-space: nowrap; overflow: hidden; cursor: pointer;
   }
   .training-block-uncovered {
     background: var(--bad); border-color: var(--bad); color: #fff;
@@ -352,6 +360,13 @@
     font: inherit; font-weight: inherit; text-align: center; padding: 2px 3px; border-radius: 3px;
   }
   .roster-cell-input:focus { outline: 2px solid var(--olive); background: var(--input-bg); color: var(--ink); }
+  .cell-with-info { position: relative; }
+  .cell-with-info .roster-cell-input { padding-right: 13px; }
+  .cell-info-btn {
+    position: absolute; top: 1px; right: 1px; background: none; border: none; cursor: pointer;
+    font-size: 10px; line-height: 1; padding: 1px; color: inherit; opacity: 0.85;
+  }
+  .cell-info-btn:hover { opacity: 1; }
   .roster-toolbar { padding: 0 22px 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .save-roster-btn {
     background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 6px;
@@ -905,6 +920,15 @@
       (titleText ? ` title="${escapeAttr(titleText)}"` : "") +
       ` value="${escapeAttr(value)}" /></td>`;
 
+    // Training/uncovered cells get a small (i) button alongside the input -- tapping the input
+    // itself still just edits the code, tapping (i) pops up the course's full details, since a
+    // hover title tooltip never shows up on a touch device like an iPad.
+    const cellInputWithInfo = (di, dayIdx, value, cls, titleText) =>
+      `<td class="cell-with-info"><input class="roster-cell-input${cls ? " " + cls : ""}" data-driver="${di}" data-day="${dayIdx}"` +
+      (titleText ? ` title="${escapeAttr(titleText)}"` : "") +
+      ` value="${escapeAttr(value)}" />` +
+      `<button type="button" class="cell-info-btn" title="Course details" onclick="showTrainingInfoModal('${escapeAttr(value)}')">&#9432;</button></td>`;
+
     drivers.forEach((d, di) => {
       let row = `<tr><td class="roster-name-cell">${d.name}</td>`;
       d.codes.forEach((rawCode, dayIdx) => {
@@ -914,7 +938,7 @@
           const titleText = override.uncoveredTask
             ? `${override.uncoveredTask} still needs a driver -- reassign manually`
             : `Training: ${trainingCourseName(override.code)}`;
-          row += cellInput(di, dayIdx, override.code, cls, titleText);
+          row += cellInputWithInfo(di, dayIdx, override.code, cls, titleText);
           return;
         }
         if ((rawCode && OFF_CODES.has(rawCode)) || rawCode === "830/7T") {
@@ -1180,6 +1204,33 @@
       document.getElementById("modal-overlay").classList.add("open");
     });
   }
+
+  // Full course details on demand -- a hover title tooltip never shows on a touch device, so
+  // tapping the (i) button next to a training cell (or the training block in Day Schedule)
+  // opens this instead.
+  function showTrainingInfoModal(code) {
+    const t = TRAINING_CATALOG.find((x) => x.code && x.code.toUpperCase() === String(code).toUpperCase());
+    return new Promise((resolve) => {
+      modalResolve = () => resolve();
+      const rows = t
+        ? [
+            ["Code", t.code],
+            ["Course", t.courseName || "—"],
+            ["Dates", `${t.startDate || "—"} to ${t.endDate || "—"}`],
+            ["Time", `${t.timeFrom || "—"} to ${t.timeTo || "—"}`],
+            ["Capacity", t.capacity || "—"],
+          ]
+        : [["Code", code]];
+      document.getElementById("modal-message").innerHTML =
+        `<div class="training-info-title">Training course</div>` +
+        rows.map(([label, value]) => `<div class="training-info-row"><span>${escapeAttr(label)}</span><b>${escapeAttr(value)}</b></div>`).join("") +
+        (t ? "" : `<div class="field-note">No matching entry in the Training tab -- this code may have been renamed or removed there.</div>`);
+      document.getElementById("modal-input").style.display = "none";
+      document.getElementById("modal-ok-btn").textContent = "Close";
+      document.getElementById("modal-cancel-btn").style.display = "none";
+      document.getElementById("modal-overlay").classList.add("open");
+    });
+  }
   document.getElementById("modal-ok-btn").addEventListener("click", () => {
     const input = document.getElementById("modal-input");
     closeModal(input.style.display === "none" ? true : input.value);
@@ -1380,7 +1431,7 @@
           const titleText = trainingOverride.uncoveredTask
             ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
             : "";
-          track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
+          track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}" onclick="showTrainingInfoModal('${escapeAttr(trainingOverride.code)}')">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
         } else if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
