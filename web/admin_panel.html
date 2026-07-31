@@ -222,14 +222,14 @@
   .gantt-scroll { overflow-x: auto; }
   .gantt { min-width: 1420px; }
   .hour-header {
-    display: grid; grid-template-columns: 32px 84px 300px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr);
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 32px 84px 300px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr);
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -243,7 +243,13 @@
   .driver-name .driver-fullname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name .driver-phone { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
-  .track { grid-column: 4 / 28; position: relative; }
+  .shift-start-cell { align-self: center; padding: 0 4px; }
+  .shift-start-input {
+    width: 100%; font-size: 11px; padding: 4px 3px; border-radius: 5px;
+    border: 1px solid var(--input-border); background: var(--input-bg); color: var(--ink); font-family: inherit;
+  }
+  .shift-start-input:focus { outline: 2px solid var(--olive); }
+  .track { grid-column: 5 / 29; position: relative; }
 
   .track::before {
     content: ""; position: absolute; inset: 0;
@@ -672,6 +678,20 @@
   function trainingCourseName(code) {
     const t = TRAINING_CATALOG.find((x) => x.code && x.code.toUpperCase() === String(code).toUpperCase());
     return t && t.courseName ? t.courseName : code;
+  }
+
+  // One editable field on the otherwise read-only Day Schedule: a per-driver, per-day shift
+  // start time override, shown right after the driver's name. { [driverIndex]: { [dayIdx]: "HH:MM" } }
+  let SHIFT_START_OVERRIDES = {};
+
+  function updateShiftStart(inputEl) {
+    const di = parseInt(inputEl.dataset.driver, 10);
+    const dayIdx = parseInt(inputEl.dataset.day, 10);
+    const value = inputEl.value;
+    SHIFT_START_OVERRIDES[di] = SHIFT_START_OVERRIDES[di] || {};
+    if (value) SHIFT_START_OVERRIDES[di][dayIdx] = value;
+    else delete SHIFT_START_OVERRIDES[di][dayIdx];
+    renderDay();
   }
 
   let monthResult = null; // { stretchesByDriver, tasksByShift, config }
@@ -1485,6 +1505,7 @@
       taskCatalog: JSON.parse(JSON.stringify(TASK_CATALOG)),
       trainingCatalog: JSON.parse(JSON.stringify(TRAINING_CATALOG)),
       trainingOverrides: JSON.parse(JSON.stringify(TRAINING_OVERRIDES)),
+      shiftStartOverrides: JSON.parse(JSON.stringify(SHIFT_START_OVERRIDES)),
       config: {
         dayStart: document.getElementById("day-start").value,
         dayEnd: document.getElementById("day-end").value,
@@ -1517,6 +1538,7 @@
     TRAINING_CATALOG.length = 0;
     (entry.trainingCatalog || []).forEach((t) => TRAINING_CATALOG.push(t));
     TRAINING_OVERRIDES = entry.trainingOverrides || {};
+    SHIFT_START_OVERRIDES = entry.shiftStartOverrides || {};
     GLOBAL_ORIGIN = entry.globalOrigin;
 
     document.getElementById("day-start").value = entry.config.dayStart;
@@ -1624,8 +1646,10 @@
         const driver = REAL_DATA.drivers[driverIndex];
         const rec = splitDriverRecord(driver.name);
         const isReserve = !trainingOverride && code.trim().toUpperCase() === "RESERVE";
+        const shiftStartOverride = SHIFT_START_OVERRIDES[driverIndex] && SHIFT_START_OVERRIDES[driverIndex][dayIdx];
 
         let track;
+        let shiftStartDefault = "";
         if (trainingOverride) {
           const flagClass = trainingOverride.uncoveredTask ? " training-block-uncovered" : "";
           const titleText = trainingOverride.uncoveredTask
@@ -1641,7 +1665,8 @@
           const returnLabel = (matchedTask && matchedTask.returnTripNo) || code;
 
           const legTime = (field, fallback) => (matchedTask ? matchedTask[field] : fallback);
-          const outboundStart = legTime("outboundStart", "07:00");
+          shiftStartDefault = legTime("outboundStart", "07:00");
+          const outboundStart = shiftStartOverride || shiftStartDefault;
           const outboundEnd = legTime("outboundEnd", "09:00");
           const returnStart = legTime("returnStart", "12:00");
           const returnEnd = legTime("returnEnd", "14:00");
@@ -1661,6 +1686,8 @@
             </div>`;
         }
 
+        const shiftStartValue = shiftStartOverride || shiftStartDefault;
+
         return `
         <div class="task-row">
           <div class="row-number">${rowIdx + 1}</div>
@@ -1670,6 +1697,10 @@
             <div class="driver-fullname">${escapeAttr(rec.fullName)}</div>
             <div class="driver-phone">${driver.phone ? escapeAttr(driver.phone) : "No phone on file"}</div>
           </div>
+          <div class="shift-start-cell">
+            <input type="time" class="shift-start-input" value="${escapeAttr(shiftStartValue)}"
+              data-driver="${driverIndex}" data-day="${dayIdx}" onchange="updateShiftStart(this)" />
+          </div>
           <div class="track">${track}</div>
         </div>`;
       })
@@ -1678,7 +1709,7 @@
 
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
-    '<div class="hcell"></div><div class="hcell"></div><div class="hcell label">Driver</div>' +
+    '<div class="hcell"></div><div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell label">Start</div>' +
     Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("");
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
