@@ -28,13 +28,14 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   (outbound leg + return leg), each with its own visible start/end time, joined by a connector
   badge colored by destination; drivers on standby show a single RESERVE box. The driver column
   clearly shows ID, full name, and a phone line (no phone data exists yet, so it reads "No phone
-  on file"). **The Day Schedule is read-only**, with two exceptions: a disabled Origin indicator
+  on file"). **The Day Schedule is read-only**, with three exceptions: a disabled Origin indicator
   next to the date that just mirrors whatever's set in Task Settings, and a per-driver, per-day
-  **Start** time field (right after the driver's name) the supervisor can edit directly to record
-  or override that specific shift's start time -- for a real trip it defaults to the duty's
-  outbound start and, once changed, also updates the visible start time on the trip box itself;
-  for a Reserve driver it starts blank so a standby start time can be logged if needed. Everything
-  else lives in the **Task Settings** tab instead: each duty (Trip No., Category, Destination,
+  **Start**/**End** time pair the supervisor can edit directly to record or override that specific
+  shift's start/end -- Start sits right after the driver's name, End sits at the far right after
+  hour column 23. For a real trip they default to the duty's outbound start and return end, and
+  once changed also update the matching visible time on the trip box itself; for a Reserve driver
+  both start blank so a standby shift's start/end can be logged if needed. Everything else lives
+  in the **Task Settings** tab instead: each duty (Trip No., Category, Destination,
   per-leg trip numbers, per-leg Start/End)
   is editable there, plus one schedule-wide Origin station (Madinah/Makkah/KAIA, since it's this
   supervisor's own base). Rows can be reordered by long-pressing the drag handle. Task Settings

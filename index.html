@@ -222,14 +222,14 @@
   .gantt-scroll { overflow-x: auto; }
   .gantt { min-width: 1420px; }
   .hour-header {
-    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px;
     border-bottom: 2px solid var(--grid-line); background: var(--bg-alt); position: sticky; top: 0;
   }
   .hour-header .hcell { text-align: center; font-size: 11px; font-weight: 700; color: var(--olive-dark); padding: 7px 0; border-left: 1px solid var(--grid-line); }
   .hour-header .hcell.label { text-align: left; padding-left: 8px; border-left: none; }
 
   .task-row {
-    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr);
+    display: grid; grid-template-columns: 32px 84px 300px 78px repeat(24, 1fr) 78px;
     border-bottom: 1px solid var(--grid-line); min-height: 52px;
   }
   .task-row:nth-child(odd) { background: var(--bg-alt); }
@@ -243,12 +243,12 @@
   .driver-name .driver-fullname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .driver-name .driver-phone { font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
   .madinah-tag { align-self: center; justify-self: center; background: var(--tag-bg); border: 1px solid var(--tag-border); border-radius: 2px; font-size: 10px; font-weight: 700; padding: 3px 6px; white-space: nowrap; }
-  .shift-start-cell { align-self: center; padding: 0 4px; }
-  .shift-start-input {
+  .shift-start-cell, .shift-end-cell { align-self: center; padding: 0 4px; }
+  .shift-start-input, .shift-end-input {
     width: 100%; font-size: 11px; padding: 4px 3px; border-radius: 5px;
     border: 1px solid var(--input-border); background: var(--input-bg); color: var(--ink); font-family: inherit;
   }
-  .shift-start-input:focus { outline: 2px solid var(--olive); }
+  .shift-start-input:focus, .shift-end-input:focus { outline: 2px solid var(--olive); }
   .track { grid-column: 5 / 29; position: relative; }
 
   .track::before {
@@ -680,9 +680,11 @@
     return t && t.courseName ? t.courseName : code;
   }
 
-  // One editable field on the otherwise read-only Day Schedule: a per-driver, per-day shift
-  // start time override, shown right after the driver's name. { [driverIndex]: { [dayIdx]: "HH:MM" } }
+  // Two editable fields on the otherwise read-only Day Schedule: per-driver, per-day shift
+  // start/end overrides, shown right after the driver's name and at the far right of the
+  // schedule respectively. { [driverIndex]: { [dayIdx]: "HH:MM" } }
   let SHIFT_START_OVERRIDES = {};
+  let SHIFT_END_OVERRIDES = {};
 
   function updateShiftStart(inputEl) {
     const di = parseInt(inputEl.dataset.driver, 10);
@@ -691,6 +693,16 @@
     SHIFT_START_OVERRIDES[di] = SHIFT_START_OVERRIDES[di] || {};
     if (value) SHIFT_START_OVERRIDES[di][dayIdx] = value;
     else delete SHIFT_START_OVERRIDES[di][dayIdx];
+    renderDay();
+  }
+
+  function updateShiftEnd(inputEl) {
+    const di = parseInt(inputEl.dataset.driver, 10);
+    const dayIdx = parseInt(inputEl.dataset.day, 10);
+    const value = inputEl.value;
+    SHIFT_END_OVERRIDES[di] = SHIFT_END_OVERRIDES[di] || {};
+    if (value) SHIFT_END_OVERRIDES[di][dayIdx] = value;
+    else delete SHIFT_END_OVERRIDES[di][dayIdx];
     renderDay();
   }
 
@@ -1506,6 +1518,7 @@
       trainingCatalog: JSON.parse(JSON.stringify(TRAINING_CATALOG)),
       trainingOverrides: JSON.parse(JSON.stringify(TRAINING_OVERRIDES)),
       shiftStartOverrides: JSON.parse(JSON.stringify(SHIFT_START_OVERRIDES)),
+      shiftEndOverrides: JSON.parse(JSON.stringify(SHIFT_END_OVERRIDES)),
       config: {
         dayStart: document.getElementById("day-start").value,
         dayEnd: document.getElementById("day-end").value,
@@ -1539,6 +1552,7 @@
     (entry.trainingCatalog || []).forEach((t) => TRAINING_CATALOG.push(t));
     TRAINING_OVERRIDES = entry.trainingOverrides || {};
     SHIFT_START_OVERRIDES = entry.shiftStartOverrides || {};
+    SHIFT_END_OVERRIDES = entry.shiftEndOverrides || {};
     GLOBAL_ORIGIN = entry.globalOrigin;
 
     document.getElementById("day-start").value = entry.config.dayStart;
@@ -1647,9 +1661,11 @@
         const rec = splitDriverRecord(driver.name);
         const isReserve = !trainingOverride && code.trim().toUpperCase() === "RESERVE";
         const shiftStartOverride = SHIFT_START_OVERRIDES[driverIndex] && SHIFT_START_OVERRIDES[driverIndex][dayIdx];
+        const shiftEndOverride = SHIFT_END_OVERRIDES[driverIndex] && SHIFT_END_OVERRIDES[driverIndex][dayIdx];
 
         let track;
         let shiftStartDefault = "";
+        let shiftEndDefault = "";
         if (trainingOverride) {
           const flagClass = trainingOverride.uncoveredTask ? " training-block-uncovered" : "";
           const titleText = trainingOverride.uncoveredTask
@@ -1669,7 +1685,8 @@
           const outboundStart = shiftStartOverride || shiftStartDefault;
           const outboundEnd = legTime("outboundEnd", "09:00");
           const returnStart = legTime("returnStart", "12:00");
-          const returnEnd = legTime("returnEnd", "14:00");
+          shiftEndDefault = legTime("returnEnd", "14:00");
+          const returnEnd = shiftEndOverride || shiftEndDefault;
           const connectorLetter = matchedTask && matchedTask.destination ? dest.letter : "?";
 
           const legTimeText = (value) => `<span class="leg-time-text">${escapeAttr(value)}</span>`;
@@ -1687,6 +1704,7 @@
         }
 
         const shiftStartValue = shiftStartOverride || shiftStartDefault;
+        const shiftEndValue = shiftEndOverride || shiftEndDefault;
 
         return `
         <div class="task-row">
@@ -1702,6 +1720,10 @@
               data-driver="${driverIndex}" data-day="${dayIdx}" onchange="updateShiftStart(this)" />
           </div>
           <div class="track">${track}</div>
+          <div class="shift-end-cell">
+            <input type="time" class="shift-end-input" value="${escapeAttr(shiftEndValue)}"
+              data-driver="${driverIndex}" data-day="${dayIdx}" onchange="updateShiftEnd(this)" />
+          </div>
         </div>`;
       })
       .join("");
@@ -1710,7 +1732,8 @@
   // ---- static hour header (once) ----
   document.getElementById("hour-header").innerHTML =
     '<div class="hcell"></div><div class="hcell"></div><div class="hcell label">Driver</div><div class="hcell label">Start</div>' +
-    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("");
+    Array.from({ length: 24 }, (_, h) => `<div class="hcell">${h}</div>`).join("") +
+    '<div class="hcell label">End</div>';
 
   // ---- Day Schedule legend, built from the same DESTINATIONS the engine uses ----
   document.getElementById("day-legend").innerHTML =
