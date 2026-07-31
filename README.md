@@ -33,13 +33,17 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   mirrors whatever's set in Task Settings. All editing lives in the **Task Settings** tab
   instead: each duty (Trip No., Category, Destination, per-leg trip numbers, per-leg Start/End)
   is editable there, plus one schedule-wide Origin station (Madinah/Makkah/KAIA, since it's this
-  supervisor's own base). Rows can be reordered by long-pressing the drag handle. A **Schedule
-  length** setting picks how many days to generate (1/2/3 weeks or the full month currently in
-  `real_data.json`), and a **Save this schedule** button snapshots the generated result plus its
-  Task Settings and Conditions into a named, dated entry (e.g. "October 1 to October 31") kept in
-  the browser's local storage -- Load/Delete buttons let the supervisor keep several saved
-  schedules side by side and switch between them. A **Roster Settings** tab is scaffolded and
-  awaiting its spec.
+  supervisor's own base). Rows can be reordered by long-pressing the drag handle. Task Settings
+  also has real **Start date / End date** calendar pickers (native `<input type="date">`, so
+  tapping one pops up the device's own calendar) that pick exactly which days to generate,
+  capped to whatever `real_data.json` actually covers. Hitting **Generate schedule** builds just
+  that range, and a **Save this schedule** button snapshots the generated result plus its Task
+  Settings and Conditions into a small red card named after its date range (e.g. "October 1 to
+  October 7") in the Conditions sidebar -- click a card to reload that saved schedule, or its
+  &times; to delete it, so several schedules (different weeks, a full month, etc.) can be kept
+  side by side. A **Print / Export** button on the Day Schedule view opens the browser's print
+  dialog (which on most devices can also save straight to PDF) for handing a loaded schedule to
+  drivers. A **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
@@ -84,16 +88,16 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   trip number and origin station (Madinah/Makkah/KAIA), all editable in Task Settings. The 41
   existing duties still default to "Unassigned" (shown as "?") until classified.
 - **Persistence** — a generated schedule can now be saved (named by its date range, e.g. "October
-  1 to October 31") to the browser's local storage via the **Save this schedule** button, and
-  reloaded/deleted later from the **Saved schedules** list. This is per-browser, per-device
-  storage, not a shared database -- it won't show up on a different computer or after clearing
-  browser data. Unsaved Task Settings edits still only live in memory until saved this way.
-- **Schedule length is capped by real roster data** — the "Schedule length" selector only offers
-  1/2/3 weeks or a full month because `web/real_data.json` currently contains real roster data for
-  a single month (October 2026) only. It cannot yet generate a *different* calendar month (e.g.
-  September or December) since there's no real day-by-day roster for those months to schedule
-  against -- doing that needs new roster data supplied for that month first. A "2 months" option
-  is shown but disabled as a reminder of this.
+  1 to October 7") to the browser's local storage via the **Save this schedule** button, and
+  reloaded/deleted later from its red card in the Conditions sidebar. This is per-browser,
+  per-device storage, not a shared database -- it won't show up on a different computer or after
+  clearing browser data. Unsaved Task Settings edits still only live in memory until saved this
+  way.
+- **Schedule dates are capped by real roster data** — the Start date/End date pickers in Task
+  Settings only allow dates within October 2026 because `web/real_data.json` currently contains
+  real roster data for that single month only. It cannot yet generate a genuinely *different*
+  calendar month (e.g. September or December) since there's no real day-by-day roster for those
+  months to schedule against -- that needs new roster data supplied for that month first.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 

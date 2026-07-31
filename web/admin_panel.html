@@ -133,27 +133,42 @@
   .compliance { font-size: 11.5px; color: var(--ink-soft); line-height: 1.6; }
   .compliance b { color: var(--ink); }
   .field-note { font-size: 11px; color: var(--ink-soft); margin-top: 6px; line-height: 1.5; }
-  #schedule-length { width: 100%; }
   .save-btn {
     width: 100%; background: var(--bg); color: var(--olive-dark); border: 1.5px solid var(--olive);
     border-radius: 8px; padding: 9px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
   }
   .save-btn:hover:not(:disabled) { background: var(--olive); color: var(--accent-yellow); }
   .save-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .saved-schedules-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-  .saved-schedule-item {
-    background: var(--bg); border: 1px solid var(--panel-border); border-radius: 6px; padding: 7px 9px;
-    font-size: 11.5px; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  /* saved schedules shown as small red-outlined boxes, per the supervisor's own sketch */
+  .saved-schedules-list { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .saved-schedule-card {
+    position: relative; background: var(--bg); border: 2px solid var(--bad); border-radius: 10px;
+    padding: 9px 22px 9px 11px; font-size: 11.5px; cursor: pointer; min-width: 92px; max-width: 100%;
   }
-  .saved-schedule-item .name { font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .saved-schedule-item .actions { display: flex; gap: 4px; flex: none; }
-  .saved-schedule-item button {
-    background: transparent; border: 1px solid var(--panel-border); border-radius: 4px; padding: 3px 7px;
-    font-size: 10.5px; cursor: pointer; font-family: inherit; color: var(--ink-soft);
+  .saved-schedule-card:hover { background: rgba(200, 60, 50, 0.08); }
+  .saved-schedule-card .name {
+    font-weight: 700; color: var(--ink); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .saved-schedule-item button.load-btn:hover { border-color: var(--olive); color: var(--olive-dark); }
-  .saved-schedule-item button.delete-btn:hover { border-color: var(--bad); color: var(--bad); }
+  .saved-schedule-card .delete-x {
+    position: absolute; top: 2px; right: 3px; background: none; border: none; cursor: pointer;
+    font-size: 13px; line-height: 1; color: var(--ink-soft); padding: 3px 5px; font-family: inherit;
+  }
+  .saved-schedule-card .delete-x:hover { color: var(--bad); }
   .no-saved-note { font-size: 11.5px; color: var(--ink-soft); font-style: italic; }
+  .schedule-dates-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; margin-bottom: 14px; }
+  .schedule-dates-bar label { font-size: 12px; color: var(--ink-soft); display: flex; flex-direction: column; gap: 4px; }
+  .schedule-dates-bar input[type="date"] { width: auto; }
+  .schedule-dates-bar .field-note { flex-basis: 100%; margin-top: 0; }
+  .print-btn {
+    background: #fff; color: var(--olive-dark); border: none;
+    border-radius: 6px; padding: 7px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .print-btn:hover { background: var(--accent-yellow); }
+  @media print {
+    .conditions, .view-tabs, .print-btn, .legend { display: none !important; }
+    .app { display: block !important; }
+    .gantt-scroll { overflow: visible !important; }
+  }
 
   /* ---------------- Schedule view ---------------- */
   .schedule { background: var(--bg); min-width: 0; }
@@ -354,9 +369,8 @@
     </div>
 
     <div class="cond-group">
-      <h2>Schedule length</h2>
-      <select id="schedule-length"></select>
-      <div class="field-note">Longer than this needs real roster data beyond what we have (only Oct 2026 exists right now) -- ask if you want more months added.</div>
+      <h2>Schedule dates</h2>
+      <div class="field-note" id="schedule-range-summary">Pick start/end dates in Task Settings.</div>
     </div>
 
     <button class="generate-btn" type="button" onclick="generate()">Generate schedule</button>
@@ -390,6 +404,7 @@
           <div class="day-date">ORIGIN:
             <select id="origin-badge" disabled title="Set in Task Settings, not here"></select>
           </div>
+          <button class="print-btn" id="print-schedule-btn" type="button" onclick="window.print()">Print / Export</button>
         </div>
       </div>
 
@@ -421,6 +436,11 @@
         &#8942;&#8942; handle on the left of a row and drag to reorder. Changing anything here
         takes effect the next time you click "Generate month". The Day Schedule itself is
         read-only -- all editing happens here.
+      </div>
+      <div class="schedule-dates-bar">
+        <label>Start date <input type="date" id="schedule-start-date" onchange="onScheduleDatesChanged()" /></label>
+        <label>End date <input type="date" id="schedule-end-date" onchange="onScheduleDatesChanged()" /></label>
+        <div class="field-note">Real roster data only covers October 2026 right now, so dates outside Oct 1&ndash;31, 2026 aren't available -- ask if you want another month added.</div>
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTaskCatalogEntry()">+ Add New Task</button>
@@ -549,7 +569,20 @@
     return t ? t.duration_minutes : 420;
   }
 
+  // Reads the Task Settings start/end date pickers and maps them to indexes into
+  // REAL_DATA.dates (one entry per real calendar day, so the date strings match exactly).
+  function scheduleRangeIndexes() {
+    const dates = REAL_DATA.dates;
+    let startIdx = dates.indexOf(document.getElementById("schedule-start-date").value);
+    let endIdx = dates.indexOf(document.getElementById("schedule-end-date").value);
+    if (startIdx === -1) startIdx = 0;
+    if (endIdx === -1) endIdx = dates.length - 1;
+    if (endIdx < startIdx) [startIdx, endIdx] = [endIdx, startIdx];
+    return { startIdx, endIdx };
+  }
+
   function getConfig() {
+    const { startIdx, endIdx } = scheduleRangeIndexes();
     return {
       shiftWindows: [
         { label: "Day", start: document.getElementById("day-start").value, end: document.getElementById("day-end").value },
@@ -559,7 +592,8 @@
       stickyMin: parseInt(document.getElementById("sticky-min").value, 10) || 2,
       targetTrips: parseInt(document.getElementById("target-trips").value, 10) || 3,
       minRestHours: parseFloat(document.getElementById("min-rest-hours").value) || 0,
-      numDays: Math.min(parseInt(document.getElementById("schedule-length").value, 10) || REAL_DATA.dates.length, REAL_DATA.dates.length),
+      startIdx,
+      endIdx,
     };
   }
 
@@ -632,8 +666,9 @@
     const uncoveredTasks = []; // {dayIdx, code} -- genuine shortages, for reporting
     const minRestMinutes = Math.max(0, (config.minRestHours || 0) * 60);
 
-    const numDays = Math.min(config.numDays || REAL_DATA.dates.length, REAL_DATA.dates.length);
-    for (let dayIdx = 0; dayIdx < numDays; dayIdx++) {
+    const startIdx = Math.max(0, Math.min(config.startIdx ?? 0, REAL_DATA.dates.length - 1));
+    const endIdx = Math.max(startIdx, Math.min(config.endIdx ?? REAL_DATA.dates.length - 1, REAL_DATA.dates.length - 1));
+    for (let dayIdx = startIdx; dayIdx <= endIdx; dayIdx++) {
       const activeByShift = {};
       allStretches.forEach((s) => {
         if (!s.days.includes(dayIdx)) return;
@@ -670,7 +705,7 @@
       });
     }
 
-    return { allStretches, tasksByShift, config, uncoveredTasks, tasks, numDays };
+    return { allStretches, tasksByShift, config, uncoveredTasks, tasks, startIdx, endIdx, numDays: endIdx - startIdx + 1 };
   }
 
   function computeCompliance(allStretches) {
@@ -704,7 +739,7 @@
       const hasWarning = c.violations > 0 || uncovered > 0;
       document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
       document.getElementById("status-text").textContent =
-        "Generated " + dateRangeLabel(monthResult.numDays) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
+        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
       document.getElementById("save-btn").disabled = false;
       let complianceHtml =
         "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
@@ -794,47 +829,49 @@
 
   function populateDaySelect() {
     const sel = document.getElementById("day-select");
-    const numDays = monthResult ? monthResult.numDays : REAL_DATA.dates.length;
+    const dates = REAL_DATA.dates;
+    const startIdx = monthResult ? monthResult.startIdx : 0;
+    const endIdx = monthResult ? monthResult.endIdx : dates.length - 1;
     const prevIndex = parseInt(sel.value, 10);
-    sel.innerHTML = REAL_DATA.dates
-      .slice(0, numDays)
-      .map((d, i) => {
+    sel.innerHTML = dates
+      .map((d, i) => ({ d, i }))
+      .filter(({ i }) => i >= startIdx && i <= endIdx)
+      .map(({ d, i }) => {
         const dt = new Date(d + "T00:00:00");
         const label = dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
         return `<option value="${i}">${label}</option>`;
       })
       .join("");
-    sel.value = !isNaN(prevIndex) && prevIndex < numDays ? String(prevIndex) : "0";
+    sel.value = !isNaN(prevIndex) && prevIndex >= startIdx && prevIndex <= endIdx ? String(prevIndex) : String(startIdx);
   }
 
-  // Options are capped to what REAL_DATA actually covers (Oct 2026, 31 days) -- "2 months"
-  // is listed but disabled since no real roster data exists for a second month yet.
-  function populateScheduleLengthOptions() {
-    const sel = document.getElementById("schedule-length");
-    const total = REAL_DATA.dates.length;
-    const fmtShort = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    const startDate = new Date(REAL_DATA.dates[0] + "T00:00:00");
-    const choices = [
-      { days: 7, label: "1 week" },
-      { days: 14, label: "2 weeks" },
-      { days: 21, label: "3 weeks" },
-      { days: total, label: "1 month" },
-    ].filter((o) => o.days <= total);
-
-    sel.innerHTML =
-      choices
-        .map((o) => {
-          const endDate = new Date(REAL_DATA.dates[Math.min(o.days, total) - 1] + "T00:00:00");
-          const label = `${o.label} (${fmtShort(startDate)}–${fmtShort(endDate)})`;
-          return `<option value="${o.days}" ${o.days === total ? "selected" : ""}>${label}</option>`;
-        })
-        .join("") + `<option value="" disabled>2 months (need more roster data)</option>`;
+  // Start/end date pickers in Task Settings are capped to what REAL_DATA actually covers
+  // (only October 2026 exists right now -- ask if you want another month added).
+  function initScheduleDateInputs() {
+    const dates = REAL_DATA.dates;
+    const startEl = document.getElementById("schedule-start-date");
+    const endEl = document.getElementById("schedule-end-date");
+    startEl.min = endEl.min = dates[0];
+    startEl.max = endEl.max = dates[dates.length - 1];
+    startEl.value = dates[0];
+    endEl.value = dates[dates.length - 1];
+    updateScheduleRangeSummary();
   }
 
-  function dateRangeLabel(numDays) {
-    const total = REAL_DATA.dates.length;
-    const start = new Date(REAL_DATA.dates[0] + "T00:00:00");
-    const end = new Date(REAL_DATA.dates[Math.min(numDays, total) - 1] + "T00:00:00");
+  function onScheduleDatesChanged() {
+    updateScheduleRangeSummary();
+  }
+
+  function updateScheduleRangeSummary() {
+    const { startIdx, endIdx } = scheduleRangeIndexes();
+    document.getElementById("schedule-range-summary").textContent =
+      dateRangeLabel(startIdx, endIdx) + " (" + (endIdx - startIdx + 1) + " days) -- click Generate schedule to build it.";
+  }
+
+  function dateRangeLabel(startIdx, endIdx) {
+    const dates = REAL_DATA.dates;
+    const start = new Date(dates[startIdx] + "T00:00:00");
+    const end = new Date(dates[endIdx] + "T00:00:00");
     const fmt = (d) => d.toLocaleDateString("en-US", { month: "long", day: "numeric" });
     return fmt(start) + " to " + fmt(end);
   }
@@ -863,7 +900,7 @@
 
   function saveCurrentSchedule() {
     if (!monthResult) return;
-    const defaultName = dateRangeLabel(monthResult.numDays);
+    const defaultName = dateRangeLabel(monthResult.startIdx, monthResult.endIdx);
     const typed = prompt("Name this saved schedule:", defaultName);
     if (typed === null) return; // cancelled
     const name = typed.trim() || defaultName;
@@ -875,7 +912,7 @@
       id: existingIndex !== -1 ? SAVED_SCHEDULES[existingIndex].id : "sched_" + Date.now(),
       name,
       savedAt: new Date().toISOString(),
-      dateRangeLabel: dateRangeLabel(monthResult.numDays),
+      dateRangeLabel: dateRangeLabel(monthResult.startIdx, monthResult.endIdx),
       globalOrigin: GLOBAL_ORIGIN,
       taskCatalog: JSON.parse(JSON.stringify(TASK_CATALOG)),
       config: {
@@ -888,7 +925,8 @@
         stickyMin: document.getElementById("sticky-min").value,
         targetTrips: document.getElementById("target-trips").value,
         minRestHours: document.getElementById("min-rest-hours").value,
-        scheduleLength: document.getElementById("schedule-length").value,
+        startDate: document.getElementById("schedule-start-date").value,
+        endDate: document.getElementById("schedule-end-date").value,
       },
       monthResult,
     };
@@ -917,7 +955,9 @@
     document.getElementById("sticky-min").value = entry.config.stickyMin;
     document.getElementById("target-trips").value = entry.config.targetTrips;
     document.getElementById("min-rest-hours").value = entry.config.minRestHours;
-    document.getElementById("schedule-length").value = entry.config.scheduleLength;
+    document.getElementById("schedule-start-date").value = entry.config.startDate;
+    document.getElementById("schedule-end-date").value = entry.config.endDate;
+    updateScheduleRangeSummary();
 
     monthResult = entry.monthResult;
 
@@ -955,12 +995,9 @@
       .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt))
       .map(
         (s) => `
-      <div class="saved-schedule-item">
+      <div class="saved-schedule-card" onclick="loadSavedSchedule('${s.id}')" title="Click to open this saved schedule">
+        <button class="delete-x" type="button" title="Delete" onclick="event.stopPropagation(); deleteSavedSchedule('${s.id}')">&times;</button>
         <span class="name" title="${escapeAttr(s.name)}">${escapeAttr(s.name)}</span>
-        <span class="actions">
-          <button class="load-btn" type="button" onclick="loadSavedSchedule('${s.id}')">Load</button>
-          <button class="delete-btn" type="button" onclick="deleteSavedSchedule('${s.id}')">Delete</button>
-        </span>
       </div>`
       )
       .join("");
@@ -1211,7 +1248,7 @@
     table.innerHTML = html;
   }
 
-  populateScheduleLengthOptions();
+  initScheduleDateInputs();
   populateDaySelect();
   renderRoster();
   renderTaskSettings();
