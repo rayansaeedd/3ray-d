@@ -183,7 +183,7 @@
     background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 10px;
     padding: 18px; max-width: 360px; width: 100%; box-shadow: var(--shadow);
   }
-  .modal-message { font-size: 13px; color: var(--ink); line-height: 1.5; margin-bottom: 12px; }
+  .modal-message { font-size: 13px; color: var(--ink); line-height: 1.5; margin-bottom: 12px; white-space: pre-line; }
   .modal-input {
     width: 100%; font-size: 13px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--input-border);
     background: var(--input-bg); color: var(--ink); font-family: inherit; margin-bottom: 14px;
@@ -294,6 +294,9 @@
   .training-block-uncovered {
     background: var(--bad); border-color: var(--bad); color: #fff;
   }
+  .training-block-restconflict {
+    background: var(--warn); border-color: var(--warn); color: #241f00;
+  }
 
   .legend { display: flex; gap: 18px; flex-wrap: wrap; padding: 12px 22px 20px; font-size: 11.5px; color: var(--ink-soft); align-items: center; }
   .legend .item { display: flex; align-items: center; gap: 6px; }
@@ -389,16 +392,17 @@
   .roster-table thead th.roster-name-header { position: sticky; left: 0; top: 0; z-index: 3; text-align: left; background: var(--bg-alt); }
   .roster-table tbody tr:nth-child(odd) td:not(.roster-name-cell) { background: var(--bg-alt); }
   .roster-table tbody tr:nth-child(odd) .roster-name-cell { background: var(--bg-alt); }
-  .roster-cell-task { color: var(--task-color); font-weight: 700; }
-  .roster-cell-reserve { color: var(--reserve-color); font-weight: 700; }
-  .roster-cell-off { color: var(--ink); }
-  .roster-cell-training { background: rgba(122, 63, 160, 0.25); color: var(--training-color); font-weight: 700; }
-  .roster-cell-uncovered { background: var(--bad); color: #fff; font-weight: 700; }
   .roster-cell-input {
     width: 100%; min-width: 44px; border: none; background: transparent; color: inherit;
     font: inherit; font-weight: inherit; text-align: center; padding: 2px 3px; border-radius: 3px;
   }
   .roster-cell-input:focus { outline: 2px solid var(--olive); background: var(--input-bg); color: var(--ink); }
+  .roster-cell-task { color: var(--task-color); font-weight: 700; }
+  .roster-cell-reserve { color: var(--reserve-color); font-weight: 700; }
+  .roster-cell-off { color: var(--ink); }
+  .roster-cell-training { background: rgba(122, 63, 160, 0.25); color: var(--training-color); font-weight: 700; }
+  .roster-cell-uncovered { background: var(--bad); color: #fff; font-weight: 700; }
+  .roster-cell-restconflict { background: var(--warn); color: #241f00; font-weight: 700; }
   .cell-with-info { position: relative; }
   .cell-with-info .roster-cell-input { padding-right: 13px; }
   .cell-info-btn {
@@ -526,7 +530,8 @@
     <div id="roster-view" style="display:none">
       <div class="roster-note">
         Green = task assigned by the engine &middot; blue = RESERVE &middot; black = original off-duty code (F/V/O/etc.) or fixed 830/7T assignment
-        &middot; purple = a Training code you've placed &middot; red = a trip that lost its driver to training and still needs one.
+        &middot; purple = a Training code you've placed &middot; red = a trip that lost its driver to training and still needs one
+        &middot; amber = a training day that failed the 6-on/2-off rest check (every driver is owed at least 2 days off after at most 6 working days).
         Every box is editable: type a training code (defined in the Training tab) over a driver's day(s) to send them to a course --
         click <b>Save roster changes</b> when done.
       </div>
@@ -1013,9 +1018,15 @@
       d.codes.forEach((rawCode, dayIdx) => {
         const override = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
         if (override) {
-          const cls = override.uncoveredTask ? "roster-cell-uncovered" : "roster-cell-training";
+          const cls = override.uncoveredTask
+            ? "roster-cell-uncovered"
+            : override.restConflict
+            ? "roster-cell-restconflict"
+            : "roster-cell-training";
           const titleText = override.uncoveredTask
             ? `${override.uncoveredTask} still needs a driver -- reassign manually`
+            : override.restConflict
+            ? `Training: ${trainingCourseName(override.code)} -- rest-rule check found an issue, see status message`
             : `Training: ${trainingCourseName(override.code)}`;
           row += cellInputWithInfo(di, dayIdx, override.code, cls, titleText);
           return;
@@ -1121,6 +1132,7 @@
 
     // Pass 2: apply the collected changes.
     let uncoveredCount = 0;
+    const trainedDrivers = new Set();
     edits.forEach(({ di, dayIdx, newValue, stretch }) => {
       const trainingIndex = TRAINING_CATALOG.findIndex((t) => t.code && t.code.toUpperCase() === newValue.toUpperCase());
       if (trainingIndex !== -1) {
@@ -1129,6 +1141,7 @@
         if (result && result.success === false) uncoveredCount += 1;
         t.assignedDrivers = t.assignedDrivers || [];
         if (!t.assignedDrivers.includes(di)) t.assignedDrivers.push(di); // keep the Training tab's chip list in sync
+        trainedDrivers.add(di);
       } else {
         const existingOverride = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
         if (existingOverride) delete TRAINING_OVERRIDES[di][dayIdx];
@@ -1136,11 +1149,18 @@
       }
     });
 
+    const conflictsByDriver = new Map();
+    trainedDrivers.forEach((di) => {
+      const conflicts = flagRestConflictsForDriver(di);
+      if (conflicts.length) conflictsByDriver.set(di, conflicts);
+    });
+
     renderRoster();
     renderDay();
     document.getElementById("status-text").textContent =
       "Roster changes saved" +
       (uncoveredCount ? ` — ${uncoveredCount} trip${uncoveredCount > 1 ? "s" : ""} lost a driver to training and still need one (shown in red).` : ".");
+    notifyRestConflicts(conflictsByDriver);
   }
 
   // ---- Training Settings ----
@@ -1270,7 +1290,7 @@
     if (wasRealTask && stretch.assignedTripCount > 0) stretch.assignedTripCount -= 1;
     delete stretch.assignments[dayIdx];
     TRAINING_OVERRIDES[driverIndex] = TRAINING_OVERRIDES[driverIndex] || {};
-    TRAINING_OVERRIDES[driverIndex][dayIdx] = { code: trainingCode, uncoveredTask: null };
+    TRAINING_OVERRIDES[driverIndex][dayIdx] = { code: trainingCode, uncoveredTask: null, restConflict: false };
     if (wasRealTask) {
       const result = tryBackfillTask(driverIndex, dayIdx, vacated);
       if (!result.success) {
@@ -1279,6 +1299,78 @@
       }
     }
     return { success: true };
+  }
+
+  // Every real train driver is entitled to at least 2 days off after a stretch of at most 6
+  // working days (trip, reserve, or now training all count as "working"). Training can never
+  // stretch this on its own -- it only swaps the activity on a day that was already a workday --
+  // but assigning training is exactly the moment the supervisor is looking at this driver, so
+  // it's the right time to surface a rest-rule problem in the specific stretch being trained on.
+  // Scoped to relevantDays (the days actually being trained) rather than the driver's whole
+  // month -- real rosters are full of one-off irregular stretches for all sorts of unrelated
+  // reasons (leave, absence codes, etc.), and flagging every one of those on every training would
+  // just be noise unconnected to the thing the supervisor is actually doing right now.
+  function restRuleConflictsForDriver(driverIndex, relevantDays) {
+    if (!monthResult) return [];
+    const relevant = new Set(relevantDays || []);
+    const driverStretches = monthResult.allStretches
+      .filter((s) => s.driverIndex === driverIndex)
+      .sort((a, b) => a.days[0] - b.days[0]);
+    const conflicts = [];
+    driverStretches.forEach((stretch, idx) => {
+      const stretchIsRelevant = !relevant.size || stretch.days.some((d) => relevant.has(d));
+      if (stretch.days.length > 6 && stretchIsRelevant) {
+        conflicts.push({ type: "long-stretch", days: stretch.days.slice() });
+      }
+      const next = driverStretches[idx + 1];
+      if (next) {
+        const gapIsRelevant = !relevant.size || stretchIsRelevant || next.days.some((d) => relevant.has(d));
+        const gap = next.days[0] - stretch.days[stretch.days.length - 1] - 1;
+        if (gap < 2 && gapIsRelevant) {
+          conflicts.push({ type: "short-rest", gap, afterDay: stretch.days[stretch.days.length - 1], beforeDay: next.days[0] });
+        }
+      }
+    });
+    return conflicts;
+  }
+
+  function conflictDescription(conflict) {
+    if (conflict.type === "long-stretch") {
+      const first = REAL_DATA.dates[conflict.days[0]];
+      const last = REAL_DATA.dates[conflict.days[conflict.days.length - 1]];
+      return `works ${conflict.days.length} days in a row (${first} to ${last}) -- should be at most 6 before a rest`;
+    }
+    return `only ${conflict.gap} day${conflict.gap === 1 ? "" : "s"} off between ${REAL_DATA.dates[conflict.afterDay]} and ${REAL_DATA.dates[conflict.beforeDay]} -- should be at least 2`;
+  }
+
+  // Re-checks one driver's rest-rule status and flags/unflags their currently-trained days so the
+  // color reflects it (amber instead of the normal purple). Returns any conflicts found, for the
+  // notification shown to the supervisor after saving.
+  function flagRestConflictsForDriver(driverIndex) {
+    const overrides = TRAINING_OVERRIDES[driverIndex] || {};
+    const trainedDays = Object.keys(overrides).map((d) => parseInt(d, 10));
+    const conflicts = restRuleConflictsForDriver(driverIndex, trainedDays);
+    trainedDays.forEach((dayIdx) => {
+      const relevant = conflicts.some((c) =>
+        c.type === "long-stretch" ? c.days.includes(dayIdx) : dayIdx === c.afterDay || dayIdx === c.beforeDay
+      );
+      overrides[dayIdx].restConflict = relevant;
+    });
+    return conflicts;
+  }
+
+  function notifyRestConflicts(conflictsByDriver) {
+    const lines = [];
+    conflictsByDriver.forEach((conflicts, di) => {
+      conflicts.forEach((c) => lines.push(`${driverShortLabel(di)}: ${conflictDescription(c)}`));
+    });
+    if (lines.length) {
+      showAlertModal(
+        "Rest-rule check found an issue while applying this training (every driver is owed at least 2 days off after at most 6 working days):\n\n" +
+          lines.join("\n") +
+          "\n\nThe affected training day(s) are shown in amber -- please review their days off."
+      );
+    }
   }
 
   // Picking/removing a driver only edits this training's own list -- nothing touches the roster
@@ -1345,12 +1437,21 @@
       });
     });
 
+    // 6-on/2-off check: flag/color the newly (and previously) trained days for everyone on the
+    // list, and collect anything worth telling the supervisor about.
+    const conflictsByDriver = new Map();
+    assigned.forEach((di) => {
+      const conflicts = flagRestConflictsForDriver(di);
+      if (conflicts.length) conflictsByDriver.set(di, conflicts);
+    });
+
     renderRoster();
     renderDay();
     document.getElementById("status-text").textContent =
       `Saved ${t.code} to the roster` +
       (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
       (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
+    notifyRestConflicts(conflictsByDriver);
   }
 
   function populateDaySelect() {
@@ -1679,9 +1780,15 @@
         let shiftStartDefault = "";
         let shiftEndDefault = "";
         if (trainingOverride) {
-          const flagClass = trainingOverride.uncoveredTask ? " training-block-uncovered" : "";
+          const flagClass = trainingOverride.uncoveredTask
+            ? " training-block-uncovered"
+            : trainingOverride.restConflict
+            ? " training-block-restconflict"
+            : "";
           const titleText = trainingOverride.uncoveredTask
             ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
+            : trainingOverride.restConflict
+            ? "Rest-rule check found an issue -- see status message"
             : "";
           track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}" onclick="showTrainingInfoModal('${escapeAttr(trainingOverride.code)}')">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
         } else if (isReserve) {

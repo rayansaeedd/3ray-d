@@ -65,8 +65,13 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   a driver by name and picking them (or removing their chip) only edits that training's own list;
   nothing touches the roster until its own **Save** button (next to Remove) is clicked, which
   writes the code into every listed driver's roster across the whole date range in one go
-  (skipping any day they're already off) and clears anyone no longer on the list. A **Roster
-  Settings** tab is scaffolded and awaiting its spec.
+  (skipping any day they're already off) and clears anyone no longer on the list. Saving a
+  training also runs a **6-on/2-off rest check**: every real driver is owed at least 2 days off
+  after at most 6 working days in a row (trip, reserve, or training all count as working), scoped
+  to just the stretch(es) the training actually touches -- if that stretch is too long or the gap
+  to the next one is too short, the affected training day(s) turn amber (instead of the normal
+  purple) and a popup tells the supervisor exactly which driver and which dates need a second
+  look. A **Roster Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the
