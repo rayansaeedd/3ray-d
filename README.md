@@ -55,10 +55,10 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   Day Schedule block -- has a small &#9432; button that pops up the course's full details (dates,
   time window, name, capacity), since a hover tooltip never shows up on a touch device like an
   iPad. Each training also has an **Assigned Drivers** search box in the Training tab -- searching
-  a driver by name and picking them writes that training's code straight into their roster for
-  every day in the course's date range (no manual typing needed), skipping any day they're
-  already off; removing their chip clears it back out. Picking a driver before a schedule even
-  exists is remembered and applied automatically the next time one is generated. A **Roster
+  a driver by name and picking them (or removing their chip) only edits that training's own list;
+  nothing touches the roster until its own **Save** button (next to Remove) is clicked, which
+  writes the code into every listed driver's roster across the whole date range in one go
+  (skipping any day they're already off) and clears anyone no longer on the list. A **Roster
   Settings** tab is scaffolded and awaiting its spec.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #

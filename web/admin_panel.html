@@ -343,6 +343,12 @@
   .driver-chip button {
     background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; padding: 0 3px; font-family: inherit;
   }
+  .training-actions-cell { white-space: nowrap; }
+  .save-training-btn {
+    background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 5px;
+    padding: 3px 10px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; margin-right: 6px;
+  }
+  .save-training-btn:hover { background: var(--olive-dark); }
 
   /* ---------------- view tabs ---------------- */
   .view-tabs { display: flex; gap: 2px; padding: 10px 22px 0; background: var(--olive-dark); }
@@ -551,13 +557,15 @@
     <div id="training-view" style="display:none">
       <div class="settings-note">
         Define a course here (its own <b>Code</b>, date range, time window, name, and seat capacity),
-        then search for drivers by name under <b>Assigned Drivers</b> and pick who's going -- that
-        code gets written straight into their roster for every day in the course's date range, no
-        manual typing required. (Typing the code into a Full Roster cell yourself still works too,
-        for a single day at a time, and keeps this list in sync.) The engine keeps a trained driver
-        off the task schedule for those days. If a driver already had a real trip that day, the
-        engine tries to backfill it from another driver on Reserve that same day/shift; if nobody's
-        free, that box turns red so you know to reassign it by hand.
+        then search for drivers by name under <b>Assigned Drivers</b> and pick everyone going --
+        picking/removing a driver only edits that list. Click this row's own <b>Save</b> button
+        when you're done to write the code into the roster for everyone on the list, across the
+        whole date range (and clear anyone you removed) -- nothing touches the roster until you
+        click it. (Typing the code into a Full Roster cell yourself still works too, for a single
+        day at a time, and keeps this list in sync.) The engine keeps a trained driver off the task
+        schedule for those days. If a driver already had a real trip that day, the engine tries to
+        backfill it from another driver on Reserve that same day/shift; if nobody's free, that box
+        turns red so you know to reassign it by hand.
       </div>
       <div class="settings-toolbar">
         <button class="add-task-btn" type="button" onclick="addTrainingCatalogEntry()">+ Add New Training</button>
@@ -875,14 +883,12 @@
     document.getElementById("status-text").textContent = "Generating…";
     setTimeout(() => {
       monthResult = runMonth(config, seed);
-      const trainingResult = applyAllTrainingAssignments();
       const c = computeCompliance(monthResult.allStretches);
       const uncovered = monthResult.uncoveredTasks.length;
-      const hasWarning = c.violations > 0 || uncovered > 0 || trainingResult.uncovered > 0;
+      const hasWarning = c.violations > 0 || uncovered > 0;
       document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
       document.getElementById("status-text").textContent =
-        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers" +
-        (trainingResult.applied ? ` (${trainingResult.applied} training day${trainingResult.applied > 1 ? "s" : ""} applied${trainingResult.uncovered ? `, ${trainingResult.uncovered} still need a driver` : ""})` : "");
+        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
       document.getElementById("save-btn").disabled = false;
       let complianceHtml =
         "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
@@ -1129,7 +1135,10 @@
           </div>
           <div class="assigned-drivers-chips">${chips || '<span class="no-saved-note">No drivers yet</span>'}</div>
         </td>
-        <td><button class="remove-task-btn" type="button" onclick="removeTrainingCatalogEntry(${i})">Remove</button></td>
+        <td class="training-actions-cell">
+          <button class="save-training-btn" type="button" onclick="applyTrainingToRoster(${i})">Save</button>
+          <button class="remove-task-btn" type="button" onclick="removeTrainingCatalogEntry(${i})">Remove</button>
+        </td>
       </tr>`;
     });
     html += "</tbody>";
@@ -1227,86 +1236,76 @@
     return { success: true };
   }
 
+  // Picking/removing a driver only edits this training's own list -- nothing touches the roster
+  // until its "Save" button is clicked. That's the one deliberate commit point.
   function addDriverToTraining(trainingIndex, driverIndex) {
     const t = TRAINING_CATALOG[trainingIndex];
     if (!t) return;
-    if (!t.code) {
-      showAlertModal("Give this training a Code first, then pick drivers for it.");
-      return;
-    }
     t.assignedDrivers = t.assignedDrivers || [];
     if (!t.assignedDrivers.includes(driverIndex)) t.assignedDrivers.push(driverIndex);
-
-    if (!monthResult) {
-      renderTrainingSettings();
-      document.getElementById("status-text").textContent =
-        `Added ${driverShortLabel(driverIndex)} to ${t.code} -- will apply once you generate a schedule.`;
-      return;
-    }
-
-    let applied = 0, uncovered = 0;
-    dayIndicesInRange(t.startDate, t.endDate)
-      .filter((dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx)
-      .forEach((dayIdx) => {
-        const result = applyTrainingOverride(driverIndex, dayIdx, t.code);
-        if (result) {
-          applied += 1;
-          if (result.success === false) uncovered += 1;
-        }
-      });
-
     renderTrainingSettings();
-    renderRoster();
-    renderDay();
-    document.getElementById("status-text").textContent =
-      `Added ${driverShortLabel(driverIndex)} to ${t.code}` +
-      (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
-      (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
   }
 
   function removeDriverFromTraining(trainingIndex, driverIndex) {
     const t = TRAINING_CATALOG[trainingIndex];
     if (!t) return;
     t.assignedDrivers = (t.assignedDrivers || []).filter((di) => di !== driverIndex);
-
-    if (monthResult) {
-      dayIndicesInRange(t.startDate, t.endDate).forEach((dayIdx) => {
-        const override = TRAINING_OVERRIDES[driverIndex] && TRAINING_OVERRIDES[driverIndex][dayIdx];
-        if (override && t.code && override.code.toUpperCase() === t.code.toUpperCase()) {
-          delete TRAINING_OVERRIDES[driverIndex][dayIdx];
-          const stretch = monthResult.allStretches.find((s) => s.driverIndex === driverIndex && s.days.includes(dayIdx));
-          if (stretch) stretch.assignments[dayIdx] = "RESERVE";
-        }
-      });
-      renderRoster();
-      renderDay();
-    }
     renderTrainingSettings();
   }
 
-  // Re-applies every training's assigned-driver list against a freshly generated schedule, so
-  // picking drivers before ever clicking Generate still takes effect (not just edits made after).
-  function applyAllTrainingAssignments() {
-    if (!monthResult) return { applied: 0, uncovered: 0 };
-    let applied = 0, uncovered = 0;
-    TRAINING_CATALOG.forEach((t) => {
-      if (!t.code || !(t.assignedDrivers || []).length) return;
-      const dayIndices = dayIndicesInRange(t.startDate, t.endDate).filter(
-        (dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx
-      );
-      t.assignedDrivers.forEach((di) => {
-        dayIndices.forEach((dayIdx) => {
-          const existing = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
-          if (existing && existing.code.toUpperCase() === t.code.toUpperCase()) return; // already applied
-          const result = applyTrainingOverride(di, dayIdx, t.code);
-          if (result) {
-            applied += 1;
-            if (result.success === false) uncovered += 1;
-          }
-        });
+  // The Training tab's own Save button: writes this training's current Assigned Drivers list
+  // into the roster across its whole date range, and clears anyone who used to be assigned to
+  // this same code but has since been removed from the list.
+  function applyTrainingToRoster(trainingIndex) {
+    const t = TRAINING_CATALOG[trainingIndex];
+    if (!t) return;
+    if (!t.code) {
+      showAlertModal("Give this training a Code first.");
+      return;
+    }
+    if (!monthResult) {
+      showAlertModal("Generate a schedule first, then click Save to apply this training to it.");
+      return;
+    }
+
+    const dayIndices = dayIndicesInRange(t.startDate, t.endDate).filter(
+      (dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx
+    );
+    const assigned = new Set(t.assignedDrivers || []);
+
+    // clear any driver who used to carry this code but is no longer on the list
+    REAL_DATA.drivers.forEach((d, di) => {
+      if (assigned.has(di)) return;
+      dayIndices.forEach((dayIdx) => {
+        const override = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+        if (override && override.code.toUpperCase() === t.code.toUpperCase()) {
+          delete TRAINING_OVERRIDES[di][dayIdx];
+          const stretch = monthResult.allStretches.find((s) => s.driverIndex === di && s.days.includes(dayIdx));
+          if (stretch) stretch.assignments[dayIdx] = "RESERVE";
+        }
       });
     });
-    return { applied, uncovered };
+
+    // apply everyone currently on the list
+    let applied = 0, uncovered = 0;
+    assigned.forEach((di) => {
+      dayIndices.forEach((dayIdx) => {
+        const existing = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
+        if (existing && existing.code.toUpperCase() === t.code.toUpperCase()) return; // already applied
+        const result = applyTrainingOverride(di, dayIdx, t.code);
+        if (result) {
+          applied += 1;
+          if (result.success === false) uncovered += 1;
+        }
+      });
+    });
+
+    renderRoster();
+    renderDay();
+    document.getElementById("status-text").textContent =
+      `Saved ${t.code} to the roster` +
+      (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
+      (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
   }
 
   function populateDaySelect() {
