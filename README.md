@@ -81,7 +81,18 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   original formulas. A **+ Month** control lets the supervisor add or switch to any calendar
   month with the identical fixed layout; only October 2026 has real day-by-day data today, so
   other months start with every driver row blank, ready to fill in by hand or generate against
-  once populated. A **Roster Settings** tab is scaffolded and awaiting its spec.
+  once populated. The **Roster Settings** tab has four panels reusing that same
+  search-driver-and-Save mechanic from Training: **Vacation**, **Sick Leave**, and **Left
+  Company** each write one fixed real off-duty code (V, S, O respectively, same color as the
+  roster) across a date range -- Left Company only takes a start date and runs through the end
+  of the current month, since someone who's left doesn't come back. **Holiday** is kept separate
+  because a holiday day isn't paid the same as a normal working day (drivers actually working
+  that day get extra pay, a driver on Holiday doesn't) and because a holiday can be one of
+  several types -- a small **Holiday Types** catalog (seeded with EID, code `E`) lets the
+  supervisor add more (e.g. Foundation Day) with their own code, then the Assign Holiday panel
+  picks a type, a date range, and drivers the same way. All four reuse Training's own
+  backfill-a-vacated-trip logic, but skip the 6-on/2-off rest check, since taking time off is
+  the rest, not a violation of it.
 - **`engine/excel_formula_engine_build.py`** — an earlier, formula-only version of this same
   logic built directly into the original Excel workbook (Roster/RosterRaw tabs, a Shuffle #
   cell, a Manual Lock column, hidden helper columns). Kept for reference; superseded by the

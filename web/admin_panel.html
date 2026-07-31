@@ -357,6 +357,18 @@
     background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; padding: 0 3px; font-family: inherit;
   }
   .training-actions-cell { white-space: nowrap; }
+
+  /* ---------------- roster settings: vacation / sick / left company / holiday ---------------- */
+  .status-panels { display: flex; flex-wrap: wrap; gap: 16px; padding: 0 22px 20px; }
+  .status-panel {
+    flex: 1 1 260px; min-width: 240px; max-width: 340px; border: 1px solid var(--panel-border);
+    border-radius: 8px; padding: 14px; background: var(--panel-bg);
+  }
+  .status-panel h2 { margin: 0 0 10px; font-size: 13px; color: var(--olive-dark); }
+  .status-code-tag { font-size: 11px; color: var(--ink-soft); font-weight: 400; }
+  .status-dates-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 10px; }
+  .status-dates-row label { font-size: 11.5px; color: var(--ink-soft); display: flex; flex-direction: column; gap: 4px; }
+  .status-panel .save-training-btn { width: 100%; margin-top: 10px; }
   .save-training-btn {
     background: var(--olive); color: var(--accent-yellow); border: none; border-radius: 5px;
     padding: 3px 10px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: inherit; margin-right: 6px;
@@ -610,12 +622,7 @@
       </div>
     </div>
 
-    <div id="roster-settings-view" style="display:none">
-      <div class="settings-placeholder">
-        <h2>Roster Settings</h2>
-        <p>Waiting on your sketch of what goes here -- nothing built yet.</p>
-      </div>
-    </div>
+    <div id="roster-settings-view" style="display:none"></div>
   </main>
 </div>
 
@@ -825,11 +832,44 @@
   // uncoveredTask is set when a driver was pulled off a real trip to attend training and no
   // Reserve driver could be found to backfill it -- that trip still needs a manual reassignment.
   let TRAINING_CATALOG = [];
+
+  // ---- Roster Settings: Vacation / Sick Leave / Left Company / Holiday ----
+  // All four reuse the exact same override + backfill machinery as Training (applyCodeToRoster /
+  // applyTrainingOverride), just with real off-duty codes instead of a course code, and without
+  // the 6-on/2-off rest check (these are time off, not a different kind of working day).
+  const ROSTER_STATUSES = [
+    { key: "vacation", label: "Vacation", code: "V" },
+    { key: "sick", label: "Sick Leave", code: "S" },
+    { key: "left", label: "Left Company", code: "O", openEnded: true },
+  ];
+  const ROSTER_STATUS_STATE = {
+    vacation: { startDate: "", endDate: "", assignedDrivers: [] },
+    sick: { startDate: "", endDate: "", assignedDrivers: [] },
+    left: { startDate: "", assignedDrivers: [] },
+  };
+  // Holiday has more than one possible code (EID, Foundation Day, ...) -- this is the catalog of
+  // choices, editable/extendable the same way the Training catalog is.
+  let HOLIDAY_TYPES = [{ code: "E", label: "EID" }];
+  let HOLIDAY_ASSIGNMENT = { holidayCode: "E", startDate: "", endDate: "", assignedDrivers: [] };
   let TRAINING_OVERRIDES = {};
 
   function trainingCourseName(code) {
     const t = TRAINING_CATALOG.find((x) => x.code && x.code.toUpperCase() === String(code).toUpperCase());
     return t && t.courseName ? t.courseName : code;
+  }
+
+  function isRealTrainingCode(code) {
+    return TRAINING_CATALOG.some((t) => t.code && t.code.toUpperCase() === String(code).toUpperCase());
+  }
+
+  // Friendly label for a Roster Settings status code shown in a cell's tooltip -- Vacation/Sick
+  // Leave/Left Company have one fixed code each; Holiday codes are whatever's in HOLIDAY_TYPES.
+  function statusLabelForCode(code) {
+    const status = ROSTER_STATUSES.find((s) => s.code.toUpperCase() === String(code).toUpperCase());
+    if (status) return status.label;
+    const holiday = HOLIDAY_TYPES.find((h) => h.code.toUpperCase() === String(code).toUpperCase());
+    if (holiday) return `Holiday: ${holiday.label}`;
+    return code;
   }
 
   // Two editable fields on the otherwise read-only Day Schedule: per-driver, per-day shift
@@ -1215,17 +1255,23 @@
       d.codes.forEach((rawCode, dayIdx) => {
         const override = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
         if (override) {
-          const cls = override.uncoveredTask
-            ? "roster-cell-uncovered"
-            : override.restConflict
-            ? "roster-cell-restconflict"
-            : "roster-cell-training";
-          const titleText = override.uncoveredTask
-            ? `${override.uncoveredTask} still needs a driver -- reassign manually`
-            : override.restConflict
-            ? `Training: ${trainingCourseName(override.code)} -- rest-rule check found an issue, see status message`
-            : `Training: ${trainingCourseName(override.code)}`;
-          row += cellInputWithInfo(di, dayIdx, override.code, cls, titleText);
+          if (override.uncoveredTask) {
+            const titleText = `${override.uncoveredTask} still needs a driver -- reassign manually`;
+            row += isRealTrainingCode(override.code)
+              ? cellInputWithInfo(di, dayIdx, override.code, "roster-cell-uncovered", titleText)
+              : cellInput(di, dayIdx, override.code, "roster-cell-uncovered", titleText);
+            return;
+          }
+          if (isRealTrainingCode(override.code)) {
+            const titleText = override.restConflict
+              ? `Training: ${trainingCourseName(override.code)} -- rest-rule check found an issue, see status message`
+              : `Training: ${trainingCourseName(override.code)}`;
+            row += cellInputWithInfo(di, dayIdx, override.code, override.restConflict ? "roster-cell-restconflict" : "roster-cell-training", titleText);
+            return;
+          }
+          // Vacation/Sick Leave/Left Company/Holiday -- colored the same as the matching real
+          // off-duty code, not the generic training purple.
+          row += cellInput(di, dayIdx, override.code, "roster-cell-off", statusLabelForCode(override.code), codeColorStyle(override.code));
           return;
         }
         if ((rawCode && OFF_CODES.has(rawCode)) || rawCode === "830/7T") {
@@ -1618,29 +1664,30 @@
   // The Training tab's own Save button: writes this training's current Assigned Drivers list
   // into the roster across its whole date range, and clears anyone who used to be assigned to
   // this same code but has since been removed from the list.
-  function applyTrainingToRoster(trainingIndex) {
-    const t = TRAINING_CATALOG[trainingIndex];
-    if (!t) return;
-    if (!t.code) {
-      showAlertModal("Give this training a Code first.");
-      return;
-    }
+  // Shared by Training's per-row Save and the Roster Settings status panels (Vacation, Sick
+  // Leave, Left Company, Holiday): writes `code` into every driver in `assignedDrivers`'
+  // roster across [startDate, endDate], clearing anyone previously carrying that same code in
+  // that range who's no longer on the list. `checkRest` runs the 6-on/2-off check afterward --
+  // only meaningful for codes that still count as "working" (Training); true off-statuses
+  // (Vacation/Sick/Left Company/Holiday) skip it, since taking a day off is the rest, not a
+  // violation of it.
+  function applyCodeToRoster(code, label, startDate, endDate, assignedDrivers, checkRest) {
     if (!monthResult) {
-      showAlertModal("Generate a schedule first, then click Save to apply this training to it.");
+      showAlertModal("Generate a schedule first, then click Save to apply this to it.");
       return;
     }
 
-    const dayIndices = dayIndicesInRange(t.startDate, t.endDate).filter(
+    const dayIndices = dayIndicesInRange(startDate, endDate).filter(
       (dayIdx) => dayIdx >= monthResult.startIdx && dayIdx <= monthResult.endIdx
     );
-    const assigned = new Set(t.assignedDrivers || []);
+    const assigned = new Set(assignedDrivers || []);
 
     // clear any driver who used to carry this code but is no longer on the list
     REAL_DATA.drivers.forEach((d, di) => {
       if (assigned.has(di)) return;
       dayIndices.forEach((dayIdx) => {
         const override = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
-        if (override && override.code.toUpperCase() === t.code.toUpperCase()) {
+        if (override && override.code.toUpperCase() === code.toUpperCase()) {
           delete TRAINING_OVERRIDES[di][dayIdx];
           const stretch = monthResult.allStretches.find((s) => s.driverIndex === di && s.days.includes(dayIdx));
           if (stretch) stretch.assignments[dayIdx] = "RESERVE";
@@ -1653,8 +1700,8 @@
     assigned.forEach((di) => {
       dayIndices.forEach((dayIdx) => {
         const existing = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
-        if (existing && existing.code.toUpperCase() === t.code.toUpperCase()) return; // already applied
-        const result = applyTrainingOverride(di, dayIdx, t.code);
+        if (existing && existing.code.toUpperCase() === code.toUpperCase()) return; // already applied
+        const result = applyTrainingOverride(di, dayIdx, code);
         if (result) {
           applied += 1;
           if (result.success === false) uncovered += 1;
@@ -1662,21 +1709,238 @@
       });
     });
 
-    // 6-on/2-off check: flag/color the newly (and previously) trained days for everyone on the
-    // list, and collect anything worth telling the supervisor about.
+    // 6-on/2-off check: only for codes that still count as "working" (Training)
     const conflictsByDriver = new Map();
-    assigned.forEach((di) => {
-      const conflicts = flagRestConflictsForDriver(di);
-      if (conflicts.length) conflictsByDriver.set(di, conflicts);
-    });
+    if (checkRest) {
+      assigned.forEach((di) => {
+        const conflicts = flagRestConflictsForDriver(di);
+        if (conflicts.length) conflictsByDriver.set(di, conflicts);
+      });
+    }
 
     renderRoster();
     renderDay();
     document.getElementById("status-text").textContent =
-      `Saved ${t.code} to the roster` +
+      `Saved ${label} to the roster` +
       (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
       (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
     notifyRestConflicts(conflictsByDriver);
+  }
+
+  function applyTrainingToRoster(trainingIndex) {
+    const t = TRAINING_CATALOG[trainingIndex];
+    if (!t) return;
+    if (!t.code) {
+      showAlertModal("Give this training a Code first.");
+      return;
+    }
+    applyCodeToRoster(t.code, t.code, t.startDate, t.endDate, t.assignedDrivers, true);
+  }
+
+  // ---- Roster Settings: Vacation / Sick Leave / Left Company / Holiday ----
+  function getStatusAssignedList(targetKey) {
+    return targetKey === "holiday" ? HOLIDAY_ASSIGNMENT.assignedDrivers : ROSTER_STATUS_STATE[targetKey].assignedDrivers;
+  }
+
+  function onStatusDriverSearchInput(targetKey, query) {
+    const resultsEl = document.getElementById(`status-search-results-${targetKey}`);
+    if (!resultsEl) return;
+    const q = query.trim().toLowerCase();
+    if (!q) {
+      resultsEl.innerHTML = "";
+      resultsEl.classList.remove("open");
+      return;
+    }
+    const matches = REAL_DATA.drivers
+      .map((d, di) => ({ di, name: d.name }))
+      .filter((d) => d.name.toLowerCase().includes(q))
+      .slice(0, 8);
+    resultsEl.innerHTML = matches.length
+      ? matches
+          .map(
+            (d) =>
+              `<div class="driver-search-item" onmousedown="event.preventDefault(); addDriverToStatus('${targetKey}', ${d.di})">${escapeAttr(d.name)}</div>`
+          )
+          .join("")
+      : `<div class="driver-search-empty">No matching driver</div>`;
+    resultsEl.classList.add("open");
+  }
+
+  function closeStatusDriverSearch(targetKey) {
+    const el = document.getElementById(`status-search-results-${targetKey}`);
+    if (el) {
+      el.innerHTML = "";
+      el.classList.remove("open");
+    }
+  }
+
+  function addDriverToStatus(targetKey, driverIndex) {
+    const list = getStatusAssignedList(targetKey);
+    if (!list.includes(driverIndex)) list.push(driverIndex);
+    renderRosterSettings();
+  }
+
+  function removeDriverFromStatus(targetKey, driverIndex) {
+    const list = getStatusAssignedList(targetKey);
+    const idx = list.indexOf(driverIndex);
+    if (idx !== -1) list.splice(idx, 1);
+    renderRosterSettings();
+  }
+
+  function updateStatusDate(targetKey, field, value) {
+    ROSTER_STATUS_STATE[targetKey][field] = value;
+  }
+
+  function updateHolidayAssignment(field, value) {
+    HOLIDAY_ASSIGNMENT[field] = value;
+  }
+
+  function applyStatusToRoster(targetKey) {
+    const meta = ROSTER_STATUSES.find((s) => s.key === targetKey);
+    const state = ROSTER_STATUS_STATE[targetKey];
+    if (!state.startDate) {
+      showAlertModal(`Pick a start date for ${meta.label} first.`);
+      return;
+    }
+    const endDate = meta.openEnded ? REAL_DATA.dates[REAL_DATA.dates.length - 1] : state.endDate || state.startDate;
+    applyCodeToRoster(meta.code, meta.label, state.startDate, endDate, state.assignedDrivers, false);
+    renderRosterSettings();
+  }
+
+  function applyHolidayToRoster() {
+    const h = HOLIDAY_ASSIGNMENT;
+    const type = HOLIDAY_TYPES.find((t) => t.code === h.holidayCode);
+    if (!type) {
+      showAlertModal("Add a Holiday Type first.");
+      return;
+    }
+    if (!h.startDate) {
+      showAlertModal("Pick a start date for the holiday first.");
+      return;
+    }
+    applyCodeToRoster(type.code, `Holiday (${type.label})`, h.startDate, h.endDate || h.startDate, h.assignedDrivers, false);
+    renderRosterSettings();
+  }
+
+  function addHolidayType() {
+    HOLIDAY_TYPES.push({ code: "", label: "" });
+    renderRosterSettings();
+  }
+
+  function removeHolidayType(index) {
+    HOLIDAY_TYPES.splice(index, 1);
+    if (HOLIDAY_ASSIGNMENT.holidayCode && !HOLIDAY_TYPES.some((t) => t.code === HOLIDAY_ASSIGNMENT.holidayCode)) {
+      HOLIDAY_ASSIGNMENT.holidayCode = HOLIDAY_TYPES[0] ? HOLIDAY_TYPES[0].code : "";
+    }
+    renderRosterSettings();
+  }
+
+  function updateHolidayType(index, field, value) {
+    HOLIDAY_TYPES[index][field] = value;
+    renderRosterSettings();
+  }
+
+  function renderRosterSettings() {
+    const container = document.getElementById("roster-settings-view");
+    if (!container) return;
+
+    const panelHtml = (key, label) => {
+      const state = ROSTER_STATUS_STATE[key];
+      const meta = ROSTER_STATUSES.find((s) => s.key === key);
+      const chips = state.assignedDrivers
+        .map(
+          (di) =>
+            `<span class="driver-chip">${escapeAttr(driverShortLabel(di))}<button type="button" onclick="removeDriverFromStatus('${key}', ${di})">&times;</button></span>`
+        )
+        .join("");
+      return `
+      <div class="status-panel">
+        <h2>${label} <span class="status-code-tag">(${escapeAttr(meta.code)})</span></h2>
+        <div class="status-dates-row">
+          <label>Start <input type="date" value="${escapeAttr(state.startDate)}" onchange="updateStatusDate('${key}', 'startDate', this.value)" /></label>
+          ${
+            meta.openEnded
+              ? '<span class="field-note">Runs through the end of the current month.</span>'
+              : `<label>End <input type="date" value="${escapeAttr(state.endDate)}" onchange="updateStatusDate('${key}', 'endDate', this.value)" /></label>`
+          }
+        </div>
+        <div class="driver-picker">
+          <input type="text" class="driver-search-input" placeholder="Search driver name..."
+            oninput="onStatusDriverSearchInput('${key}', this.value)"
+            onfocus="onStatusDriverSearchInput('${key}', this.value)"
+            onblur="setTimeout(() => closeStatusDriverSearch('${key}'), 150)" />
+          <div class="driver-search-results" id="status-search-results-${key}"></div>
+        </div>
+        <div class="assigned-drivers-chips">${chips || '<span class="no-saved-note">No drivers yet</span>'}</div>
+        <button class="save-training-btn" type="button" onclick="applyStatusToRoster('${key}')">Save</button>
+      </div>`;
+    };
+
+    const holidayTypesRows = HOLIDAY_TYPES.map(
+      (t, i) => `
+      <tr>
+        <td><input value="${escapeAttr(t.code)}" onchange="updateHolidayType(${i}, 'code', this.value)" style="width:70px" /></td>
+        <td><input value="${escapeAttr(t.label)}" onchange="updateHolidayType(${i}, 'label', this.value)" /></td>
+        <td><button class="remove-task-btn" type="button" onclick="removeHolidayType(${i})">Remove</button></td>
+      </tr>`
+    ).join("");
+
+    const holidayOptions = HOLIDAY_TYPES.map(
+      (t) => `<option value="${escapeAttr(t.code)}" ${t.code === HOLIDAY_ASSIGNMENT.holidayCode ? "selected" : ""}>${escapeAttr(t.label)} (${escapeAttr(t.code)})</option>`
+    ).join("");
+    const holidayChips = HOLIDAY_ASSIGNMENT.assignedDrivers
+      .map(
+        (di) =>
+          `<span class="driver-chip">${escapeAttr(driverShortLabel(di))}<button type="button" onclick="removeDriverFromStatus('holiday', ${di})">&times;</button></span>`
+      )
+      .join("");
+
+    container.innerHTML = `
+      <div class="settings-note">
+        Mark drivers as on <b>Vacation</b>, <b>Sick Leave</b>, or having <b>Left the Company</b> --
+        each writes the same off-duty code already used on the roster (V, S, O respectively), in
+        the same color. <b>Holiday</b> is separate since a holiday can be one of several types
+        (EID, Foundation Day, or any other you add) -- unlike a normal working day (paid extra),
+        a driver marked Holiday isn't, so it's tracked apart from a plain day off. Picking drivers
+        only builds a list; nothing touches the roster until each panel's own <b>Save</b> button
+        is clicked (same as Training).
+      </div>
+      <div class="status-panels">
+        ${panelHtml("vacation", "Vacation")}
+        ${panelHtml("sick", "Sick Leave")}
+        ${panelHtml("left", "Left Company")}
+      </div>
+      <div class="settings-toolbar">
+        <h2 style="margin:0;font-size:13px;color:var(--olive-dark);">Holiday Types</h2>
+      </div>
+      <div class="settings-toolbar">
+        <button class="add-task-btn" type="button" onclick="addHolidayType()">+ Add Holiday Type</button>
+      </div>
+      <div class="settings-scroll">
+        <table class="settings-table">
+          <thead><tr><th>Code</th><th>Label</th><th></th></tr></thead>
+          <tbody>${holidayTypesRows}</tbody>
+        </table>
+      </div>
+      <div class="status-panels">
+        <div class="status-panel">
+          <h2>Assign Holiday</h2>
+          <div class="status-dates-row">
+            <label>Type <select onchange="updateHolidayAssignment('holidayCode', this.value)">${holidayOptions}</select></label>
+            <label>Start <input type="date" value="${escapeAttr(HOLIDAY_ASSIGNMENT.startDate)}" onchange="updateHolidayAssignment('startDate', this.value)" /></label>
+            <label>End <input type="date" value="${escapeAttr(HOLIDAY_ASSIGNMENT.endDate)}" onchange="updateHolidayAssignment('endDate', this.value)" /></label>
+          </div>
+          <div class="driver-picker">
+            <input type="text" class="driver-search-input" placeholder="Search driver name..."
+              oninput="onStatusDriverSearchInput('holiday', this.value)"
+              onfocus="onStatusDriverSearchInput('holiday', this.value)"
+              onblur="setTimeout(() => closeStatusDriverSearch('holiday'), 150)" />
+            <div class="driver-search-results" id="status-search-results-holiday"></div>
+          </div>
+          <div class="assigned-drivers-chips">${holidayChips || '<span class="no-saved-note">No drivers yet</span>'}</div>
+          <button class="save-training-btn" type="button" onclick="applyHolidayToRoster()">Save</button>
+        </div>
+      </div>`;
   }
 
   function populateDaySelect() {
@@ -1871,6 +2135,7 @@
       globalOrigin: GLOBAL_ORIGIN,
       taskCatalog: JSON.parse(JSON.stringify(TASK_CATALOG)),
       trainingCatalog: JSON.parse(JSON.stringify(TRAINING_CATALOG)),
+      holidayTypes: JSON.parse(JSON.stringify(HOLIDAY_TYPES)),
       trainingOverrides: JSON.parse(JSON.stringify(TRAINING_OVERRIDES)),
       shiftStartOverrides: JSON.parse(JSON.stringify(SHIFT_START_OVERRIDES)),
       shiftEndOverrides: JSON.parse(JSON.stringify(SHIFT_END_OVERRIDES)),
@@ -1907,6 +2172,9 @@
     entry.taskCatalog.forEach((t) => TASK_CATALOG.push(t));
     TRAINING_CATALOG.length = 0;
     (entry.trainingCatalog || []).forEach((t) => TRAINING_CATALOG.push(t));
+    if (entry.holidayTypes && entry.holidayTypes.length) {
+      HOLIDAY_TYPES = entry.holidayTypes;
+    }
 
     if (entry.monthKey && entry.monthSnapshot) {
       MONTHS[entry.monthKey] = entry.monthSnapshot;
@@ -1936,6 +2204,7 @@
     renderOriginBadge();
     renderTaskSettings();
     renderTrainingSettings();
+    renderRosterSettings();
     populateDaySelect();
     renderDay();
     renderRoster();
@@ -2030,17 +2299,27 @@
         let shiftStartDefault = "";
         let shiftEndDefault = "";
         if (trainingOverride) {
-          const flagClass = trainingOverride.uncoveredTask
-            ? " training-block-uncovered"
-            : trainingOverride.restConflict
-            ? " training-block-restconflict"
-            : "";
-          const titleText = trainingOverride.uncoveredTask
-            ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
-            : trainingOverride.restConflict
-            ? "Rest-rule check found an issue -- see status message"
-            : "";
-          track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}" onclick="showTrainingInfoModal('${escapeAttr(trainingOverride.code)}')">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
+          if (isRealTrainingCode(trainingOverride.code)) {
+            const flagClass = trainingOverride.uncoveredTask
+              ? " training-block-uncovered"
+              : trainingOverride.restConflict
+              ? " training-block-restconflict"
+              : "";
+            const titleText = trainingOverride.uncoveredTask
+              ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
+              : trainingOverride.restConflict
+              ? "Rest-rule check found an issue -- see status message"
+              : "";
+            track = `<div class="training-block${flagClass}" title="${escapeAttr(titleText)}" onclick="showTrainingInfoModal('${escapeAttr(trainingOverride.code)}')">${escapeAttr(trainingOverride.code)} &middot; ${escapeAttr(trainingCourseName(trainingOverride.code))}<div class="block-baseline"></div></div>`;
+          } else {
+            // Vacation/Sick Leave/Left Company/Holiday -- styled like a real off-duty code block
+            const c = CODE_COLORS[trainingOverride.code] || DEFAULT_CODE_COLOR;
+            const flagStyle = trainingOverride.uncoveredTask ? `background:var(--bad);color:#fff;border-color:var(--bad);` : `background:${c.bg};color:${c.fg};border-color:${c.bg};`;
+            const titleText = trainingOverride.uncoveredTask
+              ? `${trainingOverride.uncoveredTask} still needs a driver -- reassign manually`
+              : statusLabelForCode(trainingOverride.code);
+            track = `<div class="training-block" style="${escapeAttr(flagStyle)}" title="${escapeAttr(titleText)}">${escapeAttr(statusLabelForCode(trainingOverride.code))}<div class="block-baseline"></div></div>`;
+          }
         } else if (isReserve) {
           track = `<div class="reserve-block">RESERVE<div class="block-baseline"></div></div>`;
         } else {
@@ -2262,5 +2541,6 @@
   renderRoster();
   renderTaskSettings();
   renderTrainingSettings();
+  renderRosterSettings();
   renderSavedSchedulesList();
 </script>
