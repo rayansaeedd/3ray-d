@@ -172,6 +172,17 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   which produces visibly wrong numbers (negative "Staff Per Day", `#DIV/0!`) in the source itself.
   That block wasn't ported in as-is to avoid baking in those bugs -- say the word if you want it
   added with the ranges corrected instead.
+- **Admin sign-in gate** — a full-screen password prompt now covers the tool until the right
+  password is entered (a **Sign Out** button next to Show/Hide Conditions ends the session again).
+  The password lives in one place in the code (`ADMIN_PASSWORD` near the top of the script) --
+  change it there and only share the new one with whoever should have access. Being honest about
+  what this does and doesn't do: it's a plain client-side check with no backend, so it stops
+  casual/accidental access via the link, but it does **not** hide this page's contents -- including
+  the embedded driver data -- from someone who deliberately views the page's source, since the
+  whole file still ships to the browser regardless of the password. A real per-person login that
+  actually protects the data would need a backend server (accounts, sessions, access logs), which
+  is a much bigger build than this single HTML file -- worth doing later if that stronger guarantee
+  becomes a requirement.
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 - **Training capacity isn't enforced** — the Training catalog's Capacity field is informational

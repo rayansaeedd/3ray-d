@@ -386,6 +386,30 @@
   .view-tab:focus-visible { outline: 2px solid var(--accent-yellow); outline-offset: -2px; }
   .view-tab.conditions-toggle { margin-left: auto; opacity: 0.85; }
   .view-tab.conditions-toggle:hover { opacity: 1; }
+  .view-tab.sign-out-btn { opacity: 0.65; }
+  .view-tab.sign-out-btn:hover { opacity: 1; }
+
+  .auth-gate-overlay {
+    position: fixed; inset: 0; background: var(--bg); display: flex;
+    align-items: center; justify-content: center; z-index: 2000; padding: 20px;
+  }
+  .auth-gate-box {
+    background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 28px; max-width: 340px; width: 100%; box-shadow: var(--shadow); text-align: center;
+  }
+  .auth-gate-title { font-size: 17px; font-weight: 700; color: var(--olive-dark); margin-bottom: 4px; }
+  .auth-gate-sub { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 16px; }
+  .auth-gate-input {
+    width: 100%; font-size: 14px; padding: 9px 11px; border-radius: 6px; border: 1px solid var(--input-border);
+    background: var(--input-bg); color: var(--ink); font-family: inherit; margin-bottom: 10px; box-sizing: border-box;
+    text-align: center;
+  }
+  .auth-gate-error { font-size: 12px; color: var(--bad); margin-bottom: 10px; }
+  .auth-gate-btn {
+    width: 100%; border-radius: 6px; padding: 9px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+    font-family: inherit; border: 1.5px solid var(--olive); background: var(--olive); color: var(--accent-yellow);
+  }
+  .auth-gate-btn:hover { background: var(--olive-dark); }
 
   /* ---------------- roster view ---------------- */
   .roster-scroll { overflow: auto; max-height: 70vh; }
@@ -526,6 +550,7 @@
       <button class="view-tab" id="tab-training" type="button" onclick="showView('training')">Training</button>
       <button class="view-tab" id="tab-roster-settings" type="button" onclick="showView('roster-settings')">Roster Settings</button>
       <button class="view-tab conditions-toggle" id="conditions-toggle-btn" type="button" onclick="toggleConditions()">Show Conditions</button>
+      <button class="view-tab sign-out-btn" id="sign-out-btn" type="button" onclick="signOut()">Sign Out</button>
     </div>
 
     <div id="day-view">
@@ -624,6 +649,16 @@
 
     <div id="roster-settings-view" style="display:none"></div>
   </main>
+</div>
+
+<div class="auth-gate-overlay" id="auth-gate-overlay">
+  <div class="auth-gate-box">
+    <div class="auth-gate-title">Driver Scheduling Engine</div>
+    <div class="auth-gate-sub">Enter the admin password to continue.</div>
+    <input type="password" class="auth-gate-input" id="auth-gate-input" autocomplete="current-password" />
+    <div class="auth-gate-error" id="auth-gate-error" style="display:none">Incorrect password -- try again.</div>
+    <button type="button" class="auth-gate-btn" id="auth-gate-btn" onclick="attemptSignIn()">Sign in</button>
+  </div>
 </div>
 
 <div class="modal-overlay" id="modal-overlay">
@@ -2096,6 +2131,48 @@
   document.getElementById("modal-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); document.getElementById("modal-ok-btn").click(); }
     if (e.key === "Escape") closeModal(null);
+  });
+
+  // ---- Admin sign-in gate ----
+  // This is a static, single-file, serverless tool -- there's no backend to hold real per-person
+  // accounts. This shared password only keeps out casual/accidental access via the link; it does
+  // NOT hide this page's contents (including the embedded driver data) from someone who
+  // deliberately views the page source, since everything still ships to the browser either way.
+  // Change the password below and share the new one only with whoever should have access.
+  const ADMIN_PASSWORD = "3ray2026";
+  const AUTH_KEY = "driverSchedulingEngine.authenticated";
+
+  function attemptSignIn() {
+    const input = document.getElementById("auth-gate-input");
+    const error = document.getElementById("auth-gate-error");
+    if (input.value === ADMIN_PASSWORD) {
+      try { localStorage.setItem(AUTH_KEY, "1"); } catch (e) {}
+      document.getElementById("auth-gate-overlay").style.display = "none";
+      error.style.display = "none";
+      input.value = "";
+    } else {
+      error.style.display = "";
+      input.value = "";
+      input.focus();
+    }
+  }
+
+  function signOut() {
+    try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
+    document.getElementById("auth-gate-overlay").style.display = "flex";
+    const input = document.getElementById("auth-gate-input");
+    input.value = "";
+    input.focus();
+  }
+
+  (function initAuthGate() {
+    let authed = false;
+    try { authed = localStorage.getItem(AUTH_KEY) === "1"; } catch (e) {}
+    if (authed) document.getElementById("auth-gate-overlay").style.display = "none";
+  })();
+
+  document.getElementById("auth-gate-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); attemptSignIn(); }
   });
 
   // ---- Auto-persistence: the whole live working state, so a refresh never loses work ----
