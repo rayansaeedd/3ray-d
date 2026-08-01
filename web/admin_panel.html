@@ -2953,6 +2953,20 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
     renderDay();
   }
 
-  setInterval(persistLiveState, 4000);
+  // Autosave on every real change, not just on a timer -- a click/input/change anywhere in the
+  // app (editing a cell, typing a task time, picking a driver, hitting Generate, adding a
+  // month...) saves right after, so refreshing a split second later can never race ahead of the
+  // save and lose it. Deliberately bubble-phase (not capture): these fire on document, an
+  // ancestor of the actual input/button, so a capture-phase listener there would run *before*
+  // the element's own inline onclick/onchange handler had a chance to mutate state, persisting
+  // the change *before* it happened instead of after. Bubble phase runs once that inline handler
+  // has already finished. The interval below is just a safety net for anything this somehow
+  // misses (e.g. state that changes on its own via a setTimeout); beforeunload is the last-resort
+  // flush on close/navigate.
+  document.addEventListener("input", persistLiveState);
+  document.addEventListener("change", persistLiveState);
+  document.addEventListener("click", persistLiveState);
+
+  setInterval(persistLiveState, 10000);
   window.addEventListener("beforeunload", persistLiveState);
 </script>

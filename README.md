@@ -149,9 +149,11 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 - **Persistence** — two layers now. (1) **Auto-save**: the whole live working state (task/training
   catalogs, holiday types, driver identity edits, every month's data, the generated schedule and
   its compliance numbers, all roster overrides, Conditions inputs, and whether the Conditions
-  panel is open) is written to the browser's local storage every few seconds and on page close, and
-  restored automatically the moment the page loads again -- refreshing or closing the tab no longer
-  loses in-progress work. (2) **Saved Schedules**: a generated schedule can still be explicitly
+  panel is open) is written to the browser's local storage after every edit -- typing in a field,
+  picking a driver, clicking Generate or Save, anything -- and restored automatically the moment
+  the page loads again. There's no explicit save step to remember: refresh the page, close the tab,
+  or close the link entirely and come back later, and everything is exactly how it was left. (2)
+  **Saved Schedules**: a generated schedule can still be explicitly
   saved (named by its date range, e.g. "October 1 to October 7") via the **Save this schedule**
   button, and reloaded/deleted later from its red card in the Conditions sidebar, for keeping
   several named schedules (different weeks, a full month, etc.) side by side. Both are per-browser,
