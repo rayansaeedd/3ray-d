@@ -127,6 +127,30 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
 | Minimum rest between shifts | 12 hours | Yes |
 | Task coverage | Mandatory | Not configurable — a real train always needs a driver |
 
+## Fixed in a recent bug audit
+
+- **Compliance numbers could be wrong after changing a Condition without regenerating** — the
+  "stickiness violations" count was quietly re-computed against whatever the Conditions inputs
+  currently say, not what the schedule was actually generated with. Simply typing a new "Stay on
+  the same type for" value (with no Generate click) could make a compliant schedule suddenly show
+  dozens of fake violations, or hide real ones. Now it always grades against the config the
+  schedule was actually built with.
+- **A custom Schedule date range didn't survive a refresh** — auto-persistence restored the
+  saved start/end dates, but a later init step was unconditionally resetting those two inputs
+  back to the whole month right afterward. A narrowed range (e.g. "just this week") would silently
+  widen back to the full month on reload, risking an accidental full-month regenerate.
+- **Overlapping Training/Vacation/Sick Leave/Left Company/Holiday assignments could silently
+  overwrite each other** — assigning the same driver to two of these for overlapping days, then
+  re-saving either one later (even for an unrelated reason, like adding a different driver to the
+  list), would silently replace the other status on the shared days with no indication anything
+  changed. Saving still applies last-write-wins for genuinely overlapping days (deciding which one
+  should win isn't something the tool can know), but it now pops up a clear warning listing exactly
+  which driver/day combinations got overwritten and what they used to say, so this never happens
+  invisibly.
+- **A driver's name wasn't defensively escaped in the Full Roster table** — every other
+  driver-derived field already was; this was a latent inconsistency (low real-world risk today,
+  since names aren't directly editable) rather than something that ever produced wrong output.
+
 ## Known gaps / not yet built
 
 - **Driver HR database** (vacation/sick/delay/absence-report history) — the user confirmed this

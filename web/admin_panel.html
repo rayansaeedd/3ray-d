@@ -1136,7 +1136,12 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
     return { allStretches, tasksByShift, config, uncoveredTasks, tasks, startIdx, endIdx, numDays: endIdx - startIdx + 1 };
   }
 
-  function computeCompliance(allStretches) {
+  // stickyMin here MUST be the value the schedule was actually generated with
+  // (monthResult.config.stickyMin), not a fresh getConfig() read -- otherwise just changing the
+  // "Stay on the same type for" input after generating (without clicking Generate again) would
+  // instantly relabel a compliant schedule as having violations, or hide real ones, with nothing
+  // about the schedule itself having changed.
+  function computeCompliance(allStretches, stickyMin) {
     const byDriver = {};
     allStretches.forEach((s) => (byDriver[s.driverIndex] = byDriver[s.driverIndex] || []).push(s));
     let total = 0, exact = 0, violations = 0;
@@ -1149,7 +1154,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
         if (i > 0 && list[i - 1].shiftType !== s.shiftType) {
           let run = 1, j = i - 1;
           while (j > 0 && list[j - 1].shiftType === list[j].shiftType) { run += 1; j -= 1; }
-          if (run < getConfig().stickyMin) violations += 1;
+          if (run < stickyMin) violations += 1;
         }
       });
     });
@@ -1158,7 +1163,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
 
   // Shared by generate() and restoring a previous session's monthResult on page load.
   function refreshComplianceDisplay(statusPrefix) {
-    const c = computeCompliance(monthResult.allStretches);
+    const c = computeCompliance(monthResult.allStretches, monthResult.config.stickyMin);
     const uncovered = monthResult.uncoveredTasks.length;
     const hasWarning = c.violations > 0 || uncovered > 0;
     document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
@@ -1347,7 +1352,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
       `onchange="updateManualTallyField(${di}, '${field}', this.value)" /></td>`;
 
     drivers.forEach((d, di) => {
-      let row = `<tr><td class="roster-name-cell">${d.name}</td>`;
+      let row = `<tr><td class="roster-name-cell">${escapeAttr(d.name)}</td>`;
 
       row += identityInput(di, "phone1", d.phone1 || "");
       row += identityInput(di, "phone2", d.phone2 || "");
@@ -1492,7 +1497,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
     document.getElementById("status-text").textContent =
       "Roster changes saved" +
       (uncoveredCount ? ` — ${uncoveredCount} trip${uncoveredCount > 1 ? "s" : ""} lost a driver to training and still need one (shown in red).` : ".");
-    notifyRestConflicts(conflictsByDriver);
+    notifyRosterApplyIssues(conflictsByDriver, []);
   }
 
   // ---- Training Settings ----
@@ -1691,18 +1696,35 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
     return conflicts;
   }
 
-  function notifyRestConflicts(conflictsByDriver) {
-    const lines = [];
+  // Combines the rest-rule warning with the overwritten-status warning into one alert -- the
+  // modal only tracks one pending message at a time, so firing two showAlertModal() calls back
+  // to back would silently drop the first one instead of queuing it.
+  function notifyRosterApplyIssues(conflictsByDriver, overwrittenConflicts) {
+    const restLines = [];
     conflictsByDriver.forEach((conflicts, di) => {
-      conflicts.forEach((c) => lines.push(`${driverShortLabel(di)}: ${conflictDescription(c)}`));
+      conflicts.forEach((c) => restLines.push(`${driverShortLabel(di)}: ${conflictDescription(c)}`));
     });
-    if (lines.length) {
-      showAlertModal(
-        "Rest-rule check found an issue while applying this training (every driver is owed at least 2 days off after at most 6 working days):\n\n" +
-          lines.join("\n") +
-          "\n\nThe affected training day(s) are shown in amber -- please review their days off."
-      );
+    const overwriteLines = (overwrittenConflicts || [])
+      .slice(0, 10)
+      .map((c) => `${driverShortLabel(c.di)} on ${REAL_DATA.dates[c.dayIdx]}: replaced "${c.previousCode}"`);
+
+    if (!restLines.length && !overwriteLines.length) return;
+    let message = "";
+    if (restLines.length) {
+      message +=
+        "Rest-rule check found an issue while applying this (every driver is owed at least 2 days off after at most 6 working days):\n\n" +
+        restLines.join("\n") +
+        "\n\nThe affected day(s) are shown in amber -- please review their days off.";
     }
+    if (overwriteLines.length) {
+      if (message) message += "\n\n---\n\n";
+      message +=
+        "Heads up: these day(s) already had a DIFFERENT training/status on them, which this just replaced -- " +
+        "double-check this is what you meant:\n\n" +
+        overwriteLines.join("\n") +
+        (overwrittenConflicts.length > 10 ? `\n...and ${overwrittenConflicts.length - 10} more.` : "");
+    }
+    showAlertModal(message);
   }
 
   // Picking/removing a driver only edits this training's own list -- nothing touches the roster
@@ -1758,10 +1780,12 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
 
     // apply everyone currently on the list
     let applied = 0, uncovered = 0;
+    const overwrittenConflicts = []; // { di, dayIdx, previousCode } -- a *different* status/training already covered this day
     assigned.forEach((di) => {
       dayIndices.forEach((dayIdx) => {
         const existing = TRAINING_OVERRIDES[di] && TRAINING_OVERRIDES[di][dayIdx];
         if (existing && existing.code.toUpperCase() === code.toUpperCase()) return; // already applied
+        if (existing) overwrittenConflicts.push({ di, dayIdx, previousCode: existing.code });
         const result = applyTrainingOverride(di, dayIdx, code);
         if (result) {
           applied += 1;
@@ -1785,7 +1809,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
       `Saved ${label} to the roster` +
       (applied ? ` — ${applied} day${applied > 1 ? "s" : ""} updated` : "") +
       (uncovered ? `, ${uncovered} trip${uncovered > 1 ? "s" : ""} need manual reassignment (shown in red).` : ".");
-    notifyRestConflicts(conflictsByDriver);
+    notifyRosterApplyIssues(conflictsByDriver, overwrittenConflicts);
   }
 
   function applyTrainingToRoster(trainingIndex) {
@@ -2024,14 +2048,20 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
 
   // Start/end date pickers in Task Settings are capped to what REAL_DATA actually covers
   // (only October 2026 exists right now -- ask if you want another month added).
-  function initScheduleDateInputs() {
+  // preserveValues: keep whatever's already in the date inputs (used right after restoring a
+  // previous session's custom range) instead of resetting to the whole month -- otherwise a
+  // refresh right after restoring would silently widen a deliberately narrowed range back out
+  // to the full month, and the next Generate click would run over more days than intended.
+  function initScheduleDateInputs(preserveValues) {
     const dates = REAL_DATA.dates;
     const startEl = document.getElementById("schedule-start-date");
     const endEl = document.getElementById("schedule-end-date");
     startEl.min = endEl.min = dates[0];
     startEl.max = endEl.max = dates[dates.length - 1];
-    startEl.value = dates[0];
-    endEl.value = dates[dates.length - 1];
+    if (!preserveValues || !startEl.value || !endEl.value) {
+      startEl.value = dates[0];
+      endEl.value = dates[dates.length - 1];
+    }
     updateScheduleRangeSummary();
   }
 
@@ -2411,7 +2441,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
     renderDay();
     renderRoster();
 
-    const c = computeCompliance(monthResult.allStretches);
+    const c = computeCompliance(monthResult.allStretches, monthResult.config.stickyMin);
     const uncovered = monthResult.uncoveredTasks.length;
     document.getElementById("status-dot").className = "status-dot" + (c.violations > 0 || uncovered > 0 ? " warn" : "");
     document.getElementById("status-text").textContent = `Loaded "${entry.name}" — ${entry.dateRangeLabel}`;
@@ -2940,7 +2970,7 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
   const restoredPreviousSession = restoreLiveState();
 
   renderMonthSelect();
-  initScheduleDateInputs();
+  initScheduleDateInputs(restoredPreviousSession);
   renderOriginBadge();
   populateDaySelect();
   renderRoster();
