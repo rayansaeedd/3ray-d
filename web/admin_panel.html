@@ -91,8 +91,23 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
   .app.conditions-hidden .conditions { padding: 0; border-right: none; overflow: hidden; min-width: 0; }
   .app.conditions-hidden .conditions > * { display: none; }
   @media (max-width: 880px) {
-    .app { grid-template-columns: 1fr; }
+    /* Must also override .app.conditions-hidden specifically (not just .app) -- that rule's
+       "0 1fr" is two grid columns, same as the default "300px 1fr", just with the first column
+       collapsed to 0. With two real columns still in play, the order swap below (meant to just
+       flip *vertical* stacking order once everything is a single column) instead moved .schedule
+       into the 0-width column and .conditions into the "1fr" one -- an invisible-app,
+       blank-screen bug on every phone, since Conditions starts collapsed by default. Forcing
+       one column here, for both states, is what makes the order swap safe. */
+    .app, .app.conditions-hidden { grid-template-columns: 1fr; }
     .conditions { order: 2; } .schedule { order: 1; }
+  }
+  /* Phone-width tab bar: 7 buttons (5 views + Show/Hide Conditions + Sign Out) in one flex row
+     don't fit under ~630px and don't wrap by default, which was silently stretching the WHOLE
+     page wider than the phone screen (forcing horizontal scrolling everywhere, not just the tab
+     row). Wrapping keeps every tab reachable with a tap, no sideways scrolling required. */
+  @media (max-width: 650px) {
+    .view-tabs { flex-wrap: wrap; padding: 8px 12px 0; }
+    .view-tab.conditions-toggle { margin-left: 0; }
   }
 
   /* ---------------- Conditions panel ---------------- */

@@ -190,6 +190,20 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   narrow/mobile screens). Click **Show Conditions** in the tab bar to open it whenever generating a
   new schedule, adjusting a rule, or loading a saved schedule; that open/closed choice is
   remembered by the auto-save above, so it stays how you left it across reloads.
+- **Fixed a phone-screen-breaking layout bug** — on any screen narrower than ~650px (any phone),
+  the app was rendering scrambled: the tab bar (5 view tabs + Show/Hide Conditions + Sign Out) is
+  one row that doesn't fit under ~650px and wasn't allowed to wrap, which alone stretched the
+  *entire page* wider than the phone screen, forcing sideways scrolling just to reach the tabs.
+  Worse, combined with Conditions being collapsed by default (previous bullet), the phone layout
+  actually swapped which half of the screen the visible app content landed in versus the blank
+  collapsed sidebar -- on a phone, the app looked entirely blank/broken by default. Both are fixed:
+  the tab bar now wraps onto a second row on narrow screens, and the layout no longer swaps
+  content into the wrong half. Verified on an iPhone-sized (390px) viewport across every tab --
+  Day Schedule, Full Roster, Task Settings, Training, and Roster Settings all now render full-width
+  with no sideways page scrolling. The Day Schedule's own hour-by-hour timeline and the Full
+  Roster's wide table still need a sideways swipe *within that specific table* to see every hour
+  column/tally column on a narrow screen -- that's expected (there's a lot of real data packed into
+  those two views) and doesn't affect the rest of the page.
 - **Schedule dates follow whichever month is selected on Full Roster** — the Start date/End date
   pickers in Task Settings are bounded to the currently active month (switch or add one with
   **+ Month** on the Full Roster tab). Only October 2026 has real day-by-day roster data today;
