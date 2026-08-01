@@ -51,7 +51,15 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   &times; to delete it, so several schedules (different weeks, a full month, etc.) can be kept
   side by side. A **Print / Export** button on the Day Schedule view opens the browser's print
   dialog (which on most devices can also save straight to PDF) for handing a loaded schedule to
-  drivers. A new **Training** tab defines courses (Code, Start/End date, Time From/To, Course
+  drivers, and an **Export to Excel** button next to it downloads that same day's schedule as a
+  real `.xlsx` file (one row per driver: code, driver ID/name/phone, start/end/total, and a plain-
+  English detail of the outbound/return trip or RESERVE/training/status). The **Full Roster** view
+  has its own **Export to Excel** button in its toolbar that downloads the whole active month --
+  driver identity columns, every day, every tally column -- as one `.xlsx`, colored exactly like
+  the Full Roster screen (real off-duty code colors, purple training, blue RESERVE, red/amber
+  conflict flags). Both exports run entirely in the browser via a small spreadsheet-writing
+  library vendored directly into this file (no CDN, no network call -- see Known gaps below for
+  more on that). A new **Training** tab defines courses (Code, Start/End date, Time From/To, Course
   Name, Capacity) the same way Task Settings defines duties; typing a training's code into a
   driver's day cell(s) on the **Full Roster** view (every cell there is now editable) sends that
   driver to the course instead of a shift -- the engine excludes them from task/reserve
@@ -183,6 +191,15 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   actually protects the data would need a backend server (accounts, sessions, access logs), which
   is a much bigger build than this single HTML file -- worth doing later if that stronger guarantee
   becomes a requirement.
+- **Excel export uses a vendored library** — `Export to Excel` on both the Day Schedule and Full
+  Roster views is built with `xlsx-js-style` (SheetJS Community Edition plus real cell-color
+  support), whose entire minified source is pasted directly into `web/admin_panel.html` (and
+  `index.html`) right after the opening `<meta>` tag, between `<!-- BEGIN vendored xlsx-js-style
+  -->` / `<!-- END -->` markers. It's inlined rather than loaded from a CDN so the export still
+  works with no internet connection, exactly like everything else in this file. To update it later:
+  `npm install xlsx-js-style` somewhere, then replace the text between those two markers with the
+  new `dist/xlsx.min.js` contents (drop the trailing `//# sourceMappingURL=...` comment line, since
+  the `.map` file isn't vendored).
 - **Email delivery** — sending generated schedules to drivers automatically (e.g. via a
   scheduled trigger + Gmail/Outlook) has been discussed but not implemented.
 - **Training capacity isn't enforced** — the Training catalog's Capacity field is informational
