@@ -449,7 +449,7 @@
   .settings-placeholder p { margin: 0; font-size: 13px; }
 </style>
 
-<div class="app" id="app">
+<div class="app conditions-hidden" id="app">
   <aside class="conditions" aria-label="Scheduling conditions">
     <div class="brand">
       <span class="eyebrow">Driver Scheduling Engine</span>
@@ -525,7 +525,7 @@
       <button class="view-tab" id="tab-task-settings" type="button" onclick="showView('task-settings')">Task Settings</button>
       <button class="view-tab" id="tab-training" type="button" onclick="showView('training')">Training</button>
       <button class="view-tab" id="tab-roster-settings" type="button" onclick="showView('roster-settings')">Roster Settings</button>
-      <button class="view-tab conditions-toggle" id="conditions-toggle-btn" type="button" onclick="toggleConditions()">Hide Conditions</button>
+      <button class="view-tab conditions-toggle" id="conditions-toggle-btn" type="button" onclick="toggleConditions()">Show Conditions</button>
     </div>
 
     <div id="day-view">
@@ -1111,33 +1111,39 @@
     return { total, exact, violations };
   }
 
+  // Shared by generate() and restoring a previous session's monthResult on page load.
+  function refreshComplianceDisplay(statusPrefix) {
+    const c = computeCompliance(monthResult.allStretches);
+    const uncovered = monthResult.uncoveredTasks.length;
+    const hasWarning = c.violations > 0 || uncovered > 0;
+    document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
+    document.getElementById("status-text").textContent =
+      statusPrefix + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
+    document.getElementById("save-btn").disabled = false;
+    let complianceHtml =
+      "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
+      "<b>" + c.violations + "</b> stickiness violations (should be 0)<br/>" +
+      "<b>" + uncovered + "</b> task-days genuinely short a driver (shift-type shortage or nobody rested enough)";
+    if (uncovered > 0) {
+      const sample = monthResult.uncoveredTasks.slice(0, 5)
+        .map((u) => `${REAL_DATA.dates[u.dayIdx]} ${u.code} (${u.shiftType})`)
+        .join("; ");
+      complianceHtml += `<br/><span style="color:var(--bad)">e.g. ${sample}${monthResult.uncoveredTasks.length > 5 ? "…" : ""}</span>`;
+    }
+    document.getElementById("compliance").innerHTML = complianceHtml;
+  }
+
   function generate() {
     const config = getConfig();
     const seed = Math.floor(Math.random() * 1e9);
     document.getElementById("status-text").textContent = "Generating…";
     setTimeout(() => {
       monthResult = runMonth(config, seed);
-      const c = computeCompliance(monthResult.allStretches);
-      const uncovered = monthResult.uncoveredTasks.length;
-      const hasWarning = c.violations > 0 || uncovered > 0;
-      document.getElementById("status-dot").className = "status-dot" + (hasWarning ? " warn" : "");
-      document.getElementById("status-text").textContent =
-        "Generated " + dateRangeLabel(monthResult.startIdx, monthResult.endIdx) + " — " + monthResult.numDays + " days, " + REAL_DATA.drivers.length + " drivers";
-      document.getElementById("save-btn").disabled = false;
-      let complianceHtml =
-        "<b>" + c.exact + "/" + c.total + "</b> stretches hit their exact trip target &middot; " +
-        "<b>" + c.violations + "</b> stickiness violations (should be 0)<br/>" +
-        "<b>" + uncovered + "</b> task-days genuinely short a driver (shift-type shortage or nobody rested enough)";
-      if (uncovered > 0) {
-        const sample = monthResult.uncoveredTasks.slice(0, 5)
-          .map((u) => `${REAL_DATA.dates[u.dayIdx]} ${u.code} (${u.shiftType})`)
-          .join("; ");
-        complianceHtml += `<br/><span style="color:var(--bad)">e.g. ${sample}${monthResult.uncoveredTasks.length > 5 ? "…" : ""}</span>`;
-      }
-      document.getElementById("compliance").innerHTML = complianceHtml;
+      refreshComplianceDisplay("Generated ");
       populateDaySelect();
       renderDay();
       renderRoster();
+      persistLiveState();
     }, 250);
   }
 
@@ -2092,6 +2098,105 @@
     if (e.key === "Escape") closeModal(null);
   });
 
+  // ---- Auto-persistence: the whole live working state, so a refresh never loses work ----
+  // Separate from Saved Schedules (which are explicitly named snapshots the supervisor creates
+  // on purpose) -- this just keeps whatever's currently on screen from vanishing on reload.
+  const LIVE_STATE_KEY = "driverSchedulingEngine.liveState";
+
+  function serializeLiveState() {
+    const ids = [
+      "day-start", "day-end", "afternoon-start", "afternoon-end", "night-start", "night-end",
+      "sticky-min", "target-trips", "min-rest-hours", "schedule-start-date", "schedule-end-date",
+    ];
+    const config = {};
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) config[id] = el.value;
+    });
+    return {
+      taskCatalog: TASK_CATALOG,
+      trainingCatalog: TRAINING_CATALOG,
+      holidayTypes: HOLIDAY_TYPES,
+      globalOrigin: GLOBAL_ORIGIN,
+      driverIdentity: REAL_DATA.drivers.map((d) => ({
+        phone1: d.phone1, phone2: d.phone2, category: d.category, email: d.email, driverId: d.driverId, saudi: d.saudi,
+      })),
+      months: MONTHS,
+      currentMonthKey: CURRENT_MONTH_KEY,
+      monthResult,
+      trainingOverrides: TRAINING_OVERRIDES,
+      shiftStartOverrides: SHIFT_START_OVERRIDES,
+      shiftEndOverrides: SHIFT_END_OVERRIDES,
+      config,
+      conditionsHidden: document.getElementById("app").classList.contains("conditions-hidden"),
+    };
+  }
+
+  function persistLiveState() {
+    try {
+      localStorage.setItem(LIVE_STATE_KEY, JSON.stringify(serializeLiveState()));
+    } catch (e) {
+      // localStorage full/disabled -- silently skip, Saved Schedules still works via its own button
+    }
+  }
+
+  // Runs once at page load. Returns true if a previous session's state was found and restored.
+  function restoreLiveState() {
+    let state;
+    try {
+      const raw = localStorage.getItem(LIVE_STATE_KEY);
+      if (!raw) return false;
+      state = JSON.parse(raw);
+    } catch (e) {
+      return false;
+    }
+    if (!state) return false;
+
+    if (state.taskCatalog && state.taskCatalog.length) {
+      TASK_CATALOG.length = 0;
+      state.taskCatalog.forEach((t) => TASK_CATALOG.push(t));
+    }
+    if (state.trainingCatalog) {
+      TRAINING_CATALOG.length = 0;
+      state.trainingCatalog.forEach((t) => TRAINING_CATALOG.push(t));
+    }
+    if (state.holidayTypes && state.holidayTypes.length) HOLIDAY_TYPES = state.holidayTypes;
+    if (state.globalOrigin) GLOBAL_ORIGIN = state.globalOrigin;
+    if (state.driverIdentity) {
+      state.driverIdentity.forEach((info, i) => {
+        if (REAL_DATA.drivers[i]) Object.assign(REAL_DATA.drivers[i], info);
+      });
+    }
+    if (state.months) {
+      Object.keys(state.months).forEach((key) => {
+        MONTHS[key] = state.months[key];
+      });
+    }
+    if (state.currentMonthKey && MONTHS[state.currentMonthKey]) {
+      const key = state.currentMonthKey;
+      REAL_DATA.dates = MONTHS[key].dates;
+      REAL_DATA.drivers.forEach((d, i) => {
+        d.codes = MONTHS[key].codesByDriver[i];
+      });
+      CURRENT_MONTH_KEY = key;
+    }
+    TRAINING_OVERRIDES = state.trainingOverrides || {};
+    SHIFT_START_OVERRIDES = state.shiftStartOverrides || {};
+    SHIFT_END_OVERRIDES = state.shiftEndOverrides || {};
+    monthResult = state.monthResult || null;
+
+    if (state.config) {
+      Object.entries(state.config).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el && val !== undefined && val !== null && val !== "") el.value = val;
+      });
+    }
+    document.getElementById("app").classList.toggle("conditions-hidden", !!state.conditionsHidden);
+    document.getElementById("conditions-toggle-btn").textContent = state.conditionsHidden ? "Show Conditions" : "Hide Conditions";
+
+    return true;
+  }
+
   // ---- Saved schedules: named snapshots stored in localStorage (this tool has no server) ----
   const SAVED_SCHEDULES_KEY = "driverSchedulingEngine.savedSchedules";
 
@@ -2535,12 +2640,22 @@
     table.innerHTML = html;
   }
 
+  const restoredPreviousSession = restoreLiveState();
+
   renderMonthSelect();
   initScheduleDateInputs();
+  renderOriginBadge();
   populateDaySelect();
   renderRoster();
   renderTaskSettings();
   renderTrainingSettings();
   renderRosterSettings();
   renderSavedSchedulesList();
+  if (restoredPreviousSession && monthResult) {
+    refreshComplianceDisplay("Restored ");
+    renderDay();
+  }
+
+  setInterval(persistLiveState, 4000);
+  window.addEventListener("beforeunload", persistLiveState);
 </script>

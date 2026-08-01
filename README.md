@@ -27,8 +27,9 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   day (matching the original Gantt's per-duty layout): drivers with a real trip show two boxes
   (outbound leg + return leg), each with its own visible start/end time, joined by a connector
   badge colored by destination; drivers on standby show a single RESERVE box. The driver column
-  clearly shows ID, full name, and a phone line (no phone data exists yet, so it reads "No phone
-  on file"). **The Day Schedule is read-only**, with three exceptions: a disabled Origin indicator
+  clearly shows ID, full name, and a phone line (the driver's real Phone 1 from the roster export,
+  falling back to "No phone on file" only if that field is blank). **The Day Schedule is
+  read-only**, with three exceptions: a disabled Origin indicator
   next to the date that just mirrors whatever's set in Task Settings, and a per-driver, per-day
   **Start**/**End** time pair the supervisor can edit directly to record or override that specific
   shift's start/end -- Start sits right after the driver's name, End sits at the far right after
@@ -137,12 +138,24 @@ ratio rules, and guarantees every real task gets covered before optimizing for a
   and return-leg Start/End times (no longer a 50/50 split of one range) plus its own per-leg
   trip number and origin station (Madinah/Makkah/KAIA), all editable in Task Settings. The 41
   existing duties still default to "Unassigned" (shown as "?") until classified.
-- **Persistence** — a generated schedule can now be saved (named by its date range, e.g. "October
-  1 to October 7") to the browser's local storage via the **Save this schedule** button, and
-  reloaded/deleted later from its red card in the Conditions sidebar. This is per-browser,
-  per-device storage, not a shared database -- it won't show up on a different computer or after
-  clearing browser data. Unsaved Task Settings edits still only live in memory until saved this
-  way.
+- **Persistence** — two layers now. (1) **Auto-save**: the whole live working state (task/training
+  catalogs, holiday types, driver identity edits, every month's data, the generated schedule and
+  its compliance numbers, all roster overrides, Conditions inputs, and whether the Conditions
+  panel is open) is written to the browser's local storage every few seconds and on page close, and
+  restored automatically the moment the page loads again -- refreshing or closing the tab no longer
+  loses in-progress work. (2) **Saved Schedules**: a generated schedule can still be explicitly
+  saved (named by its date range, e.g. "October 1 to October 7") via the **Save this schedule**
+  button, and reloaded/deleted later from its red card in the Conditions sidebar, for keeping
+  several named schedules (different weeks, a full month, etc.) side by side. Both are per-browser,
+  per-device local storage, not a shared database -- neither shows up on a different computer or
+  survives clearing browser data.
+- **Conditions panel is collapsed by default** — the shift-window/stickiness/ratio/rest-rule
+  settings, Generate button, and Saved Schedules list all live in the Conditions sidebar, which is
+  now hidden by default so a returning supervisor lands straight on the Day Schedule/Full Roster
+  instead of a settings panel (this also fixes it visually stacking below the schedule on
+  narrow/mobile screens). Click **Show Conditions** in the tab bar to open it whenever generating a
+  new schedule, adjusting a rule, or loading a saved schedule; that open/closed choice is
+  remembered by the auto-save above, so it stays how you left it across reloads.
 - **Schedule dates follow whichever month is selected on Full Roster** — the Start date/End date
   pickers in Task Settings are bounded to the currently active month (switch or add one with
   **+ Month** on the Full Roster tab). Only October 2026 has real day-by-day roster data today;
