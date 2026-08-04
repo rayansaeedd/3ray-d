@@ -25,6 +25,9 @@ earlier, separate prototype that predates this rule set — kept untouched, not 
   letter badge, RESERVE block).
 - **`demo.py`** — runs three scenarios and asserts correctness; scenario 1 rebuilds Ziyad's real,
   already-verified duty (task `0630/8L`) from raw trip data with zero hardcoding of the answer.
+- **`../web/order_b_scheduler.html`** — the supervisor-facing drag-and-drop tool. Sign in as a
+  station, drop an Order B `.xlsx`, and it runs the same rules client-side to build that station's
+  duties + reserve shifts, rendered in the box/bar/badge visual style. See `web/` section below.
 
 ## Order B input format
 
@@ -96,3 +99,31 @@ write_task_schedule(duties, "mad_task_schedule.xlsx")
 ```
 
 Requires `openpyxl`.
+
+## The drag-and-drop tool (`web/order_b_scheduler.html`)
+
+Self-contained, no server or build step — just open the file in a browser:
+
+1. **Sign in** as a station (Madinah / Makkah / KAIA) — unlocks the drop zone and scopes which
+   trip prefixes get pulled from the file.
+2. **Drop an Order B `.xlsx`** in the one-row-per-trip format (or click to browse). It's parsed
+   client-side with a vendored copy of SheetJS (`web/vendor/xlsx.full.min.js` — vendored rather
+   than loaded from a CDN, so the tool works offline and doesn't depend on a third-party host
+   being reachable).
+3. The engine logic runs in-browser (`web/order_b_engine.js`) and renders duties in the same
+   box/bar/turnaround-badge visual style as the Excel export, plus a **reserve section** for
+   leftover drivers and an **uncovered-trips warning** for any departing trip with no valid
+   same-day return in the file.
+4. **Download as Excel** exports a plain data table (not the styled version — SheetJS's free
+   build can't write cell colors/borders, so the rich visual review lives on-screen; a fully
+   styled export still requires running the Python `excel_export.py`).
+
+`web/order_b_engine.js` is a deliberate line-for-line port of `duty_builder.py` /
+`trip_codes.py` / `reserve.py`, not an independent reimplementation — `web/order_b_engine.test.js`
+(`node web/order_b_engine.test.js`) mirrors `demo.py`'s scenarios and asserts the two produce
+identical results, so the browser tool can't silently drift from the Python engine's behavior.
+
+**Driver roster is currently a placeholder** (`PLACEHOLDER_ROSTER` inside the HTML file, a
+handful of fake names per station plus Ziyad and Rayan for continuity with earlier examples) —
+it needs to be swapped for each station's real roster (ID / Name / Phone) before this is used
+for anything beyond demoing the drag-and-drop flow.

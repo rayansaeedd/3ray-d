@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Order B Driver Task Scheduler</title>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="order_b_engine.js"></script>
+<style>
+  :root {
+    --blue: #4472C4; --green: #70AD47; --red: #C00000;
+    --ink: #1F2A44; --stripe: #EAF3EA; --paper: #FFFFFF; --border: #d7dbe3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0;
+    background: #f4f5f7; color: #1a1d24;
+  }
+  header {
+    background: var(--ink); color: #fff; padding: 18px 28px;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+
+  .signin-bar { display: flex; align-items: center; gap: 8px; }
+  .station-btn {
+    padding: 7px 16px; border-radius: 6px; border: 1px solid rgba(255,255,255,.35);
+    background: transparent; color: #fff; cursor: pointer; font-weight: 700; font-size: 13px;
+  }
+  .station-btn.active { background: #fff; color: var(--ink); }
+  .signed-in-badge {
+    font-size: 12px; padding: 6px 12px; border-radius: 999px; background: #2c3b63; display: none;
+  }
+  .signed-in-badge.show { display: inline-block; }
+
+  main { max-width: 1180px; margin: 24px auto; padding: 0 20px 60px; }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; background: #fff;
+    padding: 46px 20px; text-align: center; color: #666; transition: all .15s ease;
+  }
+  .dropzone.disabled { opacity: .5; pointer-events: none; }
+  .dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
+  .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
+  .dropzone .hint { font-size: 12px; margin-top: 6px; color: #999; }
+  .dropzone input[type=file] { display: none; }
+  .browse-link { color: var(--blue); text-decoration: underline; cursor: pointer; }
+
+  .status-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 13px; }
+  .status-icon {
+    width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 13px; font-weight: 700; color: #fff; flex: none;
+  }
+  .status-icon.idle { background: #b9bec9; }
+  .status-icon.working { background: #f2a900; animation: spin 1s linear infinite; }
+  .status-icon.done { background: #3a9d55; }
+  .status-icon.error { background: var(--red); }
+  @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin-top: 18px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
+  .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+
+  .duty-row {
+    display: grid; grid-template-columns: 90px 190px 60px 70px 1fr 44px 1fr 70px 60px 70px 60px;
+    align-items: stretch; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+    margin-bottom: 10px; font-size: 12px;
+  }
+  .duty-row > div { padding: 8px 6px; display: flex; align-items: center; justify-content: center; text-align: center; }
+  .duty-row .task-code { font-weight: 700; background: #f7f8fa; }
+  .duty-row .driver-info { flex-direction: column; align-items: center; font-weight: 700; line-height: 1.3; background: #f7f8fa; }
+  .duty-row .driver-info .name { font-weight: 700; }
+  .duty-row .driver-info .sub { font-weight: 400; color: #666; }
+  .duty-row .sign-in, .duty-row .sign-out { color: var(--red); font-weight: 700; }
+  .duty-row .leg { background: var(--stripe); flex-direction: column; gap: 3px; padding: 6px 8px; }
+  .duty-row .leg .times { display: flex; justify-content: space-between; width: 100%; font-size: 10px; font-weight: 700; }
+  .duty-row .trip-box {
+    border: 2px solid #222; background: #fff; border-radius: 4px; padding: 3px 8px; font-weight: 700; font-size: 13px;
+  }
+  .duty-row .trip-bar { height: 5px; width: 70%; border-radius: 2px; margin-top: 2px; }
+  .duty-row .leg.passenger .trip-box { opacity: .55; font-style: italic; }
+  .duty-row .turn { background: var(--stripe); }
+  .duty-row .turn .badge {
+    width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; color: #fff; font-weight: 700; font-size: 12px;
+  }
+  .duty-row .duty-len { font-weight: 700; }
+  .duty-row .ot { font-weight: 700; }
+  .duty-row.overtime .ot { background: #FFC000; }
+  .duty-row .reserve-block {
+    grid-column: span 3; background: #BFBFBF; color: #fff; font-weight: 700; letter-spacing: 1px;
+  }
+
+  .uncovered { border: 1px solid #f3c1c1; background: #fff5f5; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+  .uncovered strong { color: var(--red); }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button.primary {
+    background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: 6px;
+    font-weight: 700; cursor: pointer; font-size: 13px;
+  }
+  button.primary:disabled { opacity: .4; cursor: not-allowed; }
+  .note { font-size: 11px; color: #888; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Order B Driver Task Scheduler</h1>
+    <div class="sub">Sign in, then drop an Order B file to generate that station's driver tasks.</div>
+  </div>
+  <div class="signin-bar">
+    <span id="signedInBadge" class="signed-in-badge"></span>
+    <button class="station-btn" data-station="MAD">Madinah</button>
+    <button class="station-btn" data-station="MAK">Makkah</button>
+    <button class="station-btn" data-station="KAIA">KAIA</button>
+  </div>
+</header>
+
+<main>
+  <div id="dropzone" class="dropzone disabled">
+    <div class="icon">&#8595;</div>
+    <div><strong>Sign in above to unlock the drop zone.</strong></div>
+    <div class="hint">Once signed in: drag an Order B .xlsx file here, or <span class="browse-link" id="browseLink">browse a file</span>.</div>
+    <input type="file" id="fileInput" accept=".xlsx" />
+  </div>
+
+  <div class="status-row" id="statusRow" style="display:none;">
+    <div class="status-icon idle" id="statusIcon">&#8226;</div>
+    <div id="statusText">Waiting for a file&hellip;</div>
+  </div>
+
+  <div class="uncovered" id="uncoveredBox" style="display:none;"></div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <h2 id="resultsTitle">Generated task schedule</h2>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--blue)"></span>MAK &#8644; MAD (00/01/03)</span>
+      <span><span class="swatch" style="background:var(--green)"></span>MAD &#8644; KAIA (07/08)</span>
+      <span><span class="swatch" style="background:var(--red)"></span>Shuttle MAK &#8644; KAIA (05)</span>
+      <span>L=MAK &nbsp; M=MAD &nbsp; A=KAIA &nbsp; K=KAEC</span>
+    </div>
+    <div id="dutyList"></div>
+    <div class="actions">
+      <button class="primary" id="downloadBtn">Download as Excel</button>
+    </div>
+    <div class="note">Excel export is a plain data table (trip numbers, times, roles) for further processing &mdash;
+      the colored box/bar view above is the full visual reference. A styled Excel export
+      (matching order_b_engine/excel_export.py) is generated by the Python engine, not this browser tool.</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  const E = window.OrderBEngine;
+  let homeStation = null;
+
+  // Placeholder roster -- NOT a real driver list. Replace with a real per-station roster
+  // (ID / Name / Phone) before using this for anything but demoing the drag-and-drop flow.
+  const PLACEHOLDER_ROSTER = {
+    MAD: ["6868855-ZIYAD SALEH HAMZAH ALREHAILI", "6145882-RAYAN SAUD SAEED", "6126072-DRIVER THREE",
+          "6126073-DRIVER FOUR", "6126074-DRIVER FIVE", "6126075-DRIVER SIX", "6126076-DRIVER SEVEN",
+          "6126077-DRIVER EIGHT"],
+    MAK: ["6200001-MAK DRIVER ONE", "6200002-MAK DRIVER TWO", "6200003-MAK DRIVER THREE",
+          "6200004-MAK DRIVER FOUR", "6200005-MAK DRIVER FIVE"],
+    KAIA: ["6300001-KAIA DRIVER ONE", "6300002-KAIA DRIVER TWO", "6300003-KAIA DRIVER THREE",
+           "6300004-KAIA DRIVER FOUR"],
+  };
+
+  function rosterFor(station) {
+    return PLACEHOLDER_ROSTER[station].map((entry) => {
+      const [id, ...nameParts] = entry.split("-");
+      return { driverId: id, name: nameParts.join("-"), phone: "5" + id.slice(1), homeStation: station };
+    });
+  }
+
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("fileInput");
+  const browseLink = document.getElementById("browseLink");
+  const statusRow = document.getElementById("statusRow");
+  const statusIcon = document.getElementById("statusIcon");
+  const statusText = document.getElementById("statusText");
+  const uncoveredBox = document.getElementById("uncoveredBox");
+  const resultsCard = document.getElementById("resultsCard");
+  const resultsTitle = document.getElementById("resultsTitle");
+  const dutyList = document.getElementById("dutyList");
+  const downloadBtn = document.getElementById("downloadBtn");
+  const signedInBadge = document.getElementById("signedInBadge");
+
+  let lastDuties = [];
+
+  document.querySelectorAll(".station-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".station-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      homeStation = btn.dataset.station;
+      const label = { MAD: "Madinah", MAK: "Makkah", KAIA: "KAIA" }[homeStation];
+      signedInBadge.textContent = `Signed in: ${label} Supervisor`;
+      signedInBadge.classList.add("show");
+      dropzone.classList.remove("disabled");
+      dropzone.querySelector("strong").textContent = "Drop Order B here.";
+      dropzone.querySelector(".hint").innerHTML =
+        `Only trips relevant to ${label} drivers will be pulled in. Or <span class="browse-link" id="browseLink2">browse a file</span>.`;
+      resultsCard.style.display = "none";
+      uncoveredBox.style.display = "none";
+      statusRow.style.display = "none";
+    });
+  });
+
+  browseLink.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("click", (e) => {
+    if (e.target.id === "browseLink2") fileInput.click();
+  });
+
+  ["dragenter", "dragover"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      if (!dropzone.classList.contains("disabled")) dropzone.classList.add("drag-over");
+    })
+  );
+  ["dragleave", "drop"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("drag-over");
+    })
+  );
+  dropzone.addEventListener("drop", (e) => {
+    if (dropzone.classList.contains("disabled")) return;
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) handleFile(file);
+  });
+
+  function setStatus(kind, text) {
+    statusRow.style.display = "flex";
+    statusIcon.className = "status-icon " + kind;
+    statusIcon.textContent = { idle: "•", working: "↻", done: "✓", error: "!" }[kind];
+    statusText.textContent = text;
+  }
+
+  function handleFile(file) {
+    if (!homeStation) return;
+    setStatus("working", `Reading ${file.name}…`);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: null });
+        const { trips, errors } = E.parseOrderBRows(rows);
+        if (errors.length) {
+          setStatus("error", `${errors.length} row error(s) in the sheet -- see console.`);
+          console.error(errors);
+        }
+        const drivers = rosterFor(homeStation);
+        const { duties, uncovered } = E.buildDutiesForStation(trips, homeStation, drivers, "");
+        const leftover = drivers.slice(duties.length);
+        const reserveDuties = E.buildReserveDuties(leftover, {});
+        lastDuties = duties.concat(reserveDuties);
+        renderResults(trips, duties, uncovered, reserveDuties);
+        setStatus("done", `Loaded ${trips.length} trips, built ${duties.length} duties + ${reserveDuties.length} reserve shifts for ${homeStation}.`);
+      } catch (err) {
+        console.error(err);
+        setStatus("error", "Could not process this file: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function timeStr(mins) { return E.minutesToTimeStr(mins); }
+
+  function dutyRowHtml(duty) {
+    const d = duty;
+    const driverInfo = `<div class="name">${d.driver.name}</div><div class="sub">ID ${d.driver.driverId}</div><div class="sub">${d.driver.phone}</div>`;
+    if (d.isReserve) {
+      return `<div class="duty-row ${d.overtime ? "overtime" : ""}">
+        <div class="task-code">${d.taskCode}</div>
+        <div class="driver-info">${driverInfo}</div>
+        <div class="sign-in">${timeStr(d.signIn)}</div>
+        <div>${d.driver.homeStation}</div>
+        <div class="reserve-block">RESERVE</div>
+        <div>${d.driver.homeStation}</div>
+        <div class="sign-out">${timeStr(d.signOut)}</div>
+        <div class="duty-len">${Math.floor(d.dutyMin/60)}:${String(d.dutyMin%60).padStart(2,"0")}</div>
+        <div class="ot"></div>
+      </div>`;
+    }
+    const leg1 = d.legs[0], leg2 = d.legs[1];
+    const c1 = E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg1.trip.prefix]];
+    const c2 = E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg2.trip.prefix]];
+    const turnLetter = E.STATION_LETTER[leg1.trip.destination] || "?";
+    return `<div class="duty-row ${d.overtime ? "overtime" : ""}">
+      <div class="task-code">${d.taskCode}</div>
+      <div class="driver-info">${driverInfo}</div>
+      <div class="sign-in">${timeStr(d.signIn)}</div>
+      <div>${d.driver.homeStation}</div>
+      <div class="leg ${leg1.role === "Passenger" ? "passenger" : ""}">
+        <div class="times"><span>${timeStr(leg1.trip.depMin)}</span><span>${timeStr(leg1.trip.arrMin)}</span></div>
+        <div class="trip-box">${leg1.trip.tripNo}</div>
+        <div class="trip-bar" style="background:${c1}"></div>
+      </div>
+      <div class="turn"><div class="badge" style="background:${c1}">${turnLetter}</div></div>
+      <div class="leg ${leg2.role === "Passenger" ? "passenger" : ""}">
+        <div class="times"><span>${timeStr(leg2.trip.depMin)}</span><span>${timeStr(leg2.trip.arrMin)}</span></div>
+        <div class="trip-box">${leg2.trip.tripNo}</div>
+        <div class="trip-bar" style="background:${c2}"></div>
+      </div>
+      <div>${d.driver.homeStation}</div>
+      <div class="sign-out">${timeStr(d.signOut)}</div>
+      <div class="duty-len">${Math.floor(d.dutyMin/60)}:${String(d.dutyMin%60).padStart(2,"0")}</div>
+      <div class="ot">${d.overtime ? "OT" : ""}</div>
+    </div>`;
+  }
+
+  function renderResults(trips, duties, uncovered, reserveDuties) {
+    resultsTitle.textContent = `${homeStation} station — ${duties.length} duties, ${reserveDuties.length} reserve shifts`;
+    dutyList.innerHTML = duties.map(dutyRowHtml).join("") + reserveDuties.map(dutyRowHtml).join("");
+    resultsCard.style.display = "block";
+
+    if (uncovered.length) {
+      uncoveredBox.style.display = "block";
+      uncoveredBox.innerHTML = `<strong>${uncovered.length} trip(s) need attention</strong> -- no valid same-day return leg was found in this file: ` +
+        uncovered.map((t) => t.tripNo).join(", ");
+    } else {
+      uncoveredBox.style.display = "none";
+    }
+  }
+
+  downloadBtn.addEventListener("click", () => {
+    if (!lastDuties.length) return;
+    const rows = [["Task Code", "Driver ID", "Driver Name", "Phone", "Sign In", "Origin",
+                    "Leg 1 Trip", "Leg 1 Role", "Leg 2 Trip", "Leg 2 Role", "Destination", "Sign Out", "Duty (min)", "Overtime"]];
+    lastDuties.forEach((d) => {
+      if (d.isReserve) {
+        rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
+                   d.driver.homeStation, "RESERVE", "", "", "", d.driver.homeStation, timeStr(d.signOut), d.dutyMin, ""]);
+      } else {
+        const [l1, l2] = d.legs;
+        rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
+                   d.driver.homeStation, l1.trip.tripNo, l1.role, l2.trip.tripNo, l2.role,
+                   d.driver.homeStation, timeStr(d.signOut), d.dutyMin, d.overtime ? "OT" : ""]);
+      }
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Driver Tasks");
+    XLSX.writeFile(wb, `${homeStation}_task_schedule.xlsx`);
+  });
+})();
+</script>
+
+</body>
+</html>
