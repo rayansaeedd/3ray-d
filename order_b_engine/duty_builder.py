@@ -110,7 +110,6 @@ def build_duties_for_station(
     trips: list[Trip],
     home_station: str,
     drivers: list[Driver],
-    task_code_prefix: str = "",
 ) -> tuple[list[Duty], list[Trip]]:
     """Pair up a home station's departing trips into duties.
 
@@ -155,7 +154,7 @@ def build_duties_for_station(
         driver = driver_cycle[driver_idx % len(driver_cycle)]
         driver_idx += 1
 
-        task_code = f"{cand.sign_in.strftime('%H%M')}/{task_code_prefix}{driver_idx}"
+        task_code = f"{cand.sign_in.strftime('%H%M')}/{cand.duty_min // 60}"
         duty = Duty(
             driver=driver,
             task_code=task_code,

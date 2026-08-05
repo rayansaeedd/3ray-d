@@ -263,7 +263,7 @@
           console.error(errors);
         }
         const drivers = rosterFor(homeStation);
-        const { duties, uncovered } = E.buildDutiesForStation(trips, homeStation, drivers, "");
+        const { duties, uncovered } = E.buildDutiesForStation(trips, homeStation, drivers);
         // Reserve-shift generation is disabled for now (per request) -- trip duties only.
         const reserveDuties = [];
         lastDuties = duties.concat(reserveDuties);

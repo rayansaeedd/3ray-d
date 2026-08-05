@@ -135,8 +135,7 @@
     return best;
   }
 
-  function buildDutiesForStation(trips, homeStation, drivers, taskCodePrefix) {
-    taskCodePrefix = taskCodePrefix || "";
+  function buildDutiesForStation(trips, homeStation, drivers) {
     const allowed = ALLOWED_PREFIXES[homeStation];
     const relevant = trips.filter((t) => allowed.has(t.prefix));
 
@@ -174,7 +173,7 @@
       const driver = drivers[driverIdx % drivers.length];
       driverIdx += 1;
 
-      const taskCode = `${minutesToTimeStr(cand.signIn).replace(":", "")}/${taskCodePrefix}${driverIdx}`;
+      const taskCode = `${minutesToTimeStr(cand.signIn).replace(":", "")}/${Math.floor(cand.dutyMin / 60)}`;
       duties.push({
         driver,
         taskCode,
@@ -213,7 +212,7 @@
       const signOut = (shiftStart + RESERVE_DUTY_MIN) % 1440;
       return {
         driver,
-        taskCode: `${minutesToTimeStr(shiftStart).replace(":", "")}/RSV`,
+        taskCode: `${minutesToTimeStr(shiftStart).replace(":", "")}/${Math.floor(RESERVE_DUTY_MIN / 60)}`,
         signIn: shiftStart,
         signOut,
         legs: [],
