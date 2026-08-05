@@ -12,7 +12,7 @@
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
-    --ink: #1F2A44; --stripe: #EAF3EA; --paper: #FFFFFF; --border: #d7dbe3;
+    --ink: #0E6E63; --line: #14181C; --stripe: #EAF3EA; --paper: #FFFFFF; --border: #d7dbe3;
   }
   * { box-sizing: border-box; }
   body {
@@ -28,10 +28,12 @@
 
   .signin-bar { display: flex; align-items: center; gap: 8px; }
   .station-btn {
-    padding: 7px 16px; border-radius: 6px; border: 1px solid rgba(255,255,255,.35);
+    padding: 7px 16px; border-radius: 8px; border: 2px solid rgba(255,255,255,.55);
     background: transparent; color: #fff; cursor: pointer; font-weight: 700; font-size: 13px;
+    transition: transform .1s ease, box-shadow .1s ease;
   }
-  .station-btn.active { background: #fff; color: var(--ink); }
+  .station-btn.active { background: #fff; color: var(--ink); border-color: var(--line); box-shadow: 3px 3px 0 rgba(0,0,0,.35); }
+  .station-btn:hover { border-color: #fff; }
   .signed-in-badge {
     font-size: 12px; padding: 6px 12px; border-radius: 999px; background: #2c3b63; display: none;
   }
@@ -43,11 +45,11 @@
     border: 2px dashed var(--border); border-radius: 12px; background: #fff;
     padding: 46px 20px; text-align: center; color: #666; transition: all .15s ease;
   }
-  .dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
+  .dropzone.drag-over { border-color: var(--ink); background: #eafaf7; color: var(--ink); }
   .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
   .dropzone .hint { font-size: 12px; margin-top: 6px; color: #999; }
   .dropzone input[type=file] { display: none; }
-  .browse-link { color: var(--blue); text-decoration: underline; cursor: pointer; }
+  .browse-link { color: var(--ink); text-decoration: underline; cursor: pointer; }
 
   .status-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 13px; }
   .status-icon {
@@ -118,10 +120,13 @@
 
   .actions { display: flex; gap: 10px; margin-top: 16px; }
   button.primary {
-    background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: 6px;
-    font-weight: 700; cursor: pointer; font-size: 13px;
+    background: var(--ink); color: #fff; border: 2px solid var(--line); padding: 9px 18px; border-radius: 8px;
+    font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 3px 3px 0 var(--line);
+    transition: transform .1s ease, box-shadow .1s ease;
   }
-  button.primary:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--line); }
+  button.primary:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--line); }
+  button.primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; }
   .note { font-size: 11px; color: #888; margin-top: 6px; }
 
   /* Driver roster sheet -- styled to look like the real Excel roster (monthly grid, one row
@@ -132,7 +137,7 @@
     border: 2px dashed var(--border); border-radius: 8px; padding: 14px 18px; font-size: 12px;
     color: #666; flex: 1 1 260px; text-align: center; cursor: pointer; transition: all .15s ease;
   }
-  .roster-sheet-dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
+  .roster-sheet-dropzone.drag-over { border-color: var(--ink); background: #eafaf7; color: var(--ink); }
   .roster-sheet-dropzone input[type=file] { display: none; }
   .roster-sheet-date-picker { font-size: 12px; font-weight: 700; color: #555; }
   .roster-sheet-date-picker select {
@@ -153,13 +158,13 @@
   .roster-sheet-table td.driver-cell .cat { color: #888; font-weight: 400; }
   .roster-sheet-table td.day-cell { font-weight: 700; min-width: 34px; padding: 0; }
   .roster-sheet-table td.day-cell.target-col, .roster-sheet-table th.target-col {
-    outline: 2px solid var(--blue); outline-offset: -2px;
+    outline: 2px solid var(--ink); outline-offset: -2px;
   }
   .roster-sheet-table select.day-select {
     width: 100%; box-sizing: border-box; border: none; background: transparent; font: inherit;
     font-weight: 700; text-align: center; text-align-last: center; padding: 5px 2px; cursor: pointer;
   }
-  .roster-sheet-table select.day-select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
+  .roster-sheet-table select.day-select:focus { outline: 2px solid var(--ink); outline-offset: -2px; }
   #generateSummary { margin-top: 10px; font-size: 12px; color: #555; }
   #generateSummary strong { color: var(--ink); }
 
