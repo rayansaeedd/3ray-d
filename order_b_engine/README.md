@@ -100,6 +100,38 @@ write_task_schedule(duties, "mad_task_schedule.xlsx")
 
 Requires `openpyxl`.
 
+## The PDF converter (`web/order_b_pdf_converter.html`)
+
+Solves the actual real-world gap: management sends Order B as a **PDF**, but the scheduler needs
+the one-row-per-trip `.xlsx`. This tool converts it — fully client-side, no server:
+
+- Drop the Order B PDF (any number of pages).
+- Parses each page's text via a vendored copy of pdf.js (`web/vendor/pdf.min.js` — the classic,
+  non-ES-module build, chosen specifically because ES modules are blocked by CORS under a plain
+  `file://` page, so the newer pdfjs-dist releases don't work when the file is just double-clicked
+  rather than served).
+- **Generic extraction algorithm, not a hardcoded table layout** (`web/pdf_order_b_parser.js`):
+  for each trip's column, the first schedule row with a value is its origin/departure, the last is
+  its destination/arrival, everything between is an intermediate stop. This works from the
+  document's own visual convention (journey flows top-to-bottom in the table) rather than assuming
+  "this block is always Makkah-origin," so it holds up across WEEK/TH/FR/SA pages without
+  per-page special-casing.
+- **Multiple day-patterns are kept separate, not merged** — trip numbers repeat across WEEK/TH/FR/SA
+  with (probably, not yet confirmed) different times, so the tool shows a page picker rather than
+  silently overwriting one pattern's data with another's.
+- Preview table + warnings **before** you download, so a parsing problem shows up as a wrong cell
+  you can check against the PDF, not a silently wrong duty three steps later.
+
+**Validated, not just built**: cross-checked against a hand-verified ground truth (the same trips
+independently confirmed earlier in this project) — 0 mismatches across all 96 trips on the WEEK
+page, and a full round-trip (PDF → browser converter → downloaded `.xlsx` → real
+`order_b_parser.load_order_b()`) produces the identical 96 trips. Confirmed with real headless-browser
+runs, not just Node unit tests.
+
+**Still open**: the "SU-14 / MO-14" style date-range header on each schedule block likely encodes
+which calendar dates each pattern actually applies to — not yet decoded, so picking the right
+page for a given date is still manual.
+
 ## The drag-and-drop tool (`web/order_b_scheduler.html`)
 
 Self-contained, no server or build step — just open the file in a browser:

@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Order B PDF &rarr; Excel Converter</title>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+</script>
+<script src="pdf_order_b_parser.js"></script>
+<style>
+  :root { --ink: #1F2A44; --border: #d7dbe3; --blue: #4472C4; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; background: #f4f5f7; color: #1a1d24; }
+  header { background: var(--ink); color: #fff; padding: 18px 28px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+  header a { color: #cfe0ff; }
+  main { max-width: 1000px; margin: 24px auto; padding: 0 20px 60px; }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; background: #fff;
+    padding: 46px 20px; text-align: center; color: #666; transition: all .15s ease;
+  }
+  .dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
+  .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
+  .dropzone .hint { font-size: 12px; margin-top: 6px; color: #999; }
+  .dropzone input[type=file] { display: none; }
+  .browse-link { color: var(--blue); text-decoration: underline; cursor: pointer; }
+
+  .status-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 13px; }
+  .status-icon {
+    width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 13px; font-weight: 700; color: #fff; flex: none;
+  }
+  .status-icon.idle { background: #b9bec9; }
+  .status-icon.working { background: #f2a900; animation: spin 1s linear infinite; }
+  .status-icon.done { background: #3a9d55; }
+  .status-icon.error { background: #C00000; }
+  @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
+
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-top: 18px; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; }
+
+  table.pages { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.pages th, table.pages td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  table.pages tr:hover { background: #f7f9ff; }
+  table.pages input[type=radio] { margin-right: 8px; }
+
+  .warn { border: 1px solid #f3c1c1; background: #fff5f5; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
+  .warn strong { color: #C00000; }
+
+  table.preview { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
+  table.preview th, table.preview td { border: 1px solid var(--border); padding: 4px 6px; text-align: center; }
+  table.preview th { background: #f7f8fa; position: sticky; top: 0; }
+  .preview-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 10px; }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  button.primary {
+    background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: 6px;
+    font-weight: 700; cursor: pointer; font-size: 13px;
+  }
+  button.primary:disabled { opacity: .4; cursor: not-allowed; }
+  .note { font-size: 11px; color: #888; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Order B PDF &rarr; Excel Converter</h1>
+  <div class="sub">Drop the Order B PDF from management, review the extracted trips, download it as the .xlsx the
+    <a href="order_b_scheduler.html">task scheduler</a> expects &mdash; check it before trusting it.</div>
+</header>
+
+<main>
+  <div id="dropzone" class="dropzone">
+    <div class="icon">&#8595;</div>
+    <div><strong>Drop the Order B PDF here.</strong></div>
+    <div class="hint">Or <span class="browse-link" id="browseLink">browse a file</span>. Nothing leaves your browser &mdash; parsing runs locally.</div>
+    <input type="file" id="fileInput" accept=".pdf" />
+  </div>
+
+  <div class="status-row" id="statusRow" style="display:none;">
+    <div class="status-icon idle" id="statusIcon">&#8226;</div>
+    <div id="statusText">Waiting for a file&hellip;</div>
+  </div>
+
+  <div id="pagesCard" class="card" style="display:none;">
+    <h2>Pages found</h2>
+    <table class="pages" id="pagesTable"></table>
+    <div class="note">This PDF may contain more than one day-pattern (WEEK / TH / FR / SA), each with its own
+      trip catalog. Pick one to preview and export &mdash; they are kept separate rather than merged, since it's
+      not yet confirmed whether a repeated trip number means the same schedule across patterns.</div>
+  </div>
+
+  <div id="warnBox" class="warn" style="display:none;"></div>
+
+  <div id="previewCard" class="card" style="display:none;">
+    <h2 id="previewTitle">Preview</h2>
+    <div class="preview-wrap">
+      <table class="preview" id="previewTable"></table>
+    </div>
+    <div class="actions">
+      <button class="primary" id="downloadBtn">Download this page as .xlsx</button>
+    </div>
+    <div class="note">Check this against the PDF before using it &mdash; especially any trip missing an origin or
+      destination (would show as a warning above) and any time that looks off.</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("fileInput");
+  const browseLink = document.getElementById("browseLink");
+  const statusRow = document.getElementById("statusRow");
+  const statusIcon = document.getElementById("statusIcon");
+  const statusText = document.getElementById("statusText");
+  const pagesCard = document.getElementById("pagesCard");
+  const pagesTable = document.getElementById("pagesTable");
+  const warnBox = document.getElementById("warnBox");
+  const previewCard = document.getElementById("previewCard");
+  const previewTitle = document.getElementById("previewTitle");
+  const previewTable = document.getElementById("previewTable");
+  const downloadBtn = document.getElementById("downloadBtn");
+
+  let parsedPages = [];
+  let selectedPageIdx = null;
+
+  browseLink.addEventListener("click", () => fileInput.click());
+  ["dragenter", "dragover"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add("drag-over"); })
+  );
+  ["dragleave", "drop"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove("drag-over"); })
+  );
+  dropzone.addEventListener("drop", (e) => {
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (file) handleFile(file);
+  });
+
+  function setStatus(kind, text) {
+    statusRow.style.display = "flex";
+    statusIcon.className = "status-icon " + kind;
+    statusIcon.textContent = { idle: "•", working: "↻", done: "✓", error: "!" }[kind];
+    statusText.textContent = text;
+  }
+
+  async function handleFile(file) {
+    setStatus("working", `Reading ${file.name}…`);
+    pagesCard.style.display = "none";
+    previewCard.style.display = "none";
+    warnBox.style.display = "none";
+    try {
+      const buf = await file.arrayBuffer();
+      const { pages } = await PdfOrderBParser.parsePdf(window.pdfjsLib, new Uint8Array(buf), {});
+      if (!pages.length) {
+        setStatus("error", "No schedule tables (No. Train rows) found in this PDF.");
+        return;
+      }
+      parsedPages = pages;
+      renderPagesTable();
+      setStatus("done", `Found ${pages.length} schedule page(s). Pick one below to preview and export.`);
+      selectPage(0);
+    } catch (err) {
+      console.error(err);
+      setStatus("error", "Could not process this file: " + err.message);
+    }
+  }
+
+  function renderPagesTable() {
+    pagesCard.style.display = "block";
+    const rows = parsedPages.map((p, i) =>
+      `<tr>
+        <td><input type="radio" name="pagePick" value="${i}" ${i === 0 ? "checked" : ""}></td>
+        <td>Page ${p.page}</td>
+        <td>${p.patternLabel || "(pattern label not detected)"}</td>
+        <td>${Object.keys(p.trips).length} trips</td>
+        <td>${p.warnings.length ? `<span style="color:#C00000">${p.warnings.length} warning(s)</span>` : "clean"}</td>
+      </tr>`
+    ).join("");
+    pagesTable.innerHTML =
+      `<tr><th></th><th>Page</th><th>Pattern</th><th>Trips</th><th>Status</th></tr>${rows}`;
+    pagesTable.querySelectorAll('input[name="pagePick"]').forEach((r) =>
+      r.addEventListener("change", (e) => selectPage(parseInt(e.target.value, 10)))
+    );
+  }
+
+  const STATIONS = ["Makkah", "Jeddah", "KAIA", "KAEC", "Madinah"];
+
+  function selectPage(idx) {
+    selectedPageIdx = idx;
+    const p = parsedPages[idx];
+    previewCard.style.display = "block";
+    previewTitle.textContent = `Preview — Page ${p.page}: ${p.patternLabel || "?"} (${Object.keys(p.trips).length} trips)`;
+
+    if (p.warnings.length) {
+      warnBox.style.display = "block";
+      warnBox.innerHTML = `<strong>${p.warnings.length} warning(s) on this page</strong> — review these trips against the PDF directly:<br>` +
+        p.warnings.map((w) => `&bull; ${w}`).join("<br>");
+    } else {
+      warnBox.style.display = "none";
+    }
+
+    const headers = ["Trip No."].concat(STATIONS.flatMap((s) => [`${s} Dep`, `${s} Arr`]));
+    const tripNos = Object.keys(p.trips).sort();
+    const headerRow = `<tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr>`;
+    const bodyRows = tripNos.map((tripNo) => {
+      const rec = p.trips[tripNo];
+      const cells = headers.map((h) => (h === "Trip No." ? tripNo : (rec[h] || "")));
+      return `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+    }).join("");
+    previewTable.innerHTML = headerRow + bodyRows;
+  }
+
+  downloadBtn.addEventListener("click", () => {
+    if (selectedPageIdx === null) return;
+    const p = parsedPages[selectedPageIdx];
+    const headers = ["Trip No."].concat(STATIONS.flatMap((s) => [`${s} Dep`, `${s} Arr`]));
+    const tripNos = Object.keys(p.trips).sort();
+    const rows = [headers].concat(
+      tripNos.map((tripNo) => {
+        const rec = p.trips[tripNo];
+        return headers.map((h) => (h === "Trip No." ? tripNo : (rec[h] || "")));
+      })
+    );
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet");
+    const safePattern = (p.patternLabel || `page${p.page}`).replace(/[^\w]+/g, "_").slice(0, 40);
+    XLSX.writeFile(wb, `OrderB_${safePattern}.xlsx`);
+  });
+})();
+</script>
+
+</body>
+</html>
