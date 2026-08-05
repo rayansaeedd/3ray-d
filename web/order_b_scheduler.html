@@ -6,6 +6,7 @@
 <title>Order B Driver Task Scheduler</title>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="order_b_engine.js"></script>
+<script src="joint_scheduler.js"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
@@ -160,15 +161,14 @@
 <script>
 (function () {
   const E = window.OrderBEngine;
+  const J = window.JointScheduler;
   let homeStation = null;
 
-  // Driver identity is intentionally left blank here. This tool's job is to generate the
-  // tasks from Order B (timing, trip pairing, task codes); assigning real drivers to those
-  // tasks is a separate step to be built later. Enough blank slots are generated so duty
-  // building/cycling still works -- only the rendered name/ID/phone are empty.
-  function rosterFor(station) {
-    return Array.from({ length: 200 }, () => ({ driverId: "", name: "", phone: "", homeStation: station }));
-  }
+  // The joint result is computed ONCE per dropped file, covering all three stations at once
+  // (see joint_scheduler.js) -- switching stations after that just re-filters this same
+  // result, it never re-parses or re-solves. That's the whole point: nobody's view can
+  // conflict with anyone else's because there's only ever one computation per file.
+  let jointResult = null;
 
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("fileInput");
@@ -183,8 +183,6 @@
   const downloadBtn = document.getElementById("downloadBtn");
   const signedInBadge = document.getElementById("signedInBadge");
 
-  let lastDuties = [];
-
   document.querySelectorAll(".station-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".station-btn").forEach((b) => b.classList.remove("active"));
@@ -196,10 +194,16 @@
       dropzone.classList.remove("disabled");
       dropzone.querySelector("strong").textContent = "Drop Order B here.";
       dropzone.querySelector(".hint").innerHTML =
-        `Only trips relevant to ${label} drivers will be pulled in. Or <span class="browse-link" id="browseLink2">browse a file</span>.`;
-      resultsCard.style.display = "none";
-      uncoveredBox.style.display = "none";
-      statusRow.style.display = "none";
+        `Drop the full Order B trip file (all stations, not pre-filtered) -- or <span class="browse-link" id="browseLink2">browse a file</span>.`;
+      if (jointResult) {
+        // Already computed from a previous drop -- just switch which station's slice we're
+        // viewing, no re-parse/re-solve. This is the whole point of the joint scheduler.
+        renderForStation();
+      } else {
+        resultsCard.style.display = "none";
+        uncoveredBox.style.display = "none";
+        statusRow.style.display = "none";
+      }
     });
   });
 
@@ -251,13 +255,18 @@
           setStatus("error", `${errors.length} row error(s) in the sheet -- see console.`);
           console.error(errors);
         }
-        const drivers = rosterFor(homeStation);
-        const { duties, uncovered } = E.buildDutiesForStation(trips, homeStation, drivers);
-        // Reserve-shift generation is disabled for now (per request) -- trip duties only.
-        const reserveDuties = [];
-        lastDuties = duties.concat(reserveDuties);
-        renderResults(trips, duties, uncovered, reserveDuties);
-        setStatus("done", `Loaded ${trips.length} trips, built ${duties.length} duties for ${homeStation}. Reserve generation is off for now.`);
+        // One joint computation for the whole file, covering all three stations at once --
+        // NOT filtered to homeStation. Every sign-in from here on just views a slice of this
+        // same result; dropping again from a different station would recompute it from
+        // scratch and could disagree with this one, which is exactly the scenario this
+        // exists to avoid -- so in a real deployment this step belongs on a shared backend,
+        // not per-browser (still a known gap, see order_b_engine/README.md).
+        jointResult = J.buildJointSchedule(trips);
+        renderForStation();
+        const totalDuties = Object.values(jointResult.dutiesByStation).reduce((a, v) => a + v.length, 0);
+        setStatus("done", `Loaded ${trips.length} trips, built ${totalDuties} duties across all 3 stations (` +
+          Object.entries(jointResult.dutiesByStation).map(([k, v]) => `${k}: ${v.length}`).join(", ") +
+          `). Reserve generation is off for now.`);
       } catch (err) {
         console.error(err);
         setStatus("error", "Could not process this file: " + err.message);
@@ -313,25 +322,36 @@
     </div>`;
   }
 
-  function renderResults(trips, duties, uncovered, reserveDuties) {
-    resultsTitle.textContent = `${homeStation} station — ${duties.length} duties, ${reserveDuties.length} reserve shifts`;
-    dutyList.innerHTML = duties.map(dutyRowHtml).join("") + reserveDuties.map(dutyRowHtml).join("");
+  function renderForStation() {
+    if (!jointResult || !homeStation) return;
+    const duties = jointResult.dutiesByStation[homeStation] || [];
+    // Uncovered trips are global (not owned by any station), but only ones actually touching
+    // this station are relevant to show here -- otherwise every supervisor sees every gap,
+    // including ones from families they have nothing to do with.
+    const relevantUncovered = jointResult.uncovered.filter(
+      (t) => t.origin === homeStation || t.destination === homeStation
+    );
+
+    resultsTitle.textContent = `${homeStation} station — ${duties.length} duties`;
+    dutyList.innerHTML = duties.map(dutyRowHtml).join("");
     resultsCard.style.display = "block";
 
-    if (uncovered.length) {
+    if (relevantUncovered.length) {
       uncoveredBox.style.display = "block";
-      uncoveredBox.innerHTML = `<strong>${uncovered.length} trip(s) need attention</strong> -- no valid same-day return leg was found in this file: ` +
-        uncovered.map((t) => t.tripNo).join(", ");
+      uncoveredBox.innerHTML = `<strong>${relevantUncovered.length} trip(s) need attention</strong> -- no same-day Main coverage found for: ` +
+        relevantUncovered.map((t) => t.tripNo).join(", ");
     } else {
       uncoveredBox.style.display = "none";
     }
   }
 
   downloadBtn.addEventListener("click", () => {
-    if (!lastDuties.length) return;
+    if (!jointResult || !homeStation) return;
+    const duties = jointResult.dutiesByStation[homeStation] || [];
+    if (!duties.length) return;
     const rows = [["Task Code", "Driver ID", "Driver Name", "Phone", "Sign In", "Origin",
                     "Leg 1 Trip", "Leg 1 Role", "Leg 2 Trip", "Leg 2 Role", "Destination", "Sign Out", "Duty (min)", "Overtime"]];
-    lastDuties.forEach((d) => {
+    duties.forEach((d) => {
       if (d.isReserve) {
         rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
                    d.driver.homeStation, "RESERVE", "", "", "", d.driver.homeStation, timeStr(d.signOut), d.dutyMin, ""]);

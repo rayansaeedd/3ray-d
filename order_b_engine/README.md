@@ -19,15 +19,27 @@ earlier, separate prototype that predates this rule set — kept untouched, not 
   leg), the 45-minute minimum connection before any Main leg, the 7:30 target / 8:00 cap duty
   length, and the overtime flag beyond that.
 - **`reserve.py`** — spreads leftover drivers (no trip that day) across reserve shifts: fixed
-  7:00 duty, no trip-pairing logic.
+  7:00 duty, no trip-pairing logic. Currently disabled in the web tool (see below).
+- **`joint_scheduler.py`** — the *real* entry point for a full day's Order B: one pass across all
+  three stations at once, not three independent per-station runs. See its own module docstring
+  and the "Joint scheduling" section below — this is the piece that actually solves the
+  cross-station coordination gap `duty_builder.py` always had.
 - **`excel_export.py`** — writes the task schedule to Excel in the reference visual style
   (bordered trip-number box, route-color bar underneath, rotated dep/arr times, turnaround-station
-  letter badge, RESERVE block).
-- **`demo.py`** — runs three scenarios and asserts correctness; scenario 1 rebuilds Ziyad's real,
-  already-verified duty (task `0630/8L`) from raw trip data with zero hardcoding of the answer.
-- **`../web/order_b_scheduler.html`** — the supervisor-facing drag-and-drop tool. Sign in as a
-  station, drop an Order B `.xlsx`, and it runs the same rules client-side to build that station's
-  duties + reserve shifts, rendered in the box/bar/badge visual style. See `web/` section below.
+  letter badge, RESERVE block). Not yet updated to consume `joint_scheduler.py`'s output directly
+  (still wired to the older per-station `duty_builder.py` shape) — a real gap if you need a
+  styled Excel export of a joint-scheduled day right now.
+- **`demo.py`** — runs three scenarios and asserts correctness for `duty_builder.py` (the
+  per-station builder); scenario 1 rebuilds Ziyad's real, already-verified duty (task `0630/8L`)
+  from raw trip data with zero hardcoding of the answer.
+- **`joint_demo.py`** — the equivalent correctness proof for `joint_scheduler.py`, against a real
+  96-trip Order B WEEK page (`_test_data/all_trips_ground_truth.json`): asserts every trip ends
+  up with *exactly one* Main driver, zero uncovered, zero double-booked.
+- **`../web/order_b_scheduler.html`** — the supervisor-facing drag-and-drop tool, now backed by
+  the joint scheduler (`web/joint_scheduler.js`, a validated port of `joint_scheduler.py`). Sign
+  in as a station, drop the *full* Order B `.xlsx` (all stations, not pre-filtered) — it computes
+  all three stations' duties in one pass and caches the result; switching stations just re-filters
+  that cached result, no re-parse. See "Joint scheduling" below.
 
 ## Order B input format
 
@@ -55,14 +67,66 @@ trip per row instead of one trip per column.
 | Reserve duty length | fixed 7:00 |
 | Reserve sign-in | a set shift-start time, spread across the day |
 
+## Joint scheduling (`joint_scheduler.py`) — the real entry point for a full Order B day
+
+`duty_builder.build_duties_for_station` looks at one station in isolation, which cannot work for
+a real day: each trip family is shared between exactly two stations (00/01/03 ⇄ MAK/MAD, 05 ⇄
+MAK/KAIA, 07/08 ⇄ MAD/KAIA), and a given physical trip can be Main-driven by either side (e.g. a
+Makkah-origin R1 trip could be a Makkah-based driver's outbound, *or* a Madinah-based driver's
+return leg). Running each station blind means two supervisors' independent runs can put two
+different drivers in the Main seat on the same trip.
+
+`build_joint_schedule(trips)` computes all three stations' duties in one pass instead, with two
+rules in priority order:
+
+1. **Mandatory coverage, non-negotiable.** Every trip ends up Main-driven by exactly one duty.
+   Implemented as **two phases**, not one matching pass:
+   - **Phase 1** — maximum bipartite matching (Kuhn's algorithm) over Main+Main pairings only:
+     the efficient case, one duty fully covers two trips at once.
+   - **Phase 2** — every trip Phase 1 didn't reach still gets its own duty (it's inherently that
+     trip's own origin station's outbound-Main), with a Passenger-only return picked freely from
+     any compatible trip.
+
+   A **single-matching-pass version was built first and was wrong**: it let a Main+Passenger
+   pairing "consume" both trips, when a Passenger leg provides no Main coverage at all — the
+   Passenger-side trip still needs its own separate Main driver. This was caught by tracing one
+   specific real trip (`00211`, a late-evening Madinah departure) that the first version called
+   "covered" via a passenger-role return, when nothing in the schedule could actually be its
+   Main-driven return. The two-phase version fixed it; `joint_demo.py` asserts every trip in a
+   real 96-trip dataset gets *exactly* one Main driver as a standing regression check, specifically
+   so this can't silently regress again.
+
+   A second real bug surfaced during the same debugging: `_try_build`'s gap/duty-span math uses
+   wraparound-safe minute arithmetic (needed for a duty whose *own* last leg legitimately arrives
+   just after midnight), but without an explicit same-day guard it would also accept a trip
+   departing at 06:00 as a "same-day" return for one that doesn't arrive until 21:55 — by
+   silently wrapping all the way around to the next calendar day. `_same_day_dep_before_arr()`
+   guards against this specifically; see its docstring for the exact real pairing that exposed it.
+
+2. **Fairness — NOT YET WIRED IN.** Each station's share of a shared family should eventually
+   track its share of driver headcount (adjusted for its other shared-family obligations — e.g.
+   Makkah's shuttle load should reduce its claim on R1), per the supervisor's own explanation.
+   Real driver counts aren't available yet. `target_duty_split()` computes a placeholder
+   (headcount-only, even split by default) but the matching itself doesn't apply it — an earlier
+   attempt to cap the matching search by a fairness target was hard to verify correct (a capped
+   node can still get matched via an augmenting path that reassigns someone else, silently
+   defeating the cap) and was dropped in favor of shipping a *provably correct* uncapped maximum
+   matching now. Revisit once real rosters exist, ideally as a proper weighted/min-cost matching.
+
+On the real 96-trip WEEK-pattern dataset: 48 duties, split 16/MAK, 16/MAD, 16/KAIA — purely from
+the graph structure, with no fairness weighting applied yet.
+
+**Not yet done:** `excel_export.py` and the driver-roster/reserve pieces still expect
+`duty_builder.py`'s per-station shape; wiring `joint_scheduler.py`'s output through those is
+unfinished. The web tool (`order_b_scheduler.html`) already uses the joint scheduler client-side.
+
 ## Known simplifications / open questions (flagged, not silently assumed)
 
-1. **Cross-station coordination.** `build_duties_for_station` runs per home station
-   independently. It has no way to know whether a different station's run has already put a
-   different driver in the Main seat on the same physical return trip. In the real workflow each
-   supervisor covers their own station's outbound trips, which mostly avoids this — but nothing
-   here actively checks for or prevents a double-booking across two supervisors' runs. Needs a
-   real answer before this runs against a full multi-station Order B unattended.
+1. ~~**Cross-station coordination.**~~ **Solved by `joint_scheduler.py`** — see the section below.
+   `duty_builder.build_duties_for_station` (this module) still has the gap described below if
+   used on its own; it's kept for the cases in `demo.py` and hasn't been deleted, but
+   `joint_scheduler.py` is the one that should be used for anything spanning more than one
+   station.
 2. **Competing demand for the same return leg.** If two different departing trips from the same
    station could both use the same return trip, the current algorithm resolves it by processing
    departing trips in departure-time order (earliest first claims the return leg). This is an

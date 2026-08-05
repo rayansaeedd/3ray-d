@@ -1,0 +1,584 @@
+{
+  "00060": {
+    "Jeddah Arr": "06:28",
+    "Jeddah Dep": "06:32",
+    "KAEC Arr": "07:04",
+    "KAEC Dep": "07:07",
+    "Madinah Arr": "08:25",
+    "Makkah Dep": "06:00"
+  },
+  "00061": {
+    "Jeddah Arr": "08:17",
+    "Jeddah Dep": "08:21",
+    "KAEC Arr": "07:40",
+    "KAEC Dep": "07:43",
+    "Madinah Dep": "06:30",
+    "Makkah Arr": "08:55"
+  },
+  "00080": {
+    "Jeddah Arr": "08:28",
+    "Jeddah Dep": "08:32",
+    "KAEC Arr": "09:04",
+    "KAEC Dep": "09:07",
+    "Madinah Arr": "10:25",
+    "Makkah Dep": "08:00"
+  },
+  "00081": {
+    "Jeddah Arr": "10:17",
+    "Jeddah Dep": "10:21",
+    "KAEC Arr": "09:40",
+    "KAEC Dep": "09:43",
+    "Madinah Dep": "08:30",
+    "Makkah Arr": "10:55"
+  },
+  "00110": {
+    "Jeddah Arr": "11:28",
+    "Jeddah Dep": "11:32",
+    "KAEC Arr": "12:04",
+    "KAEC Dep": "12:07",
+    "Madinah Arr": "13:25",
+    "Makkah Dep": "11:00"
+  },
+  "00111": {
+    "Jeddah Arr": "13:17",
+    "Jeddah Dep": "13:21",
+    "KAEC Arr": "12:40",
+    "KAEC Dep": "12:43",
+    "Madinah Dep": "11:30",
+    "Makkah Arr": "13:55"
+  },
+  "00140": {
+    "Jeddah Arr": "14:28",
+    "Jeddah Dep": "14:32",
+    "KAEC Arr": "15:04",
+    "KAEC Dep": "15:07",
+    "Madinah Arr": "16:25",
+    "Makkah Dep": "14:00"
+  },
+  "00141": {
+    "Jeddah Arr": "16:17",
+    "Jeddah Dep": "16:21",
+    "KAEC Arr": "15:40",
+    "KAEC Dep": "15:43",
+    "Madinah Dep": "14:30",
+    "Makkah Arr": "16:55"
+  },
+  "00160": {
+    "Jeddah Arr": "16:28",
+    "Jeddah Dep": "16:32",
+    "KAEC Arr": "17:04",
+    "KAEC Dep": "17:07",
+    "Madinah Arr": "18:25",
+    "Makkah Dep": "16:00"
+  },
+  "00170": {
+    "Jeddah Arr": "17:28",
+    "Jeddah Dep": "17:32",
+    "KAEC Arr": "18:04",
+    "KAEC Dep": "18:07",
+    "Madinah Arr": "19:25",
+    "Makkah Dep": "17:00"
+  },
+  "00171": {
+    "Jeddah Arr": "19:17",
+    "Jeddah Dep": "19:21",
+    "KAEC Arr": "18:40",
+    "KAEC Dep": "18:43",
+    "Madinah Dep": "17:30",
+    "Makkah Arr": "19:55"
+  },
+  "00190": {
+    "Jeddah Arr": "19:28",
+    "Jeddah Dep": "19:32",
+    "KAEC Arr": "20:04",
+    "KAEC Dep": "20:07",
+    "Madinah Arr": "21:25",
+    "Makkah Dep": "19:00"
+  },
+  "00191": {
+    "Jeddah Arr": "21:17",
+    "Jeddah Dep": "21:21",
+    "KAEC Arr": "20:40",
+    "KAEC Dep": "20:43",
+    "Madinah Dep": "19:30",
+    "Makkah Arr": "21:55"
+  },
+  "00210": {
+    "Jeddah Arr": "21:28",
+    "Jeddah Dep": "21:32",
+    "KAEC Arr": "22:04",
+    "KAEC Dep": "22:07",
+    "Madinah Arr": "23:25",
+    "Makkah Dep": "21:00"
+  },
+  "00211": {
+    "Jeddah Arr": "23:17",
+    "Jeddah Dep": "23:21",
+    "KAEC Arr": "22:40",
+    "KAEC Dep": "22:43",
+    "Madinah Dep": "21:30",
+    "Makkah Arr": "23:55"
+  },
+  "01070": {
+    "Jeddah Arr": "07:28",
+    "Jeddah Dep": "07:32",
+    "Madinah Arr": "09:20",
+    "Makkah Dep": "07:00"
+  },
+  "01071": {
+    "Jeddah Arr": "09:11",
+    "Jeddah Dep": "09:15",
+    "Madinah Dep": "07:30",
+    "Makkah Arr": "09:50"
+  },
+  "01090": {
+    "Jeddah Arr": "09:28",
+    "Jeddah Dep": "09:32",
+    "Madinah Arr": "11:20",
+    "Makkah Dep": "09:00"
+  },
+  "01091": {
+    "Jeddah Arr": "11:11",
+    "Jeddah Dep": "11:15",
+    "Madinah Dep": "09:30",
+    "Makkah Arr": "11:50"
+  },
+  "01100": {
+    "Jeddah Arr": "10:28",
+    "Jeddah Dep": "10:32",
+    "Madinah Arr": "12:20",
+    "Makkah Dep": "10:00"
+  },
+  "01101": {
+    "Jeddah Arr": "12:11",
+    "Jeddah Dep": "12:15",
+    "Madinah Dep": "10:30",
+    "Makkah Arr": "12:50"
+  },
+  "01120": {
+    "Jeddah Arr": "12:28",
+    "Jeddah Dep": "12:32",
+    "Madinah Arr": "14:20",
+    "Makkah Dep": "12:00"
+  },
+  "01121": {
+    "Jeddah Arr": "14:11",
+    "Jeddah Dep": "14:15",
+    "Madinah Dep": "12:30",
+    "Makkah Arr": "14:50"
+  },
+  "01130": {
+    "Jeddah Arr": "13:28",
+    "Jeddah Dep": "13:32",
+    "Madinah Arr": "15:20",
+    "Makkah Dep": "13:00"
+  },
+  "01131": {
+    "Jeddah Arr": "15:11",
+    "Jeddah Dep": "15:15",
+    "Madinah Dep": "13:30",
+    "Makkah Arr": "15:50"
+  },
+  "01150": {
+    "Jeddah Arr": "15:28",
+    "Jeddah Dep": "15:32",
+    "Madinah Arr": "17:20",
+    "Makkah Dep": "15:00"
+  },
+  "01151": {
+    "Jeddah Arr": "17:11",
+    "Jeddah Dep": "17:15",
+    "Madinah Dep": "15:30",
+    "Makkah Arr": "17:50"
+  },
+  "01161": {
+    "Jeddah Arr": "18:11",
+    "Jeddah Dep": "18:15",
+    "Madinah Dep": "16:30",
+    "Makkah Arr": "18:50"
+  },
+  "01180": {
+    "Jeddah Arr": "18:28",
+    "Jeddah Dep": "18:32",
+    "Madinah Arr": "20:20",
+    "Makkah Dep": "18:00"
+  },
+  "01181": {
+    "Jeddah Arr": "20:11",
+    "Jeddah Dep": "20:15",
+    "Madinah Dep": "18:30",
+    "Makkah Arr": "20:50"
+  },
+  "01183": {
+    "Jeddah Arr": "20:31",
+    "Jeddah Dep": "20:35",
+    "Madinah Dep": "18:50",
+    "Makkah Arr": "21:10"
+  },
+  "01200": {
+    "Jeddah Arr": "20:28",
+    "Jeddah Dep": "20:32",
+    "Madinah Arr": "22:20",
+    "Makkah Dep": "20:00"
+  },
+  "01201": {
+    "Jeddah Arr": "22:11",
+    "Jeddah Dep": "22:15",
+    "Madinah Dep": "20:30",
+    "Makkah Arr": "22:50"
+  },
+  "01212": {
+    "Jeddah Arr": "21:48",
+    "Jeddah Dep": "21:52",
+    "Madinah Arr": "23:40",
+    "Makkah Dep": "21:20"
+  },
+  "03132": {
+    "Madinah Arr": "15:35",
+    "Makkah Dep": "13:20"
+  },
+  "03133": {
+    "Madinah Dep": "13:50",
+    "Makkah Arr": "16:05"
+  },
+  "03142": {
+    "Madinah Arr": "16:35",
+    "Makkah Dep": "14:20"
+  },
+  "03143": {
+    "Madinah Dep": "14:50",
+    "Makkah Arr": "17:05"
+  },
+  "03152": {
+    "Madinah Arr": "17:35",
+    "Makkah Dep": "15:20"
+  },
+  "03153": {
+    "Madinah Dep": "15:50",
+    "Makkah Arr": "18:05"
+  },
+  "03162": {
+    "Madinah Arr": "18:35",
+    "Makkah Dep": "16:20"
+  },
+  "03163": {
+    "Madinah Dep": "16:50",
+    "Makkah Arr": "19:05"
+  },
+  "03172": {
+    "Madinah Arr": "19:35",
+    "Makkah Dep": "17:20"
+  },
+  "03173": {
+    "Madinah Dep": "17:50",
+    "Makkah Arr": "20:05"
+  },
+  "05062": {
+    "Jeddah Arr": "06:40",
+    "Jeddah Dep": "06:44",
+    "KAIA Arr": "07:04",
+    "Makkah Dep": "06:10"
+  },
+  "05065": {
+    "Jeddah Arr": "06:21",
+    "Jeddah Dep": "06:25",
+    "KAIA Dep": "06:05",
+    "Makkah Arr": "06:59"
+  },
+  "05082": {
+    "Jeddah Arr": "08:40",
+    "Jeddah Dep": "08:44",
+    "KAIA Arr": "09:04",
+    "Makkah Dep": "08:10"
+  },
+  "05085": {
+    "Jeddah Arr": "08:21",
+    "Jeddah Dep": "08:25",
+    "KAIA Dep": "08:05",
+    "Makkah Arr": "08:59"
+  },
+  "05090": {
+    "Jeddah Arr": "10:05",
+    "Jeddah Dep": "10:09",
+    "KAIA Arr": "10:29",
+    "Makkah Dep": "09:35"
+  },
+  "05091": {
+    "Jeddah Arr": "09:51",
+    "Jeddah Dep": "09:55",
+    "KAIA Dep": "09:35",
+    "Makkah Arr": "10:29"
+  },
+  "05100": {
+    "Jeddah Arr": "11:05",
+    "Jeddah Dep": "11:09",
+    "KAIA Arr": "11:29",
+    "Makkah Dep": "10:35"
+  },
+  "05101": {
+    "Jeddah Arr": "10:51",
+    "Jeddah Dep": "10:55",
+    "KAIA Dep": "10:35",
+    "Makkah Arr": "11:29"
+  },
+  "05110": {
+    "Jeddah Arr": "12:05",
+    "Jeddah Dep": "12:09",
+    "KAIA Arr": "12:29",
+    "Makkah Dep": "11:35"
+  },
+  "05111": {
+    "Jeddah Arr": "11:51",
+    "Jeddah Dep": "11:55",
+    "KAIA Dep": "11:35",
+    "Makkah Arr": "12:29"
+  },
+  "05120": {
+    "Jeddah Arr": "13:05",
+    "Jeddah Dep": "13:09",
+    "KAIA Arr": "13:29",
+    "Makkah Dep": "12:35"
+  },
+  "05121": {
+    "Jeddah Arr": "12:51",
+    "Jeddah Dep": "12:55",
+    "KAIA Dep": "12:35",
+    "Makkah Arr": "13:29"
+  },
+  "05130": {
+    "Jeddah Arr": "14:05",
+    "Jeddah Dep": "14:09",
+    "KAIA Arr": "14:29",
+    "Makkah Dep": "13:35"
+  },
+  "05131": {
+    "Jeddah Arr": "13:51",
+    "Jeddah Dep": "13:55",
+    "KAIA Dep": "13:35",
+    "Makkah Arr": "14:29"
+  },
+  "05140": {
+    "Jeddah Arr": "15:05",
+    "Jeddah Dep": "15:09",
+    "KAIA Arr": "15:29",
+    "Makkah Dep": "14:35"
+  },
+  "05141": {
+    "Jeddah Arr": "14:51",
+    "Jeddah Dep": "14:55",
+    "KAIA Dep": "14:35",
+    "Makkah Arr": "15:29"
+  },
+  "05150": {
+    "Jeddah Arr": "16:05",
+    "Jeddah Dep": "16:09",
+    "KAIA Arr": "16:29",
+    "Makkah Dep": "15:35"
+  },
+  "05151": {
+    "Jeddah Arr": "15:51",
+    "Jeddah Dep": "15:55",
+    "KAIA Dep": "15:35",
+    "Makkah Arr": "16:29"
+  },
+  "05160": {
+    "Jeddah Arr": "17:05",
+    "Jeddah Dep": "17:09",
+    "KAIA Arr": "17:29",
+    "Makkah Dep": "16:35"
+  },
+  "05161": {
+    "Jeddah Arr": "16:51",
+    "Jeddah Dep": "16:55",
+    "KAIA Dep": "16:35",
+    "Makkah Arr": "17:29"
+  },
+  "05170": {
+    "Jeddah Arr": "18:05",
+    "Jeddah Dep": "18:09",
+    "KAIA Arr": "18:29",
+    "Makkah Dep": "17:35"
+  },
+  "05171": {
+    "Jeddah Arr": "17:51",
+    "Jeddah Dep": "17:55",
+    "KAIA Dep": "17:35",
+    "Makkah Arr": "18:29"
+  },
+  "05180": {
+    "Jeddah Arr": "19:05",
+    "Jeddah Dep": "19:09",
+    "KAIA Arr": "19:29",
+    "Makkah Dep": "18:35"
+  },
+  "05181": {
+    "Jeddah Arr": "18:51",
+    "Jeddah Dep": "18:55",
+    "KAIA Dep": "18:35",
+    "Makkah Arr": "19:29"
+  },
+  "05190": {
+    "Jeddah Arr": "20:05",
+    "Jeddah Dep": "20:09",
+    "KAIA Arr": "20:29",
+    "Makkah Dep": "19:35"
+  },
+  "05191": {
+    "Jeddah Arr": "19:51",
+    "Jeddah Dep": "19:55",
+    "KAIA Dep": "19:35",
+    "Makkah Arr": "20:29"
+  },
+  "05200": {
+    "Jeddah Arr": "21:05",
+    "Jeddah Dep": "21:09",
+    "KAIA Arr": "21:29",
+    "Makkah Dep": "20:35"
+  },
+  "05201": {
+    "Jeddah Arr": "20:51",
+    "Jeddah Dep": "20:55",
+    "KAIA Dep": "20:35",
+    "Makkah Arr": "21:29"
+  },
+  "05210": {
+    "Jeddah Arr": "22:05",
+    "Jeddah Dep": "22:09",
+    "KAIA Arr": "22:29",
+    "Makkah Dep": "21:35"
+  },
+  "05211": {
+    "Jeddah Arr": "21:51",
+    "Jeddah Dep": "21:55",
+    "KAIA Dep": "21:35",
+    "Makkah Arr": "22:29"
+  },
+  "05220": {
+    "Jeddah Arr": "23:05",
+    "Jeddah Dep": "23:09",
+    "KAIA Arr": "23:29",
+    "Makkah Dep": "22:35"
+  },
+  "05221": {
+    "Jeddah Arr": "22:51",
+    "Jeddah Dep": "22:55",
+    "KAIA Dep": "22:35",
+    "Makkah Arr": "23:29"
+  },
+  "07060": {
+    "KAEC Arr": "06:35",
+    "KAEC Dep": "06:36",
+    "KAIA Dep": "06:00",
+    "Madinah Arr": "07:54"
+  },
+  "07061": {
+    "KAEC Arr": "07:10",
+    "KAEC Dep": "07:11",
+    "KAIA Arr": "07:54",
+    "Madinah Dep": "06:00"
+  },
+  "07080": {
+    "KAEC Arr": "08:35",
+    "KAEC Dep": "08:36",
+    "KAIA Dep": "08:00",
+    "Madinah Arr": "09:54"
+  },
+  "07081": {
+    "KAEC Arr": "09:10",
+    "KAEC Dep": "09:11",
+    "KAIA Arr": "09:54",
+    "Madinah Dep": "08:00"
+  },
+  "07110": {
+    "KAEC Arr": "11:35",
+    "KAEC Dep": "11:36",
+    "KAIA Dep": "11:00",
+    "Madinah Arr": "12:54"
+  },
+  "07111": {
+    "KAEC Arr": "12:10",
+    "KAEC Dep": "12:11",
+    "KAIA Arr": "12:54",
+    "Madinah Dep": "11:00"
+  },
+  "07120": {
+    "KAEC Arr": "12:35",
+    "KAEC Dep": "12:36",
+    "KAIA Dep": "12:00",
+    "Madinah Arr": "13:54"
+  },
+  "07121": {
+    "KAEC Arr": "13:10",
+    "KAEC Dep": "13:11",
+    "KAIA Arr": "13:54",
+    "Madinah Dep": "12:00"
+  },
+  "07140": {
+    "KAEC Arr": "14:35",
+    "KAEC Dep": "14:36",
+    "KAIA Dep": "14:00",
+    "Madinah Arr": "15:54"
+  },
+  "07141": {
+    "KAEC Arr": "15:10",
+    "KAEC Dep": "15:11",
+    "KAIA Arr": "15:54",
+    "Madinah Dep": "14:00"
+  },
+  "07160": {
+    "KAEC Arr": "16:35",
+    "KAEC Dep": "16:36",
+    "KAIA Dep": "16:00",
+    "Madinah Arr": "17:54"
+  },
+  "07161": {
+    "KAEC Arr": "17:10",
+    "KAEC Dep": "17:11",
+    "KAIA Arr": "17:54",
+    "Madinah Dep": "16:00"
+  },
+  "07180": {
+    "KAEC Arr": "18:35",
+    "KAEC Dep": "18:36",
+    "KAIA Dep": "18:00",
+    "Madinah Arr": "19:54"
+  },
+  "07181": {
+    "KAEC Arr": "19:10",
+    "KAEC Dep": "19:11",
+    "KAIA Arr": "19:54",
+    "Madinah Dep": "18:00"
+  },
+  "07200": {
+    "KAEC Arr": "20:35",
+    "KAEC Dep": "20:36",
+    "KAIA Dep": "20:00",
+    "Madinah Arr": "21:54"
+  },
+  "07201": {
+    "KAEC Arr": "21:10",
+    "KAEC Dep": "21:11",
+    "KAIA Arr": "21:54",
+    "Madinah Dep": "20:00"
+  },
+  "07220": {
+    "KAEC Arr": "22:35",
+    "KAEC Dep": "22:36",
+    "KAIA Dep": "22:00",
+    "Madinah Arr": "23:54"
+  },
+  "07221": {
+    "KAEC Arr": "23:10",
+    "KAEC Dep": "23:11",
+    "KAIA Arr": "23:54",
+    "Madinah Dep": "22:00"
+  },
+  "08090": {
+    "KAIA Dep": "09:00",
+    "Madinah Arr": "10:48"
+  },
+  "08091": {
+    "KAIA Arr": "10:48",
+    "Madinah Dep": "09:00"
+  }
+}
