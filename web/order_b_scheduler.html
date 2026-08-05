@@ -162,23 +162,12 @@
   const E = window.OrderBEngine;
   let homeStation = null;
 
-  // Placeholder roster -- NOT a real driver list. Replace with a real per-station roster
-  // (ID / Name / Phone) before using this for anything but demoing the drag-and-drop flow.
-  const PLACEHOLDER_ROSTER = {
-    MAD: ["6868855-ZIYAD SALEH HAMZAH ALREHAILI", "6145882-RAYAN SAUD SAEED", "6126072-DRIVER THREE",
-          "6126073-DRIVER FOUR", "6126074-DRIVER FIVE", "6126075-DRIVER SIX", "6126076-DRIVER SEVEN",
-          "6126077-DRIVER EIGHT"],
-    MAK: ["6200001-MAK DRIVER ONE", "6200002-MAK DRIVER TWO", "6200003-MAK DRIVER THREE",
-          "6200004-MAK DRIVER FOUR", "6200005-MAK DRIVER FIVE"],
-    KAIA: ["6300001-KAIA DRIVER ONE", "6300002-KAIA DRIVER TWO", "6300003-KAIA DRIVER THREE",
-           "6300004-KAIA DRIVER FOUR"],
-  };
-
+  // Driver identity is intentionally left blank here. This tool's job is to generate the
+  // tasks from Order B (timing, trip pairing, task codes); assigning real drivers to those
+  // tasks is a separate step to be built later. Enough blank slots are generated so duty
+  // building/cycling still works -- only the rendered name/ID/phone are empty.
   function rosterFor(station) {
-    return PLACEHOLDER_ROSTER[station].map((entry) => {
-      const [id, ...nameParts] = entry.split("-");
-      return { driverId: id, name: nameParts.join("-"), phone: "5" + id.slice(1), homeStation: station };
-    });
+    return Array.from({ length: 200 }, () => ({ driverId: "", name: "", phone: "", homeStation: station }));
   }
 
   const dropzone = document.getElementById("dropzone");
@@ -281,7 +270,9 @@
 
   function dutyRowHtml(duty) {
     const d = duty;
-    const driverInfo = `<div class="name">${d.driver.name}</div><div class="sub">ID ${d.driver.driverId}</div><div class="sub">${d.driver.phone}</div>`;
+    const driverInfo = d.driver.name
+      ? `<div class="name">${d.driver.name}</div><div class="sub">ID ${d.driver.driverId}</div><div class="sub">${d.driver.phone}</div>`
+      : `<div class="sub" style="color:#aaa;">(driver not yet assigned)</div>`;
     if (d.isReserve) {
       return `<div class="duty-row ${d.overtime ? "overtime" : ""}">
         <div class="task-code">${d.taskCode}</div>
