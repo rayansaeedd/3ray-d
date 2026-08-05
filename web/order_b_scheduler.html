@@ -162,6 +162,35 @@
   .roster-sheet-table select.day-select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
   #generateSummary { margin-top: 10px; font-size: 12px; color: #555; }
   #generateSummary strong { color: var(--ink); }
+
+  .duty-row .driver-info.clickable { cursor: pointer; }
+  .duty-row .driver-info.clickable:hover { background: #eef2fb; }
+
+  .driver-picker-overlay {
+    position: fixed; inset: 0; background: rgba(20,24,36,.45); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .driver-picker-modal {
+    background: #fff; border-radius: 10px; width: 100%; max-width: 440px; max-height: 80vh;
+    padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  }
+  .driver-picker-header { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 14px; }
+  .driver-picker-close { border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: #888; }
+  #driverPickerSearch {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box;
+  }
+  .driver-picker-list { overflow-y: auto; flex: 1; border: 1px solid var(--border); border-radius: 8px; }
+  .driver-picker-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px;
+    border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px;
+  }
+  .driver-picker-row:last-child { border-bottom: none; }
+  .driver-picker-row:hover { background: #eef2fb; }
+  .driver-picker-row.current { background: #f0f1f4; font-weight: 700; }
+  .driver-picker-row .dp-name { flex: 1 1 auto; }
+  .driver-picker-row .dp-id { color: #888; font-size: 11px; }
+  .driver-picker-row .dp-status { font-size: 11px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .driver-picker-empty { padding: 14px; text-align: center; color: #888; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -203,6 +232,7 @@
       <span><span class="swatch" style="background:var(--red)"></span>Shuttle MAK &#8644; KAIA (05)</span>
       <span>L=MAK &nbsp; M=MAD &nbsp; A=KAIA &nbsp; K=KAEC</span>
     </div>
+    <div class="uncovered" id="duplicateDriverWarning" style="display:none;"></div>
     <div id="dutyList"></div>
     <div class="actions">
       <button class="primary" id="downloadBtn">Download as Excel</button>
@@ -251,6 +281,19 @@
   </div>
 </main>
 
+<div id="driverPickerOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal">
+    <div class="driver-picker-header">
+      <span>Reassign this task</span>
+      <button type="button" id="driverPickerClose" class="driver-picker-close">&times;</button>
+    </div>
+    <input type="text" id="driverPickerSearch" placeholder="Search by driver name or ID…" autocomplete="off" />
+    <div id="driverPickerList" class="driver-picker-list"></div>
+    <div class="note">Picking a driver who already has a task or reserve slot today swaps the two --
+      the driver currently on this task takes over whatever the picked driver had.</div>
+  </div>
+</div>
+
 <script>
 (function () {
   const E = window.OrderBEngine;
@@ -273,6 +316,7 @@
   const resultsCard = document.getElementById("resultsCard");
   const resultsTitle = document.getElementById("resultsTitle");
   const dutyList = document.getElementById("dutyList");
+  const duplicateDriverWarning = document.getElementById("duplicateDriverWarning");
   const downloadBtn = document.getElementById("downloadBtn");
   const signedInBadge = document.getElementById("signedInBadge");
   const rosterCard = document.getElementById("rosterCard");
@@ -765,6 +809,123 @@
   }
   generateTasksBtn.addEventListener("click", generateTasks);
 
+  // --- Manual driver reassignment (click a task's driver name to swap it) -----------------
+  const driverPickerOverlay = document.getElementById("driverPickerOverlay");
+  const driverPickerSearch = document.getElementById("driverPickerSearch");
+  const driverPickerList = document.getElementById("driverPickerList");
+  const driverPickerClose = document.getElementById("driverPickerClose");
+  let driverPickerTargetDuty = null;
+
+  function findStationDutyByDriverId(driverId, excludeDuty) {
+    if (!driverId || !jointResult) return null;
+    return (jointResult.dutiesByStation[homeStation] || []).find(
+      (d) => d !== excludeDuty && d.driver && d.driver.driverId === driverId
+    ) || null;
+  }
+
+  function openDriverPicker(duty) {
+    if (!rosterSheetByStation[homeStation] || !rosterSelectedDateByStation[homeStation]) {
+      rosterSheetStatus.textContent = "Load this station's roster and pick a scheduling date first.";
+      return;
+    }
+    driverPickerTargetDuty = duty;
+    driverPickerSearch.value = "";
+    renderDriverPickerList("");
+    driverPickerOverlay.style.display = "flex";
+    driverPickerSearch.focus();
+  }
+  function closeDriverPicker() {
+    driverPickerOverlay.style.display = "none";
+    driverPickerTargetDuty = null;
+  }
+  driverPickerClose.addEventListener("click", closeDriverPicker);
+  driverPickerOverlay.addEventListener("click", (e) => { if (e.target === driverPickerOverlay) closeDriverPicker(); });
+  driverPickerSearch.addEventListener("input", () => renderDriverPickerList(driverPickerSearch.value));
+
+  function renderDriverPickerList(query) {
+    const data = rosterSheetByStation[homeStation];
+    const dateKey = rosterSelectedDateByStation[homeStation];
+    if (!data) { driverPickerList.innerHTML = `<div class="driver-picker-empty">No roster loaded.</div>`; return; }
+    const q = query.trim().toLowerCase();
+    const matches = data.drivers
+      .filter((d) => !q || d.name.toLowerCase().includes(q) || d.id.includes(q))
+      .slice(0, 50);
+    if (!matches.length) { driverPickerList.innerHTML = `<div class="driver-picker-empty">No matching drivers.</div>`; return; }
+    const currentId = driverPickerTargetDuty && driverPickerTargetDuty.driver ? driverPickerTargetDuty.driver.driverId : "";
+    driverPickerList.innerHTML = matches.map((d) => {
+      const cell = d.days[dateKey] || "";
+      const isCurrent = d.id === currentId;
+      return `<div class="driver-picker-row ${isCurrent ? "current" : ""}" data-driver-id="${d.id}">
+        <span class="dp-name">${d.name}</span>
+        <span class="dp-id">ID ${d.id}</span>
+        <span class="dp-status">${isCurrent ? "current" : (cell || "Available")}</span>
+      </div>`;
+    }).join("");
+  }
+  driverPickerList.addEventListener("click", (e) => {
+    const row = e.target.closest(".driver-picker-row");
+    if (!row || !driverPickerTargetDuty) return;
+    reassignDriver(driverPickerTargetDuty, row.dataset.driverId);
+    closeDriverPicker();
+  });
+
+  dutyList.addEventListener("click", (e) => {
+    const row = e.target.closest(".driver-info.clickable");
+    if (!row || !homeStation || !jointResult) return;
+    const duty = (jointResult.dutiesByStation[homeStation] || [])[parseInt(row.dataset.dutyIndex, 10)];
+    if (duty) openDriverPicker(duty);
+  });
+
+  // Reassigns `duty` to `newDriverId`. If that driver already has a different task or reserve
+  // slot today, this is a full swap -- whoever's currently on `duty` takes over the picked
+  // driver's other slot, exactly as asked ("Rayan will go on the other driver's task"). If the
+  // picked driver had nothing else on today, the displaced driver just becomes Available again
+  // rather than inheriting a leave status (F/V/O/T) that wouldn't actually describe them.
+  function reassignDriver(duty, newDriverId) {
+    const data = rosterSheetByStation[homeStation];
+    const dateKey = rosterSelectedDateByStation[homeStation];
+    if (!data || !dateKey) return;
+    const newDriver = data.drivers.find((d) => d.id === newDriverId);
+    if (!newDriver) return;
+
+    const oldDriverId = duty.driver ? duty.driver.driverId : "";
+    if (oldDriverId === newDriverId) return;
+
+    const oldDriverEntry = oldDriverId ? data.drivers.find((d) => d.id === oldDriverId) : null;
+    const otherDuty = findStationDutyByDriverId(newDriverId, duty);
+
+    duty.driver = { driverId: newDriver.id, name: newDriver.name, phone: "", homeStation };
+    newDriver.days[dateKey] = duty.taskCode;
+
+    const touchedIds = [newDriver.id];
+    if (otherDuty) {
+      otherDuty.driver = oldDriverEntry
+        ? { driverId: oldDriverEntry.id, name: oldDriverEntry.name, phone: "", homeStation }
+        : { driverId: "", name: "", phone: "", homeStation };
+      if (oldDriverEntry) {
+        oldDriverEntry.days[dateKey] = otherDuty.taskCode;
+        touchedIds.push(oldDriverEntry.id);
+      }
+    } else if (oldDriverEntry) {
+      oldDriverEntry.days[dateKey] = "";
+      touchedIds.push(oldDriverEntry.id);
+    }
+
+    // Track these as "generated" for this date too, so a later Generate-Tasks click correctly
+    // undoes manual swaps along with its own previous run instead of leaving stale codes behind.
+    data.generated = data.generated || {};
+    const touched = new Set(data.generated[dateKey] || []);
+    touchedIds.forEach((id) => touched.add(id));
+    data.generated[dateKey] = Array.from(touched);
+
+    jointResult.dutiesByStation[homeStation].sort((a, b) => a.signIn - b.signIn);
+
+    saveRosterSheetState();
+    renderForStation();
+    renderRoster();
+    renderRosterSheet();
+  }
+
   // Sign-in only controls which station's slice of the (single, shared) computed result is
   // displayed -- it no longer gates the drop zone. The joint scheduler solves all 3 stations
   // from one dropped file regardless of who's signed in, so requiring sign-in first was never
@@ -854,15 +1015,18 @@
 
   function timeStr(mins) { return E.minutesToTimeStr(mins); }
 
-  function dutyRowHtml(duty) {
+  function dutyRowHtml(duty, idx) {
     const d = duty;
     const driverInfo = d.driver.name
       ? `<div class="name">${d.driver.name}</div><div class="sub">ID ${d.driver.driverId}</div><div class="sub">${d.driver.phone}</div>`
       : `<div class="sub" style="color:#aaa;">(driver not yet assigned)</div>`;
+    // Clickable regardless of whether a driver's assigned yet -- lets a supervisor both swap an
+    // existing assignment and fill in a still-empty one from the same picker.
+    const driverInfoAttrs = `class="driver-info clickable" data-duty-index="${idx}" title="Click to reassign this task"`;
     if (d.isReserve) {
       return `<div class="duty-row ${d.overtime ? "overtime" : ""}">
         <div class="task-code">${d.taskCode}</div>
-        <div class="driver-info">${driverInfo}</div>
+        <div ${driverInfoAttrs}>${driverInfo}</div>
         <div class="sign-in">${timeStr(d.signIn)}</div>
         <div>${d.driver.homeStation}</div>
         <div class="reserve-block">RESERVE</div>
@@ -878,7 +1042,7 @@
     const turnLetter = E.STATION_LETTER[leg1.trip.destination] || "?";
     return `<div class="duty-row ${d.overtime ? "overtime" : ""}">
       <div class="task-code">${d.taskCode}</div>
-      <div class="driver-info">${driverInfo}</div>
+      <div ${driverInfoAttrs}>${driverInfo}</div>
       <div class="sign-in">${timeStr(d.signIn)}</div>
       <div>${d.driver.homeStation}</div>
       <div class="leg ${leg1.role === "Passenger" ? "passenger" : ""}">
@@ -915,7 +1079,7 @@
     );
 
     resultsTitle.textContent = `${homeStation} station — ${duties.length} duties`;
-    dutyList.innerHTML = duties.map(dutyRowHtml).join("");
+    dutyList.innerHTML = duties.map((d, i) => dutyRowHtml(d, i)).join("");
     resultsCard.style.display = "block";
 
     if (relevantUncovered.length) {
@@ -924,6 +1088,32 @@
         relevantUncovered.map((t) => t.tripNo).join(", ");
     } else {
       uncoveredBox.style.display = "none";
+    }
+
+    checkDuplicateAssignments(duties);
+  }
+
+  // Safety net: a driver should never end up on two tasks the same day. Reassignment always
+  // swaps rather than double-books, so this should stay empty in normal use -- but it's cheap
+  // to check on every render and catches anything that slips through (stale data, a future bug)
+  // rather than silently letting a real scheduling conflict go unnoticed.
+  function checkDuplicateAssignments(duties) {
+    const countById = {};
+    duties.forEach((d) => {
+      const id = d.driver && d.driver.driverId;
+      if (id) countById[id] = (countById[id] || 0) + 1;
+    });
+    const dupedNames = [];
+    duties.forEach((d) => {
+      const id = d.driver && d.driver.driverId;
+      if (id && countById[id] > 1 && !dupedNames.includes(d.driver.name)) dupedNames.push(d.driver.name);
+    });
+    if (dupedNames.length) {
+      duplicateDriverWarning.style.display = "block";
+      duplicateDriverWarning.innerHTML = `<strong>Double-booked:</strong> ${dupedNames.join(", ")} ` +
+        `${dupedNames.length === 1 ? "is" : "are"} assigned to more than one task today -- please review and reassign.`;
+    } else {
+      duplicateDriverWarning.style.display = "none";
     }
   }
 
