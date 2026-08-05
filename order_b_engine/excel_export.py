@@ -18,7 +18,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 from .models import Duty, Role
-from .trip_codes import route_color
+from .trip_codes import route_color, STATION_LETTER
 
 FONT_NAME = "Arial"
 
@@ -28,8 +28,6 @@ STRIPE_FILL = "D9EAD3"
 WHITE = "FFFFFF"
 RESERVE_FILL = "BFBFBF"
 OT_FILL = "FFC000"
-
-STATION_LETTER = {"MAK": "L", "MAD": "M", "KAIA": "A", "KAEC": "K"}
 
 thin = Side(style="thin", color="000000")
 medium = Side(style="medium", color="000000")

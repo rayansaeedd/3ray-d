@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .models import Driver, Duty, Leg, Role, Trip, minutes_between
-from .trip_codes import ALLOWED_PREFIXES
+from .trip_codes import ALLOWED_PREFIXES, STATION_LETTER
 
 SIGN_IN_BEFORE_MAIN_MIN = 60
 SIGN_IN_BEFORE_PASSENGER_MIN = 30
@@ -154,7 +154,8 @@ def build_duties_for_station(
         driver = driver_cycle[driver_idx % len(driver_cycle)]
         driver_idx += 1
 
-        task_code = f"{cand.sign_in.strftime('%H%M')}/{cand.duty_min // 60}"
+        away_letter = STATION_LETTER.get(leg1.destination, "?")
+        task_code = f"{cand.sign_in.strftime('%H%M')}/{cand.duty_min // 60}{away_letter}"
         duty = Duty(
             driver=driver,
             task_code=task_code,

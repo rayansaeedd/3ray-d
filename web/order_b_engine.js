@@ -173,7 +173,8 @@
       const driver = drivers[driverIdx % drivers.length];
       driverIdx += 1;
 
-      const taskCode = `${minutesToTimeStr(cand.signIn).replace(":", "")}/${Math.floor(cand.dutyMin / 60)}`;
+      const awayLetter = STATION_LETTER[leg1.destination] || "?";
+      const taskCode = `${minutesToTimeStr(cand.signIn).replace(":", "")}/${Math.floor(cand.dutyMin / 60)}${awayLetter}`;
       duties.push({
         driver,
         taskCode,
@@ -212,7 +213,7 @@
       const signOut = (shiftStart + RESERVE_DUTY_MIN) % 1440;
       return {
         driver,
-        taskCode: `${minutesToTimeStr(shiftStart).replace(":", "")}/${Math.floor(RESERVE_DUTY_MIN / 60)}`,
+        taskCode: `${minutesToTimeStr(shiftStart).replace(":", "")}/${Math.floor(RESERVE_DUTY_MIN / 60)}R`,
         signIn: shiftStart,
         signOut,
         legs: [],

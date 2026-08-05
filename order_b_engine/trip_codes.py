@@ -116,3 +116,8 @@ def home_stations_for_trip(trip_no: str) -> tuple:
     """Which home-station driver pools are even allowed to crew this trip."""
     code = decode_trip_number(trip_no)
     return tuple(hs for hs in HOME_STATIONS if code.prefix in ALLOWED_PREFIXES[hs])
+
+
+# Single-letter station codes used on the task schedule (turnaround badges and the task
+# code's trailing letter, e.g. "0630/8L" = a duty whose trip goes to Makkah).
+STATION_LETTER = {MAK: "L", MAD: "M", KAIA: "A", KAEC: "K"}

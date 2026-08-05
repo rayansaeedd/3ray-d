@@ -45,7 +45,7 @@ def build_reserve_duties(
     for i, driver in enumerate(leftover_drivers):
         shift_start = shift_starts[(i // drivers_per_shift) % len(shift_starts)]
         sign_out = _add_minutes(shift_start, RESERVE_DUTY_MIN)
-        task_code = f"{shift_start.strftime('%H%M')}/{RESERVE_DUTY_MIN // 60}"
+        task_code = f"{shift_start.strftime('%H%M')}/{RESERVE_DUTY_MIN // 60}R"
         duties.append(Duty(
             driver=driver,
             task_code=task_code,
