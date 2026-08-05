@@ -121,6 +121,38 @@
   }
   button.primary:disabled { opacity: .4; cursor: not-allowed; }
   .note { font-size: 11px; color: #888; margin-top: 6px; }
+
+  /* Driver roster sheet -- styled to look like the real Excel roster (monthly grid, one row
+     per driver, one column per day, colored status codes) so a supervisor who already knows
+     that sheet doesn't have to learn a new layout. */
+  .roster-sheet-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  .roster-sheet-dropzone {
+    border: 2px dashed var(--border); border-radius: 8px; padding: 14px 18px; font-size: 12px;
+    color: #666; flex: 1 1 260px; text-align: center; cursor: pointer; transition: all .15s ease;
+  }
+  .roster-sheet-dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
+  .roster-sheet-dropzone input[type=file] { display: none; }
+  .roster-sheet-date-picker { font-size: 12px; font-weight: 700; color: #555; }
+  .roster-sheet-date-picker select {
+    margin-left: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+
+  .roster-sheet-scroll { overflow-x: auto; margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; max-height: 70vh; }
+  .roster-sheet-table { border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+  .roster-sheet-table th, .roster-sheet-table td {
+    border: 1px solid var(--border); padding: 4px 6px; text-align: center;
+  }
+  .roster-sheet-table thead th { background: #f0f1f4; font-weight: 700; position: sticky; top: 0; z-index: 2; }
+  .roster-sheet-table td.driver-cell, .roster-sheet-table th.driver-col {
+    position: sticky; left: 0; z-index: 1; background: #fff; text-align: left;
+    min-width: 220px; max-width: 260px; white-space: normal;
+  }
+  .roster-sheet-table thead th.driver-col { z-index: 3; background: #f0f1f4; }
+  .roster-sheet-table td.driver-cell .cat { color: #888; font-weight: 400; }
+  .roster-sheet-table td.day-cell { font-weight: 700; min-width: 34px; }
+  .roster-sheet-table td.day-cell.target-col, .roster-sheet-table th.target-col {
+    outline: 2px solid var(--blue); outline-offset: -2px;
+  }
 </style>
 </head>
 <body>
@@ -189,6 +221,23 @@
       "Taking trips today" and "Reserve today" are calculated automatically from the dropped file.
       These numbers are saved per station in this browser only.</div>
   </div>
+
+  <div class="card" id="rosterSheetCard" style="display:none;">
+    <h2>Driver roster</h2>
+    <div class="roster-sheet-toolbar">
+      <div id="rosterSheetDropzone" class="roster-sheet-dropzone">
+        <span>Drop the station roster (.xlsx) here, or <span class="browse-link" id="rosterSheetBrowseLink">browse a file</span>.</span>
+        <input type="file" id="rosterSheetFileInput" accept=".xlsx" />
+      </div>
+      <div class="roster-sheet-date-picker" id="rosterDatePickerWrap" style="display:none;">
+        <label>Scheduling date <select id="rosterDateSelect"></select></label>
+      </div>
+    </div>
+    <div class="note" id="rosterSheetStatus"></div>
+    <div class="roster-sheet-scroll" id="rosterSheetScroll" style="display:none;">
+      <table class="roster-sheet-table" id="rosterSheetTable"></table>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -220,6 +269,15 @@
   const rosterVacation = document.getElementById("rosterVacation");
   const rosterTraining = document.getElementById("rosterTraining");
   const rosterStats = document.getElementById("rosterStats");
+  const rosterSheetCard = document.getElementById("rosterSheetCard");
+  const rosterSheetDropzone = document.getElementById("rosterSheetDropzone");
+  const rosterSheetFileInput = document.getElementById("rosterSheetFileInput");
+  const rosterSheetBrowseLink = document.getElementById("rosterSheetBrowseLink");
+  const rosterSheetStatus = document.getElementById("rosterSheetStatus");
+  const rosterSheetScroll = document.getElementById("rosterSheetScroll");
+  const rosterSheetTable = document.getElementById("rosterSheetTable");
+  const rosterDatePickerWrap = document.getElementById("rosterDatePickerWrap");
+  const rosterDateSelect = document.getElementById("rosterDateSelect");
 
   // Vacation/training headcounts aren't in Order B at all -- they're entered by hand per
   // station and kept in this browser's storage so a supervisor doesn't have to retype them
@@ -285,6 +343,199 @@
       (short ? `<div class="roster-stat warn"><div class="num">${-reserve}</div><div class="label">Short by</div></div>` : "");
   }
 
+  // --- Driver roster sheet (the real monthly roster, uploaded as .xlsx) -------------------
+  // Kept separate per station, in memory only (not persisted -- like the Order B file itself,
+  // it's re-dropped fresh each session so the sheet on screen always matches the actual source
+  // file, never a stale cached copy).
+  let rosterSheetByStation = {};
+  let rosterSelectedDateByStation = {};
+
+  // Status-code colors lifted from the real roster's own conditional-formatting rules (F/L/EF
+  // green, SR/FD red, E amber, C light green) so a supervisor who knows that sheet recognizes
+  // this one immediately. Codes the source file itself doesn't color (V, S, SW, AJ, ...) are
+  // left plain here too, for the same reason -- inventing a color scheme the real sheet doesn't
+  // use would just teach the wrong thing.
+  const ROSTER_CODE_COLORS = {
+    F: { bg: "#92D050", fg: "#000" },
+    L: { bg: "#92D050", fg: "#000" },
+    EF: { bg: "#92D050", fg: "#000" },
+    SR: { bg: "#FF0000", fg: "#fff" },
+    FD: { bg: "#FF0000", fg: "#fff" },
+    E: { bg: "#FFC000", fg: "#000" },
+    C: { bg: "#C6EFCE", fg: "#006100" },
+    O: { bg: "#000000", fg: "#fff" },
+  };
+  // Training duty codes reuse the trip task-code shape (e.g. "0830/7T") with a trailing T --
+  // taught explicitly, so detected by shape rather than an exact-match table entry.
+  const TRAINING_CODE_RE = /^\d{3,4}\/\d+T$/i;
+
+  function rosterCellStyle(code) {
+    if (!code) return "";
+    if (TRAINING_CODE_RE.test(code)) return "background:#FFFF00;color:#000;";
+    const c = ROSTER_CODE_COLORS[code];
+    return c ? `background:${c.bg};color:${c.fg};` : "";
+  }
+
+  function parseRosterSheet(wb) {
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    const headerRowIdx = rows.findIndex((r) => r.some((cell) => String(cell).trim().toUpperCase() === "STAFF"));
+    if (headerRowIdx === -1) throw new Error('Could not find the "STAFF" header row in this sheet -- is this the station roster file?');
+    const header = rows[headerRowIdx];
+    const staffCol = header.findIndex((c) => String(c).trim().toUpperCase() === "STAFF");
+    const categoryCol = header.findIndex((c) => String(c).trim().toUpperCase() === "CATEGORY");
+
+    // Date columns run right after STAFF, for as long as the header cell is an actual Date --
+    // the sheet's trailing TOTAL/GRANTED summary columns are plain numbers/text, which ends
+    // the run.
+    const dateCols = [];
+    for (let c = staffCol + 1; c < header.length; c++) {
+      if (header[c] instanceof Date) dateCols.push(c);
+      else if (dateCols.length) break;
+    }
+    if (!dateCols.length) throw new Error("Could not find any date columns after the STAFF column in this sheet.");
+
+    // Driver rows are "<ID>-<NAME>" in the STAFF column, sometimes with a stray prefix before
+    // the ID (e.g. "T- 6149009-SAMA ..."; a couple even have an invisible word-joiner character
+    // in there) -- match the ID/name from wherever the digit run actually starts rather than
+    // anchoring to the start of the string, so those rows aren't silently dropped. This also
+    // naturally excludes the legend/summary rows at the bottom of the sheet (e.g. "Staff Per
+    // Day"), which have no digit-dash-name shape at all.
+    const STAFF_RE = /(\d{5,})-(.+)$/;
+    const drivers = [];
+    for (let r = headerRowIdx + 1; r < rows.length; r++) {
+      const row = rows[r] || [];
+      const staff = row[staffCol];
+      if (!staff) continue;
+      const m = STAFF_RE.exec(String(staff).trim());
+      if (!m) continue;
+      const days = {};
+      for (const c of dateCols) {
+        const key = header[c].toISOString().slice(0, 10);
+        const val = row[c];
+        days[key] = val === null || val === undefined ? "" : String(val).trim();
+      }
+      drivers.push({
+        id: m[1],
+        name: m[2].trim(),
+        category: categoryCol >= 0 && row[categoryCol] ? String(row[categoryCol]).trim() : "",
+        days,
+      });
+    }
+    if (!drivers.length) throw new Error('Found the STAFF column but no driver rows underneath it (expected "<ID>-<NAME>" values).');
+
+    return { dates: dateCols.map((c) => header[c]), drivers };
+  }
+
+  function handleRosterSheetFile(file) {
+    rosterSheetStatus.textContent = `Reading ${file.name}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
+        const parsed = parseRosterSheet(wb);
+        rosterSheetByStation[homeStation] = parsed;
+        rosterSelectedDateByStation[homeStation] = parsed.dates[0].toISOString().slice(0, 10);
+        rosterSheetStatus.textContent = `Loaded ${parsed.drivers.length} drivers × ${parsed.dates.length} days from ${file.name}.`;
+        renderRosterSheet();
+      } catch (err) {
+        console.error(err);
+        rosterSheetStatus.textContent = "Could not read this roster sheet: " + err.message;
+        rosterSheetScroll.style.display = "none";
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  rosterSheetBrowseLink.addEventListener("click", () => rosterSheetFileInput.click());
+  rosterSheetDropzone.addEventListener("click", (e) => {
+    if (e.target === rosterSheetBrowseLink) return;
+    rosterSheetFileInput.click();
+  });
+  ["dragenter", "dragover"].forEach((evt) =>
+    rosterSheetDropzone.addEventListener(evt, (e) => { e.preventDefault(); rosterSheetDropzone.classList.add("drag-over"); })
+  );
+  ["dragleave", "drop"].forEach((evt) =>
+    rosterSheetDropzone.addEventListener(evt, (e) => { e.preventDefault(); rosterSheetDropzone.classList.remove("drag-over"); })
+  );
+  rosterSheetDropzone.addEventListener("drop", (e) => {
+    if (!homeStation) { rosterSheetStatus.textContent = "Sign in as a station above first."; return; }
+    const file = e.dataTransfer.files[0];
+    if (file) handleRosterSheetFile(file);
+  });
+  rosterSheetFileInput.addEventListener("change", (e) => {
+    if (!homeStation) return;
+    const file = e.target.files[0];
+    if (file) handleRosterSheetFile(file);
+  });
+  rosterDateSelect.addEventListener("change", () => {
+    if (!homeStation) return;
+    rosterSelectedDateByStation[homeStation] = rosterDateSelect.value;
+    renderRosterSheet();
+  });
+
+  function fmtDateHeader(d) {
+    const day = d.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }).slice(0, 2).toUpperCase();
+    const num = d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    return `${day}<br>${num}`;
+  }
+
+  function renderRosterSheet() {
+    if (!homeStation) {
+      rosterSheetCard.style.display = "none";
+      return;
+    }
+    rosterSheetCard.style.display = "block";
+    const data = rosterSheetByStation[homeStation];
+    if (!data) {
+      rosterDatePickerWrap.style.display = "none";
+      rosterSheetScroll.style.display = "none";
+      rosterSheetStatus.textContent = `No roster uploaded yet for ${homeStation}.`;
+      return;
+    }
+
+    const selectedKey = rosterSelectedDateByStation[homeStation];
+    rosterDatePickerWrap.style.display = "inline-block";
+    rosterDateSelect.innerHTML = data.dates
+      .map((d) => {
+        const key = d.toISOString().slice(0, 10);
+        const label = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+        return `<option value="${key}" ${key === selectedKey ? "selected" : ""}>${label}</option>`;
+      })
+      .join("");
+
+    const headCells = data.dates
+      .map((d) => {
+        const key = d.toISOString().slice(0, 10);
+        return `<th class="day-cell ${key === selectedKey ? "target-col" : ""}">${fmtDateHeader(d)}</th>`;
+      })
+      .join("");
+
+    const bodyRows = data.drivers
+      .map((drv) => {
+        const cells = data.dates
+          .map((d) => {
+            const key = d.toISOString().slice(0, 10);
+            const code = drv.days[key] || "";
+            const style = rosterCellStyle(code);
+            const targetCls = key === selectedKey ? "target-col" : "";
+            return `<td class="day-cell ${targetCls}" style="${style}">${code}</td>`;
+          })
+          .join("");
+        return `<tr>
+          <td class="driver-cell"><div>${drv.name}</div><div class="cat">ID ${drv.id}${drv.category ? " &middot; " + drv.category : ""}</div></td>
+          ${cells}
+        </tr>`;
+      })
+      .join("");
+
+    rosterSheetTable.innerHTML = `
+      <thead><tr><th class="driver-col">Driver</th>${headCells}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    `;
+    rosterSheetScroll.style.display = "block";
+  }
+
   // Sign-in only controls which station's slice of the (single, shared) computed result is
   // displayed -- it no longer gates the drop zone. The joint scheduler solves all 3 stations
   // from one dropped file regardless of who's signed in, so requiring sign-in first was never
@@ -303,6 +554,7 @@
         renderForStation();
       }
       renderRoster();
+      renderRosterSheet();
     });
   });
 
