@@ -329,6 +329,14 @@
       <label>Leg 2 trip no. <input type="text" id="atLeg2Trip" placeholder="optional" /></label>
       <label>Leg 2 departs <input type="time" id="atLeg2Dep" /></label>
       <label>Leg 2 arrives <input type="time" id="atLeg2Arr" /></label>
+      <label>Trip box color
+        <select id="atColor">
+          <option value="blue">Blue</option>
+          <option value="green">Green</option>
+          <option value="red">Red</option>
+          <option value="black">Black</option>
+        </select>
+      </label>
     </div>
     <div class="note">Origin and leg 2's destination are always this station (<span id="atHomeStationLabel"></span>) --
       same as every other task. Trip numbers are optional; leave blank for a task with no real Order B trip.</div>
@@ -892,11 +900,18 @@
     const dateKey = rosterSelectedDateByStation[homeStation];
     if (!data) { driverPickerList.innerHTML = `<div class="driver-picker-empty">No roster loaded.</div>`; return; }
     const q = query.trim().toLowerCase();
-    const matches = data.drivers
-      .filter((d) => !q || d.name.toLowerCase().includes(q) || d.id.includes(q))
-      .slice(0, 50);
-    if (!matches.length) { driverPickerList.innerHTML = `<div class="driver-picker-empty">No matching drivers.</div>`; return; }
     const currentId = driverPickerTargetDuty && driverPickerTargetDuty.driver ? driverPickerTargetDuty.driver.driverId : "";
+    const filtered = data.drivers.filter((d) => !q || d.name.toLowerCase().includes(q) || d.id.includes(q));
+    const matches = filtered.slice(0, 50);
+    // Only pin the current driver into view when browsing with no search term -- the 50-result
+    // cap could otherwise hide who's currently on this task. Don't do this while actively
+    // searching: injecting a non-matching "current" row at the top of real search results would
+    // make it look like the first result, defeating the point of searching for someone else.
+    if (!q && currentId && !matches.some((d) => d.id === currentId)) {
+      const currentDriver = data.drivers.find((d) => d.id === currentId);
+      if (currentDriver) matches.unshift(currentDriver);
+    }
+    if (!matches.length) { driverPickerList.innerHTML = `<div class="driver-picker-empty">No matching drivers.</div>`; return; }
     driverPickerList.innerHTML = matches.map((d) => {
       const cell = d.days[dateKey] || "";
       const isCurrent = d.id === currentId;
@@ -998,9 +1013,10 @@
     }
   }
 
-  // A manual task doesn't come with a real Order B route prefix, so its trip-box color is
-  // inferred from which two stations it runs between, reusing the same 3-color legend
-  // (MAK<->MAD blue, MAD<->KAIA green, MAK<->KAIA shuttle red) everything else already uses.
+  // A manual task doesn't come with a real Order B route prefix, so its trip-box color
+  // defaults to whichever of the 3 route-family colors matches the stations picked (MAK<->MAD
+  // blue, MAD<->KAIA green, MAK<->KAIA shuttle red) -- but the supervisor can override it
+  // directly in the form, plus a 4th "black" option for tasks that aren't really a route at all.
   function inferManualRoutePrefix(stationA, stationB) {
     const pair = [stationA, stationB].sort().join("-");
     if (pair === "MAD-MAK") return "01";
@@ -1008,6 +1024,14 @@
     if (pair === "KAIA-MAK") return "05";
     return "01"; // KAEC or anything else not in the 3-family model -- cosmetic fallback only
   }
+  function suggestColorKey(stationA, stationB) {
+    const pair = [stationA, stationB].sort().join("-");
+    if (pair === "MAD-MAK") return "blue";
+    if (pair === "KAIA-MAD") return "green";
+    if (pair === "KAIA-MAK") return "red";
+    return "blue";
+  }
+  const MANUAL_COLOR_HEX = { blue: "#4472C4", green: "#70AD47", red: "#C00000", black: "#1a1d24" };
 
   const addTaskBtn = document.getElementById("addTaskBtn");
   const addTaskOverlay = document.getElementById("addTaskOverlay");
@@ -1025,6 +1049,7 @@
   const atLeg2Trip = document.getElementById("atLeg2Trip");
   const atLeg2Dep = document.getElementById("atLeg2Dep");
   const atLeg2Arr = document.getElementById("atLeg2Arr");
+  const atColor = document.getElementById("atColor");
 
   function openAddTaskModal() {
     if (!homeStation || !jointResult) {
@@ -1034,6 +1059,7 @@
     [atTaskCode, atSignIn, atSignOut, atLeg1Trip, atLeg1Dep, atLeg1Arr, atLeg2Trip, atLeg2Dep, atLeg2Arr]
       .forEach((el) => { el.value = ""; });
     atLeg1Dest.value = { MAD: "MAK", MAK: "MAD", KAIA: "MAD" }[homeStation] || "MAK";
+    atColor.value = suggestColorKey(homeStation, atLeg1Dest.value);
     atHomeStationLabel.textContent = homeStation;
     addTaskError.style.display = "none";
     addTaskOverlay.style.display = "flex";
@@ -1043,6 +1069,11 @@
   addTaskBtn.addEventListener("click", openAddTaskModal);
   addTaskClose.addEventListener("click", closeAddTaskModal);
   addTaskOverlay.addEventListener("click", (e) => { if (e.target === addTaskOverlay) closeAddTaskModal(); });
+  // Re-suggest the color whenever leg 1's destination changes, but only if the supervisor
+  // hasn't already picked a color for this destination -- don't fight their own choice.
+  atLeg1Dest.addEventListener("change", () => {
+    atColor.value = suggestColorKey(homeStation, atLeg1Dest.value);
+  });
 
   addTaskSubmit.addEventListener("click", () => {
     const taskCode = atTaskCode.value.trim();
@@ -1089,6 +1120,7 @@
       overtime: dutyMin > 480,
       isReserve: false,
       isManual: true,
+      manualColorHex: MANUAL_COLOR_HEX[atColor.value] || MANUAL_COLOR_HEX.blue,
     };
 
     jointResult.dutiesByStation[homeStation] = (jointResult.dutiesByStation[homeStation] || [])
@@ -1218,8 +1250,10 @@
       </div>`;
     }
     const leg1 = d.legs[0], leg2 = d.legs[1];
-    const c1 = E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg1.trip.prefix]] || "#8064A2";
-    const c2 = E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg2.trip.prefix]] || "#8064A2";
+    // A manual task's color is whatever the supervisor picked in the Add Task form, not
+    // derived from a route family (it may not have a real one).
+    const c1 = d.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg1.trip.prefix]] || "#8064A2";
+    const c2 = d.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg2.trip.prefix]] || "#8064A2";
     const turnLetter = E.STATION_LETTER[leg1.trip.destination] || "?";
     return `<div class="duty-row ${d.overtime ? "overtime" : ""} ${d.isManual ? "manual" : ""}">
       ${taskCodeCell}
