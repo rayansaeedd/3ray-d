@@ -41,7 +41,6 @@
     border: 2px dashed var(--border); border-radius: 12px; background: #fff;
     padding: 46px 20px; text-align: center; color: #666; transition: all .15s ease;
   }
-  .dropzone.disabled { opacity: .5; pointer-events: none; }
   .dropzone.drag-over { border-color: var(--blue); background: #eef2fb; color: var(--blue); }
   .dropzone .icon { font-size: 40px; margin-bottom: 8px; }
   .dropzone .hint { font-size: 12px; margin-top: 6px; color: #999; }
@@ -114,7 +113,7 @@
 <header>
   <div>
     <h1>Order B Driver Task Scheduler</h1>
-    <div class="sub">Sign in, then drop an Order B file to generate that station's driver tasks.
+    <div class="sub">Drop an Order B file to generate driver tasks for all 3 stations at once, then sign in to view your station's schedule.
       Have a PDF instead of .xlsx? <a href="order_b_pdf_converter.html" style="color:#cfe0ff;">Convert it here first</a>.</div>
   </div>
   <div class="signin-bar">
@@ -126,10 +125,10 @@
 </header>
 
 <main>
-  <div id="dropzone" class="dropzone disabled">
+  <div id="dropzone" class="dropzone">
     <div class="icon">&#8595;</div>
-    <div><strong>Sign in above to unlock the drop zone.</strong></div>
-    <div class="hint">Once signed in: drag an Order B .xlsx file here, or <span class="browse-link" id="browseLink">browse a file</span>.</div>
+    <div><strong>Drop Order B here.</strong></div>
+    <div class="hint">Drop the full Order B trip file (all stations, not pre-filtered) -- or <span class="browse-link" id="browseLink">browse a file</span>. It builds tasks for all 3 stations at once; sign in above (before or after) to view yours.</div>
     <input type="file" id="fileInput" accept=".xlsx" />
   </div>
 
@@ -183,6 +182,10 @@
   const downloadBtn = document.getElementById("downloadBtn");
   const signedInBadge = document.getElementById("signedInBadge");
 
+  // Sign-in only controls which station's slice of the (single, shared) computed result is
+  // displayed -- it no longer gates the drop zone. The joint scheduler solves all 3 stations
+  // from one dropped file regardless of who's signed in, so requiring sign-in first was never
+  // actually necessary and just got in the way.
   document.querySelectorAll(".station-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".station-btn").forEach((b) => b.classList.remove("active"));
@@ -191,31 +194,20 @@
       const label = { MAD: "Madinah", MAK: "Makkah", KAIA: "KAIA" }[homeStation];
       signedInBadge.textContent = `Signed in: ${label} Supervisor`;
       signedInBadge.classList.add("show");
-      dropzone.classList.remove("disabled");
-      dropzone.querySelector("strong").textContent = "Drop Order B here.";
-      dropzone.querySelector(".hint").innerHTML =
-        `Drop the full Order B trip file (all stations, not pre-filtered) -- or <span class="browse-link" id="browseLink2">browse a file</span>.`;
       if (jointResult) {
         // Already computed from a previous drop -- just switch which station's slice we're
         // viewing, no re-parse/re-solve. This is the whole point of the joint scheduler.
         renderForStation();
-      } else {
-        resultsCard.style.display = "none";
-        uncoveredBox.style.display = "none";
-        statusRow.style.display = "none";
       }
     });
   });
 
   browseLink.addEventListener("click", () => fileInput.click());
-  dropzone.addEventListener("click", (e) => {
-    if (e.target.id === "browseLink2") fileInput.click();
-  });
 
   ["dragenter", "dragover"].forEach((evt) =>
     dropzone.addEventListener(evt, (e) => {
       e.preventDefault();
-      if (!dropzone.classList.contains("disabled")) dropzone.classList.add("drag-over");
+      dropzone.classList.add("drag-over");
     })
   );
   ["dragleave", "drop"].forEach((evt) =>
@@ -225,7 +217,6 @@
     })
   );
   dropzone.addEventListener("drop", (e) => {
-    if (dropzone.classList.contains("disabled")) return;
     const file = e.dataTransfer.files[0];
     if (file) handleFile(file);
   });
@@ -242,7 +233,6 @@
   }
 
   function handleFile(file) {
-    if (!homeStation) return;
     setStatus("working", `Reading ${file.name}…`);
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -264,9 +254,10 @@
         jointResult = J.buildJointSchedule(trips);
         renderForStation();
         const totalDuties = Object.values(jointResult.dutiesByStation).reduce((a, v) => a + v.length, 0);
-        setStatus("done", `Loaded ${trips.length} trips, built ${totalDuties} duties across all 3 stations (` +
-          Object.entries(jointResult.dutiesByStation).map(([k, v]) => `${k}: ${v.length}`).join(", ") +
-          `). Reserve generation is off for now.`);
+        const stationSummary = Object.entries(jointResult.dutiesByStation).map(([k, v]) => `${k}: ${v.length}`).join(", ");
+        setStatus("done", `Loaded ${trips.length} trips, built ${totalDuties} duties across all 3 stations (${stationSummary}). ` +
+          (homeStation ? "" : "Sign in above to view your station's schedule. ") +
+          `Reserve generation is off for now.`);
       } catch (err) {
         console.error(err);
         setStatus("error", "Could not process this file: " + err.message);
@@ -323,7 +314,12 @@
   }
 
   function renderForStation() {
-    if (!jointResult || !homeStation) return;
+    if (!jointResult) return;
+    if (!homeStation) {
+      resultsCard.style.display = "none";
+      uncoveredBox.style.display = "none";
+      return;
+    }
     const duties = jointResult.dutiesByStation[homeStation] || [];
     // Uncovered trips are global (not owned by any station), but only ones actually touching
     // this station are relevant to show here -- otherwise every supervisor sees every gap,
