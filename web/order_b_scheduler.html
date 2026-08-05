@@ -7,6 +7,7 @@
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="order_b_engine.js"></script>
 <script src="joint_scheduler.js"></script>
+<script src="reserve.js"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
@@ -149,10 +150,17 @@
   }
   .roster-sheet-table thead th.driver-col { z-index: 3; background: #f0f1f4; }
   .roster-sheet-table td.driver-cell .cat { color: #888; font-weight: 400; }
-  .roster-sheet-table td.day-cell { font-weight: 700; min-width: 34px; }
+  .roster-sheet-table td.day-cell { font-weight: 700; min-width: 34px; padding: 0; }
   .roster-sheet-table td.day-cell.target-col, .roster-sheet-table th.target-col {
     outline: 2px solid var(--blue); outline-offset: -2px;
   }
+  .roster-sheet-table select.day-select {
+    width: 100%; box-sizing: border-box; border: none; background: transparent; font: inherit;
+    font-weight: 700; text-align: center; text-align-last: center; padding: 5px 2px; cursor: pointer;
+  }
+  .roster-sheet-table select.day-select:focus { outline: 2px solid var(--blue); outline-offset: -2px; }
+  #generateSummary { margin-top: 10px; font-size: 12px; color: #555; }
+  #generateSummary strong { color: var(--ink); }
 </style>
 </head>
 <body>
@@ -231,9 +239,11 @@
       </div>
       <div class="roster-sheet-date-picker" id="rosterDatePickerWrap" style="display:none;">
         <label>Scheduling date <select id="rosterDateSelect"></select></label>
+        <button class="primary" id="generateTasksBtn" style="margin-left:10px;">Generate Tasks</button>
       </div>
     </div>
     <div class="note" id="rosterSheetStatus"></div>
+    <div id="generateSummary"></div>
     <div class="roster-sheet-scroll" id="rosterSheetScroll" style="display:none;">
       <table class="roster-sheet-table" id="rosterSheetTable"></table>
     </div>
@@ -278,6 +288,8 @@
   const rosterSheetTable = document.getElementById("rosterSheetTable");
   const rosterDatePickerWrap = document.getElementById("rosterDatePickerWrap");
   const rosterDateSelect = document.getElementById("rosterDateSelect");
+  const generateTasksBtn = document.getElementById("generateTasksBtn");
+  const generateSummary = document.getElementById("generateSummary");
 
   // Vacation/training headcounts aren't in Order B at all -- they're entered by hand per
   // station and kept in this browser's storage so a supervisor doesn't have to retype them
@@ -328,9 +340,11 @@
     rosterVacation.value = roster.vacation || "";
     rosterTraining.value = roster.training || "";
 
-    // Trip drivers = one per duty this station owns today (driver identity is blank for now,
-    // but each duty still needs exactly one Main driver from this station's roster).
-    const tripDrivers = jointResult ? (jointResult.dutiesByStation[homeStation] || []).length : null;
+    // Trip drivers = one per duty this station owns today, excluding reserve duties (Generate
+    // may have merged reserve entries into the same per-station list -- see generateTasks()).
+    const tripDrivers = jointResult
+      ? (jointResult.dutiesByStation[homeStation] || []).filter((d) => !d.isReserve).length
+      : null;
     const reserve = tripDrivers === null ? null : roster.total - roster.vacation - roster.training - tripDrivers;
     const short = reserve !== null && reserve < 0;
 
@@ -344,17 +358,56 @@
   }
 
   // --- Driver roster sheet (the real monthly roster, uploaded as .xlsx) -------------------
-  // Kept separate per station, in memory only (not persisted -- like the Order B file itself,
-  // it's re-dropped fresh each session so the sheet on screen always matches the actual source
-  // file, never a stale cached copy).
+  // Kept separate per station, and persisted in this browser's storage -- unlike the Order B
+  // file, this one is meant to stay put across reloads while a supervisor edits cells and
+  // re-runs Generate repeatedly during testing, rather than needing a fresh drop every time.
   let rosterSheetByStation = {};
   let rosterSelectedDateByStation = {};
+
+  const ROSTER_SHEET_STORAGE_KEY = "orderBSchedulerRosterSheet";
+
+  function saveRosterSheetState() {
+    try {
+      const byStation = {};
+      for (const station in rosterSheetByStation) {
+        const d = rosterSheetByStation[station];
+        byStation[station] = {
+          dates: d.dates.map((dt) => dt.toISOString().slice(0, 10)),
+          drivers: d.drivers,
+          generated: d.generated || {},
+        };
+      }
+      localStorage.setItem(ROSTER_SHEET_STORAGE_KEY, JSON.stringify({
+        byStation,
+        selectedDates: rosterSelectedDateByStation,
+      }));
+    } catch (err) { /* private-browsing / storage disabled -- roster just won't persist */ }
+  }
+
+  function loadRosterSheetState() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(ROSTER_SHEET_STORAGE_KEY) || "null");
+      if (!raw) return;
+      for (const station in raw.byStation) {
+        const s = raw.byStation[station];
+        rosterSheetByStation[station] = {
+          dates: s.dates.map((k) => new Date(k + "T00:00:00Z")),
+          drivers: s.drivers,
+          generated: s.generated || {},
+        };
+      }
+      rosterSelectedDateByStation = raw.selectedDates || {};
+    } catch (err) { /* corrupted/old-shape storage -- start clean rather than throw */ }
+  }
+  loadRosterSheetState();
 
   // Status-code colors lifted from the real roster's own conditional-formatting rules (F/L/EF
   // green, SR/FD red, E amber, C light green) so a supervisor who knows that sheet recognizes
   // this one immediately. Codes the source file itself doesn't color (V, S, SW, AJ, ...) are
   // left plain here too, for the same reason -- inventing a color scheme the real sheet doesn't
-  // use would just teach the wrong thing.
+  // use would just teach the wrong thing. "T" (bare, from the edit dropdown below) is colored
+  // the same yellow as a full training task code since the exact training-code rule is still
+  // pending discussion with the user -- it's a placeholder marker until that's defined.
   const ROSTER_CODE_COLORS = {
     F: { bg: "#92D050", fg: "#000" },
     L: { bg: "#92D050", fg: "#000" },
@@ -364,6 +417,7 @@
     E: { bg: "#FFC000", fg: "#000" },
     C: { bg: "#C6EFCE", fg: "#006100" },
     O: { bg: "#000000", fg: "#fff" },
+    T: { bg: "#FFFF00", fg: "#000" },
   };
   // Training duty codes reuse the trip task-code shape (e.g. "0830/7T") with a trailing T --
   // taught explicitly, so detected by shape rather than an exact-match table entry.
@@ -374,6 +428,26 @@
     if (TRAINING_CODE_RE.test(code)) return "background:#FFFF00;color:#000;";
     const c = ROSTER_CODE_COLORS[code];
     return c ? `background:${c.bg};color:${c.fg};` : "";
+  }
+
+  // Every day-cell is a <select> so a supervisor can click any block and reassign it --
+  // "vacation, day off, or training" as taught. Training doesn't have its exact code-generation
+  // rule pinned down yet, so picking it here just writes the bare placeholder "T"; a real
+  // "0830/7T"-style code can still be entered by picking "Generate Tasks" later, or, until the
+  // training flow is built, by typing over an existing cell's non-standard value being kept as
+  // its own selected option below.
+  const DAY_EDIT_OPTIONS = [
+    { value: "", label: "— Available —" },
+    { value: "F", label: "F — Day off" },
+    { value: "V", label: "V — Vacation" },
+    { value: "T", label: "T — Training" },
+  ];
+  function daySelectOptionsHtml(code) {
+    const isStandard = DAY_EDIT_OPTIONS.some((o) => o.value === code);
+    const extra = code && !isStandard ? `<option value="${code}" selected>${code}</option>` : "";
+    return extra + DAY_EDIT_OPTIONS
+      .map((o) => `<option value="${o.value}" ${o.value === code ? "selected" : ""}>${o.label}</option>`)
+      .join("");
   }
 
   function parseRosterSheet(wb) {
@@ -437,6 +511,7 @@
         rosterSheetByStation[homeStation] = parsed;
         rosterSelectedDateByStation[homeStation] = parsed.dates[0].toISOString().slice(0, 10);
         rosterSheetStatus.textContent = `Loaded ${parsed.drivers.length} drivers × ${parsed.dates.length} days from ${file.name}.`;
+        saveRosterSheetState();
         renderRosterSheet();
       } catch (err) {
         console.error(err);
@@ -471,6 +546,20 @@
   rosterDateSelect.addEventListener("change", () => {
     if (!homeStation) return;
     rosterSelectedDateByStation[homeStation] = rosterDateSelect.value;
+    saveRosterSheetState();
+    renderRosterSheet();
+  });
+
+  // Delegated listener (registered once, not per-cell) since the whole table body is rebuilt
+  // on every render -- lets a supervisor click any day-block and pick a new status directly.
+  rosterSheetTable.addEventListener("change", (e) => {
+    if (!e.target.classList.contains("day-select") || !homeStation) return;
+    const data = rosterSheetByStation[homeStation];
+    if (!data) return;
+    const drv = data.drivers.find((d) => d.id === e.target.dataset.driverId);
+    if (!drv) return;
+    drv.days[e.target.dataset.date] = e.target.value;
+    saveRosterSheetState();
     renderRosterSheet();
   });
 
@@ -519,7 +608,11 @@
             const code = drv.days[key] || "";
             const style = rosterCellStyle(code);
             const targetCls = key === selectedKey ? "target-col" : "";
-            return `<td class="day-cell ${targetCls}" style="${style}">${code}</td>`;
+            return `<td class="day-cell ${targetCls}">
+              <select class="day-select" data-driver-id="${drv.id}" data-date="${key}" style="${style}">
+                ${daySelectOptionsHtml(code)}
+              </select>
+            </td>`;
           })
           .join("");
         return `<tr>
@@ -534,7 +627,123 @@
       <tbody>${bodyRows}</tbody>
     `;
     rosterSheetScroll.style.display = "block";
+    renderGenerateSummary(data, selectedKey);
   }
+
+  // "Calculate the train driver number against the trip number available" -- shown live as
+  // soon as a roster + date are both known, before Generate is even clicked.
+  function renderGenerateSummary(data, selectedKey) {
+    if (!selectedKey) { generateSummary.innerHTML = ""; return; }
+    const tripDuties = jointResult ? (jointResult.dutiesByStation[homeStation] || []).filter((d) => !d.isReserve) : [];
+    if (!jointResult) {
+      const available = data.drivers.filter((d) => !d.days[selectedKey]).length;
+      generateSummary.innerHTML = `<strong>${available}</strong> driver(s) available on this date. Drop an Order B file to calculate how many trip duties need drivers.`;
+      return;
+    }
+
+    // Once Generate has run for this date, the "available" pool is legitimately down to
+    // whoever's left AFTER assignment -- computing shortfall from that would misreport a
+    // successful run as a shortage. Read the actual outcome from the duties/reserve list
+    // instead of re-deriving it from blank-cell counts.
+    if (data.generated && data.generated[selectedKey]) {
+      const assigned = tripDuties.filter((d) => d.driver && d.driver.name).length;
+      const reserveCount = (jointResult.dutiesByStation[homeStation] || []).filter((d) => d.isReserve).length;
+      const shortfall = tripDuties.length - assigned;
+      generateSummary.innerHTML = `<strong>${tripDuties.length}</strong> trip duties &middot; ` +
+        `<strong>${assigned}</strong> assigned &middot; <strong>${reserveCount}</strong> on reserve` +
+        (shortfall > 0 ? ` &middot; <span style="color:var(--red);font-weight:700;">short by ${shortfall}</span>` : "") +
+        ` <span style="color:#888;">(already generated for this date -- Generate Tasks again to reshuffle)</span>`;
+      return;
+    }
+
+    const available = data.drivers.filter((d) => !d.days[selectedKey]).length;
+    const forReserve = Math.max(0, available - tripDuties.length);
+    const shortfall = Math.max(0, tripDuties.length - available);
+    generateSummary.innerHTML = `<strong>${tripDuties.length}</strong> trip duties need a driver &middot; ` +
+      `<strong>${available}</strong> driver(s) available &middot; ` +
+      `<strong>${forReserve}</strong> would go to reserve` +
+      (shortfall > 0 ? ` &middot; <span style="color:var(--red);font-weight:700;">short by ${shortfall}</span>` : "");
+  }
+
+  function clearPreviousGeneration(station, dateKey) {
+    const data = rosterSheetByStation[station];
+    if (data && data.generated && data.generated[dateKey]) {
+      for (const id of data.generated[dateKey]) {
+        const drv = data.drivers.find((d) => d.id === id);
+        if (drv) drv.days[dateKey] = "";
+      }
+      delete data.generated[dateKey];
+    }
+    // Strip any reserve duties a previous Generate run added for this station, and blank out
+    // driver assignments on trip duties, so re-generating starts clean instead of piling up.
+    if (jointResult && jointResult.dutiesByStation[station]) {
+      jointResult.dutiesByStation[station] = jointResult.dutiesByStation[station].filter((d) => !d.isReserve);
+      jointResult.dutiesByStation[station].forEach((d) => {
+        d.driver = { driverId: "", name: "", phone: "", homeStation: station };
+      });
+    }
+  }
+
+  // "Randomly divide the drivers through the tasks" -- fills every trip duty with a random
+  // available driver, puts whoever's left on reserve (spread across shifts, see reserve.js),
+  // and writes each driver's resulting task code back into their roster cell for that date.
+  function generateTasks() {
+    if (!homeStation) return;
+    if (!jointResult) { rosterSheetStatus.textContent = "Drop an Order B file first -- there are no tasks to assign drivers to yet."; return; }
+    const data = rosterSheetByStation[homeStation];
+    if (!data) { rosterSheetStatus.textContent = "Drop this station's roster sheet first."; return; }
+    const dateKey = rosterSelectedDateByStation[homeStation];
+    if (!dateKey) return;
+
+    clearPreviousGeneration(homeStation, dateKey);
+
+    const duties = (jointResult.dutiesByStation[homeStation] || []).filter((d) => !d.isReserve);
+    const available = data.drivers.filter((d) => !d.days[dateKey]);
+
+    const shuffled = available.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const forTrips = shuffled.slice(0, duties.length);
+    const forReserve = shuffled.slice(duties.length);
+    const generatedIds = [];
+
+    duties.forEach((duty, i) => {
+      const drv = forTrips[i];
+      if (!drv) return; // not enough drivers today -- this duty stays unassigned, flagged below
+      duty.driver = { driverId: drv.id, name: drv.name, phone: "", homeStation };
+      drv.days[dateKey] = duty.taskCode;
+      generatedIds.push(drv.id);
+    });
+
+    const reserveDuties = window.ReserveBuilder.buildReserveDuties(forReserve);
+    reserveDuties.forEach((rd) => {
+      rd.driver.days[dateKey] = rd.taskCode;
+      generatedIds.push(rd.driver.id);
+      // Reserve duties carry the roster driver object itself (id/name/days) -- normalize to the
+      // {driverId,name,phone,homeStation} shape dutyRowHtml/downloadBtn expect, same as trip duties.
+      rd.driver = { driverId: rd.driver.id, name: rd.driver.name, phone: "", homeStation };
+    });
+
+    jointResult.dutiesByStation[homeStation] = duties.concat(reserveDuties)
+      .sort((a, b) => a.signIn - b.signIn); // keep the standing "always chronological" rule
+
+    data.generated = data.generated || {};
+    data.generated[dateKey] = generatedIds;
+
+    saveRosterSheetState();
+    renderForStation();
+    renderRoster();
+    renderRosterSheet();
+
+    const assignedCount = forTrips.filter(Boolean).length;
+    const shortfall = duties.length - assignedCount;
+    rosterSheetStatus.textContent = `Generated: ${assignedCount}/${duties.length} trip duties assigned, ${reserveDuties.length} driver(s) on reserve` +
+      (shortfall > 0 ? `. WARNING: ${shortfall} trip duty(ies) have no driver -- not enough available drivers today.` : ".");
+  }
+  generateTasksBtn.addEventListener("click", generateTasks);
 
   // Sign-in only controls which station's slice of the (single, shared) computed result is
   // displayed -- it no longer gates the drop zone. The joint scheduler solves all 3 stations
