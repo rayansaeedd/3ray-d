@@ -8,6 +8,7 @@
 <script src="order_b_engine.js"></script>
 <script src="joint_scheduler.js"></script>
 <script src="reserve.js"></script>
+<script src="fixed_rosters.js"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
@@ -387,17 +388,36 @@
   function loadRosterSheetState() {
     try {
       const raw = JSON.parse(localStorage.getItem(ROSTER_SHEET_STORAGE_KEY) || "null");
-      if (!raw) return;
-      for (const station in raw.byStation) {
-        const s = raw.byStation[station];
-        rosterSheetByStation[station] = {
-          dates: s.dates.map((k) => new Date(k + "T00:00:00Z")),
-          drivers: s.drivers,
-          generated: s.generated || {},
-        };
+      if (raw) {
+        for (const station in raw.byStation) {
+          const s = raw.byStation[station];
+          rosterSheetByStation[station] = {
+            dates: s.dates.map((k) => new Date(k + "T00:00:00Z")),
+            drivers: s.drivers,
+            generated: s.generated || {},
+          };
+        }
+        rosterSelectedDateByStation = raw.selectedDates || {};
       }
-      rosterSelectedDateByStation = raw.selectedDates || {};
     } catch (err) { /* corrupted/old-shape storage -- start clean rather than throw */ }
+
+    // A station a supervisor's own browser has never touched (no localStorage entry yet)
+    // falls back to the roster baked into fixed_rosters.js, so opening the shared link for the
+    // first time shows the real roster immediately instead of an empty "drop a file" prompt.
+    // Deliberately only fills gaps -- a station with real saved state above is never overwritten.
+    const fixed = window.FIXED_ROSTERS || {};
+    for (const station in fixed) {
+      if (rosterSheetByStation[station]) continue;
+      const s = fixed[station];
+      rosterSheetByStation[station] = {
+        dates: s.dates.map((k) => new Date(k + "T00:00:00Z")),
+        drivers: JSON.parse(JSON.stringify(s.drivers)), // own copy -- edits must not mutate the embedded default
+        generated: {},
+      };
+      if (!rosterSelectedDateByStation[station]) {
+        rosterSelectedDateByStation[station] = s.dates[0];
+      }
+    }
   }
   loadRosterSheetState();
 
