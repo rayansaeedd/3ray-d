@@ -263,11 +263,11 @@
         }
         const drivers = rosterFor(homeStation);
         const { duties, uncovered } = E.buildDutiesForStation(trips, homeStation, drivers, "");
-        const leftover = drivers.slice(duties.length);
-        const reserveDuties = E.buildReserveDuties(leftover, {});
+        // Reserve-shift generation is disabled for now (per request) -- trip duties only.
+        const reserveDuties = [];
         lastDuties = duties.concat(reserveDuties);
         renderResults(trips, duties, uncovered, reserveDuties);
-        setStatus("done", `Loaded ${trips.length} trips, built ${duties.length} duties + ${reserveDuties.length} reserve shifts for ${homeStation}.`);
+        setStatus("done", `Loaded ${trips.length} trips, built ${duties.length} duties for ${homeStation}. Reserve generation is off for now.`);
       } catch (err) {
         console.error(err);
         setStatus("error", "Could not process this file: " + err.message);
