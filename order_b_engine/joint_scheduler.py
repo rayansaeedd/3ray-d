@@ -243,4 +243,12 @@ def build_joint_schedule(trips: list[Trip], driver_counts: dict | None = None) -
         duties_by_station[station_b].extend(duties_b)
         all_uncovered.extend(uncovered)
 
+    # Always display top-to-bottom in the order the day actually runs: earliest sign-in first.
+    # A station's duties come from up to two different shared families (e.g. MAK gets both
+    # 00/01/03 and 05 duties), appended one family at a time above, so without this sort a
+    # 6:00 duty from the second family could land below an 8:00 duty from the first.
+    for station in duties_by_station:
+        duties_by_station[station].sort(key=lambda d: (d.sign_in.hour, d.sign_in.minute))
+    all_uncovered.sort(key=lambda t: (t.dep_time.hour, t.dep_time.minute))
+
     return JointResult(duties_by_station=duties_by_station, uncovered=all_uncovered)

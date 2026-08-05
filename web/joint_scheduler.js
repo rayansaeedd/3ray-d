@@ -206,6 +206,15 @@
       allUncovered.push(...uncovered);
     }
 
+    // Always display top-to-bottom in the order the day actually runs: earliest sign-in first.
+    // A station's duties come from up to two different shared families (e.g. MAK gets both
+    // 00/01/03 and 05 duties), pushed one family at a time above, so without this sort a 6:00
+    // duty from the second family could land below an 8:00 duty from the first.
+    for (const station in dutiesByStation) {
+      dutiesByStation[station].sort((a, b) => a.signIn - b.signIn);
+    }
+    allUncovered.sort((a, b) => a.depMin - b.depMin);
+
     return { dutiesByStation, uncovered: allUncovered };
   }
 
