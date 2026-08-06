@@ -90,6 +90,7 @@
     flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 0; background: transparent;
   }
   .duty-row .legs-wrap .leg .times { display: flex; justify-content: space-between; width: 100%; font-size: 10px; font-weight: 700; }
+  .duty-row .legs-wrap .leg .times .time-with-badge { display: inline-flex; align-items: center; gap: 1px; }
   .duty-row .trip-box {
     border: 2px solid #222; background: #fff; border-radius: 4px; padding: 3px 8px; font-weight: 700; font-size: 13px;
   }
@@ -1384,7 +1385,10 @@
     const legsHtml = d.legs.map((leg, i) => {
       const color = legColorHex(d, leg);
       const legHtml = `<div class="leg ${leg.role === "Passenger" ? "passenger" : ""}">
-        <div class="times"><span>${timeStr(legDepMin(leg))}</span><span>${timeStr(legArrMin(leg))}</span></div>
+        <div class="times">
+          <span class="time-with-badge"><span class="editable-field" ${editAttrs("depMin", idx, i)}>${timeStr(legDepMin(leg))}</span>${editedBadge(d, `leg${i}.depMin`)}</span>
+          <span class="time-with-badge"><span class="editable-field" ${editAttrs("arrMin", idx, i)}>${timeStr(legArrMin(leg))}</span>${editedBadge(d, `leg${i}.arrMin`)}</span>
+        </div>
         <div class="trip-box"><span class="editable-field" ${editAttrs("tripNo", idx, i)}>${legTripNo(leg)}</span>${editedBadge(d, `leg${i}.tripNo`)}</div>
         <div class="trip-bar editable-field" style="background:${color}" ${editAttrs("color", idx, i)}></div>
       </div>`;
