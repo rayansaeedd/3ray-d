@@ -78,6 +78,150 @@
     return false;
   }
 
+  // ---------------------------------------------------------------------------------------
+  // Shuttle (05, MAK<->KAIA) duties: NOT built via the general Main+Main bipartite matching
+  // below. See joint_scheduler.py's matching block comment for the full rationale (short
+  // version: shuttle legs are short and run every ~2h, so pairing "any valid same-day return"
+  // left a driver idle for 5-6h between two legs that were each individually valid but far
+  // apart -- the matching tier never saw the gap, only the padded/flattened duty length).
+  //
+  // Pattern 1 (chain): exactly 4 legs back-to-back, alternating direction, sign-in 30 min
+  //   before the first leg (not the usual 60).
+  // Pattern 2 (pair + Reserve): one round-trip pair, normal 60-min sign-in, padded to the 7:30
+  //   target with Reserve time -- after the pair by default (exactly what tryBuild already does
+  //   when a pairing finishes early), before it only when "after" would push sign-out past
+  //   midnight.
+  const SHUTTLE_SIGN_IN_BEFORE_CHAIN_MIN = 30;
+  const SHUTTLE_CHAIN_LEGS = 4;
+
+  function wrapsMidnight(startMin, endMin) {
+    return endMin < startMin;
+  }
+
+  function tryExtendShuttleChain(current, poolByOrigin, chainTripNos) {
+    const candidates = (poolByOrigin[current.destination] || []).filter(
+      (t) => !chainTripNos.has(t.tripNo)
+        && sameDayDepBeforeArr(t.depMin, current.arrMin)
+        && minutesBetween(current.arrMin, t.depMin) >= c.MIN_MAIN_CONNECTION_MIN
+    );
+    if (!candidates.length) return null;
+    return candidates.reduce((best, t) => (t.depMin < best.depMin ? t : best));
+  }
+
+  function tryBuildShuttleChain(leg1, poolByOrigin) {
+    const chain = [leg1];
+    const chainTripNos = new Set([leg1.tripNo]);
+    let current = leg1;
+    for (let i = 0; i < SHUTTLE_CHAIN_LEGS - 1; i++) {
+      const nxt = tryExtendShuttleChain(current, poolByOrigin, chainTripNos);
+      if (!nxt) return null;
+      chain.push(nxt);
+      chainTripNos.add(nxt.tripNo);
+      current = nxt;
+    }
+
+    const signIn = addMinutes(leg1.depMin, -SHUTTLE_SIGN_IN_BEFORE_CHAIN_MIN);
+    const lastArr = chain[chain.length - 1].arrMin;
+    const span = minutesBetween(signIn, lastArr);
+    if (span > c.CAP_DUTY_MIN) return null; // would need overtime -- never allowed
+    const signOut = addMinutes(lastArr, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+    const dutyMin = minutesBetween(signIn, signOut);
+    return [chain, signIn, signOut, dutyMin];
+  }
+
+  // Every structurally valid 4-leg chain, one attempt per possible starting trip, independent
+  // of each other (no shared claimed-set while enumerating) -- see
+  // _enumerate_shuttle_chains in joint_scheduler.py for why enumerate-then-select beats a
+  // single greedy claiming pass here.
+  function enumerateShuttleChains(allTrips, poolByOrigin) {
+    const chains = [];
+    for (const leg1 of allTrips) {
+      const result = tryBuildShuttleChain(leg1, poolByOrigin);
+      if (result) chains.push(result);
+    }
+    return chains;
+  }
+
+  function tryBuildShuttlePairWithReserve(leg1, poolByOrigin, claimed) {
+    const candidates = (poolByOrigin[leg1.destination] || []).filter(
+      (t) => !claimed.has(t.tripNo)
+        && t.destination === leg1.origin
+        && sameDayDepBeforeArr(t.depMin, leg1.arrMin)
+        && minutesBetween(leg1.arrMin, t.depMin) >= c.MIN_MAIN_CONNECTION_MIN
+    );
+    if (!candidates.length) return null;
+    const leg2 = candidates.reduce((best, t) => (t.depMin < best.depMin ? t : best));
+
+    const signInFwd = addMinutes(leg1.depMin, -c.SIGN_IN_BEFORE_MAIN_MIN);
+    const spanFwd = minutesBetween(signInFwd, leg2.arrMin);
+    if (spanFwd <= c.CAP_DUTY_MIN) {
+      const signOutFwd = spanFwd <= c.TARGET_DUTY_MIN
+        ? addMinutes(signInFwd, c.TARGET_DUTY_MIN)
+        : addMinutes(leg2.arrMin, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+      if (!wrapsMidnight(signInFwd, signOutFwd)) {
+        return [leg1, leg2, signInFwd, signOutFwd, minutesBetween(signInFwd, signOutFwd)];
+      }
+    }
+
+    // Reserve-before: anchor from the return leg's own arrival (no sign-out buffer -- a
+    // computed backward target, not a "wrap up after arriving" pad) so the total is exactly
+    // the 7:30 target and sign-out never needs to cross midnight.
+    const signOutBwd = leg2.arrMin;
+    const signInBwd = addMinutes(signOutBwd, -c.TARGET_DUTY_MIN);
+    return [leg1, leg2, signInBwd, signOutBwd, c.TARGET_DUTY_MIN];
+  }
+
+  function makeShuttleDuty(legs, signIn, signOut, dutyMin, homeStation) {
+    const awayLetter = STATION_LETTER[legs[0].destination] || "?";
+    const taskCode = `${minutesToTimeStr(signIn).replace(":", "")}/${Math.floor(dutyMin / 60)}${awayLetter}`;
+    const blankDriver = { driverId: "", name: "", phone: "", homeStation };
+    return {
+      driver: blankDriver,
+      taskCode,
+      signIn,
+      signOut,
+      legs: legs.map((t) => ({ trip: t, role: "Main" })),
+      overtime: false,
+      dutyMin,
+      isReserve: false,
+    };
+  }
+
+  function solveShuttleFamily(tripsA, tripsB, stationA, stationB) {
+    const allTrips = tripsA.concat(tripsB).slice().sort((a, b) => a.depMin - b.depMin);
+    const poolByOrigin = {};
+    for (const t of allTrips) {
+      (poolByOrigin[t.origin] = poolByOrigin[t.origin] || []).push(t);
+    }
+
+    const claimed = new Set();
+    const dutiesA = [];
+    const dutiesB = [];
+
+    const allChains = enumerateShuttleChains(allTrips, poolByOrigin);
+    allChains.sort((x, y) => y[0][0].depMin - x[0][0].depMin); // latest chain-start first
+    for (const [legs, signIn, signOut, dutyMin] of allChains) {
+      if (legs.some((t) => claimed.has(t.tripNo))) continue;
+      legs.forEach((t) => claimed.add(t.tripNo));
+      const duty = makeShuttleDuty(legs, signIn, signOut, dutyMin, legs[0].origin);
+      (legs[0].origin === stationA ? dutiesA : dutiesB).push(duty);
+    }
+
+    for (const leg1 of allTrips) {
+      if (claimed.has(leg1.tripNo)) continue;
+      const pair = tryBuildShuttlePairWithReserve(leg1, poolByOrigin, claimed);
+      if (!pair) continue;
+      const [l1, l2, signIn, signOut, dutyMin] = pair;
+      claimed.add(l1.tripNo);
+      claimed.add(l2.tripNo);
+      const duty = makeShuttleDuty([l1, l2], signIn, signOut, dutyMin, leg1.origin);
+      (leg1.origin === stationA ? dutiesA : dutiesB).push(duty);
+    }
+
+    const uncovered = allTrips.filter((t) => !claimed.has(t.tripNo));
+    return { dutiesA, dutiesB, uncovered };
+  }
+
   function bestMainMainEdge(ta, tb) {
     const options = [];
     if (sameDayDepBeforeArr(tb.depMin, ta.arrMin)) {
@@ -204,7 +348,14 @@
       const familyTrips = trips.filter((t) => prefixes.has(t.prefix));
       const tripsA = familyTrips.filter((t) => t.origin === stationA);
       const tripsB = familyTrips.filter((t) => t.origin === stationB);
-      const { dutiesA, dutiesB, uncovered } = solveFamily(tripsA, tripsB, stationA, stationB);
+
+      // Shuttle gets its own duty-shaping rules (4-leg chains / pair+Reserve) instead of the
+      // general Main+Main matching -- see solveShuttleFamily's comment block for why.
+      const isShuttle = prefixes.size === 1 && prefixes.has("05");
+      const { dutiesA, dutiesB, uncovered } = isShuttle
+        ? solveShuttleFamily(tripsA, tripsB, stationA, stationB)
+        : solveFamily(tripsA, tripsB, stationA, stationB);
+
       dutiesByStation[stationA].push(...dutiesA);
       dutiesByStation[stationB].push(...dutiesB);
       allUncovered.push(...uncovered);

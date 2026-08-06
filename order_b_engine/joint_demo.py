@@ -15,7 +15,7 @@ import json
 import pathlib
 
 from order_b_engine.joint_scheduler import build_joint_schedule
-from order_b_engine.models import Trip
+from order_b_engine.models import Trip, minutes_between
 from order_b_engine.trip_codes import decode_trip_number
 
 GROUND_TRUTH_PATH = pathlib.Path(__file__).parent / "_test_data" / "all_trips_ground_truth.json"
@@ -80,6 +80,25 @@ def main():
     ]
     assert not overtime_duties, f"zero-overtime policy violated by: {overtime_duties}"
     print("PASS: zero overtime duties (station-wide policy).")
+
+    # Shuttle-specific: the whole point of the shuttle rework was killing the 5-6h idle-gap
+    # problem between two legs of the same duty. Generously capped at 3h (real worst case on
+    # this data is ~2.5h, at the very start of the operating day) -- still catches a regression
+    # back toward the original multi-hour-wait bug.
+    shuttle_duties = [
+        duty
+        for duties in result.duties_by_station.values()
+        for duty in duties
+        if any(leg.trip.prefix == "05" for leg in duty.legs)
+    ]
+    assert shuttle_duties, "expected at least one shuttle duty in this dataset"
+    max_shuttle_gap = max(
+        minutes_between(duty.legs[i].trip.arr_time, duty.legs[i + 1].trip.dep_time)
+        for duty in shuttle_duties
+        for i in range(len(duty.legs) - 1)
+    )
+    assert max_shuttle_gap <= 180, f"shuttle duty has a {max_shuttle_gap}-min internal gap -- the 5-6h idle problem may have regressed"
+    print(f"PASS: {len(shuttle_duties)} shuttle duties built, largest internal gap {max_shuttle_gap}min (well under the old 5-6h problem).")
 
 
 if __name__ == "__main__":

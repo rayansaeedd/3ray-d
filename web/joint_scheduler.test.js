@@ -63,15 +63,31 @@ console.log("PASS: zero overtime duties (station-wide policy).");
 
 // Cross-check against the Python run's exact station split (both use the same tie-break
 // order -- trips_a processed in departure-time order -- so this should match exactly, not
-// just "close enough"). Not 16/16/16 anymore: the zero-overtime policy (tryBuild rejects any
-// pairing needing more than CAP_DUTY_MIN) rules out some Main+Main pairings that used to be
-// allowed with an overtime flag, so the maximum matching lands on a different -- still fully
-// covering -- split across the shared families.
-const expectedCounts = { MAK: 20, MAD: 15, KAIA: 13 };
+// just "close enough"). MAD is unchanged (15) from before the shuttle rework, confirming
+// 00/01/03 and 07/08 are untouched; MAK/KAIA shifted because shuttle (05) now builds far
+// fewer, more efficient duties (10 instead of the old ~16 near-1:1 pairing).
+const expectedCounts = { MAK: 17, MAD: 15, KAIA: 10 };
 for (const station of Object.keys(expectedCounts)) {
   assert(
     countsByStation[station] === expectedCounts[station],
     `station ${station}: expected ${expectedCounts[station]} duties (matching the Python run), got ${countsByStation[station]}`
   );
 }
-console.log("PASS: station split matches the Python run exactly (20/15/13).");
+console.log("PASS: station split matches the Python run exactly (17/15/10).");
+
+// Shuttle-specific: the whole point of this rework was killing the 5-6h idle-gap problem.
+// Every internal gap between consecutive Main legs of a shuttle duty must be reasonable --
+// generously capped at 3h to leave room for real-world timetable irregularities (the actual
+// worst case on real data is ~2.5h, at the very start of the operating day) while still
+// catching a regression back toward the original multi-hour-wait bug.
+const shuttleDuties = Object.values(result.dutiesByStation).flat().filter((d) => d.legs.some((l) => l.trip.prefix === "05"));
+assert(shuttleDuties.length > 0, "expected at least one shuttle duty in this dataset");
+let maxShuttleGap = 0;
+for (const d of shuttleDuties) {
+  for (let i = 0; i < d.legs.length - 1; i++) {
+    const gap = OrderBEngine.minutesBetween(d.legs[i].trip.arrMin, d.legs[i + 1].trip.depMin);
+    maxShuttleGap = Math.max(maxShuttleGap, gap);
+  }
+}
+assert(maxShuttleGap <= 180, `shuttle duty has a ${maxShuttleGap}-min internal gap -- the 5-6h idle problem may have regressed`);
+console.log(`PASS: ${shuttleDuties.length} shuttle duties built, largest internal gap ${maxShuttleGap}min (well under the old 5-6h problem).`);

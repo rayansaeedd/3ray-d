@@ -70,8 +70,11 @@
   .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
   .legend span.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
 
+  /* legs-wrap holds a variable number of legs (2 for a normal round trip, 4 for a chained
+     shuttle duty) plus a turn badge between each consecutive pair -- one flexible grid column
+     instead of fixed leg1/turn/leg2 columns, so it can grow to fit any leg count. */
   .duty-row {
-    display: grid; grid-template-columns: 90px 190px 60px 70px 1fr 44px 1fr 70px 60px 70px 60px;
+    display: grid; grid-template-columns: 90px 190px 60px 70px 1fr 70px 60px 70px 60px;
     align-items: stretch; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
     margin-bottom: 10px; font-size: 12px;
   }
@@ -81,24 +84,25 @@
   .duty-row .driver-info .name { font-weight: 700; }
   .duty-row .driver-info .sub { font-weight: 400; color: #666; }
   .duty-row .sign-in, .duty-row .sign-out { color: var(--red); font-weight: 700; }
-  .duty-row .leg { background: var(--stripe); flex-direction: column; gap: 3px; padding: 6px 8px; }
-  .duty-row .leg .times { display: flex; justify-content: space-between; width: 100%; font-size: 10px; font-weight: 700; }
+  .duty-row .legs-wrap { background: var(--stripe); gap: 4px; padding: 6px 8px; }
+  .duty-row .legs-wrap .leg {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; padding: 0; background: transparent;
+  }
+  .duty-row .legs-wrap .leg .times { display: flex; justify-content: space-between; width: 100%; font-size: 10px; font-weight: 700; }
   .duty-row .trip-box {
     border: 2px solid #222; background: #fff; border-radius: 4px; padding: 3px 8px; font-weight: 700; font-size: 13px;
   }
   .duty-row .trip-bar { height: 5px; width: 70%; border-radius: 2px; margin-top: 2px; }
   .duty-row .leg.passenger .trip-box { opacity: .55; font-style: italic; }
-  .duty-row .turn { background: var(--stripe); }
-  .duty-row .turn .badge {
+  .duty-row .legs-wrap .turn { flex: 0 0 auto; background: transparent; }
+  .duty-row .legs-wrap .turn .badge {
     width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center;
     justify-content: center; color: #fff; font-weight: 700; font-size: 12px;
   }
   .duty-row .duty-len { font-weight: 700; }
   .duty-row .ot { font-weight: 700; }
   .duty-row.overtime .ot { background: #FFC000; }
-  .duty-row .reserve-block {
-    grid-column: span 3; background: #BFBFBF; color: #fff; font-weight: 700; letter-spacing: 1px;
-  }
+  .duty-row .reserve-block { background: #BFBFBF; color: #fff; font-weight: 700; letter-spacing: 1px; }
 
   .uncovered { border: 1px solid #f3c1c1; background: #fff5f5; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
   .uncovered strong { color: var(--red); }
@@ -1254,28 +1258,26 @@
         <div class="ot"></div>
       </div>`;
     }
-    const leg1 = d.legs[0], leg2 = d.legs[1];
-    // A manual task's color is whatever the supervisor picked in the Add Task form, not
-    // derived from a route family (it may not have a real one).
-    const c1 = d.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg1.trip.prefix]] || "#8064A2";
-    const c2 = d.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg2.trip.prefix]] || "#8064A2";
-    const turnLetter = E.STATION_LETTER[leg1.trip.destination] || "?";
+    // Variable leg count: 2 for a normal round trip, 4 for a chained shuttle duty. A manual
+    // task's color is whatever the supervisor picked in the Add Task form, not derived from a
+    // route family (it may not have a real one).
+    const legsHtml = d.legs.map((leg, i) => {
+      const color = d.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg.trip.prefix]] || "#8064A2";
+      const legHtml = `<div class="leg ${leg.role === "Passenger" ? "passenger" : ""}">
+        <div class="times"><span>${timeStr(leg.trip.depMin)}</span><span>${timeStr(leg.trip.arrMin)}</span></div>
+        <div class="trip-box">${leg.trip.tripNo}</div>
+        <div class="trip-bar" style="background:${color}"></div>
+      </div>`;
+      if (i === d.legs.length - 1) return legHtml;
+      const turnLetter = E.STATION_LETTER[leg.trip.destination] || "?";
+      return legHtml + `<div class="turn"><div class="badge" style="background:${color}">${turnLetter}</div></div>`;
+    }).join("");
     return `<div class="duty-row ${d.overtime ? "overtime" : ""} ${d.isManual ? "manual" : ""}">
       ${taskCodeCell}
       <div ${driverInfoAttrs}>${driverInfo}</div>
       <div class="sign-in">${timeStr(d.signIn)}</div>
       <div>${d.driver.homeStation}</div>
-      <div class="leg ${leg1.role === "Passenger" ? "passenger" : ""}">
-        <div class="times"><span>${timeStr(leg1.trip.depMin)}</span><span>${timeStr(leg1.trip.arrMin)}</span></div>
-        <div class="trip-box">${leg1.trip.tripNo}</div>
-        <div class="trip-bar" style="background:${c1}"></div>
-      </div>
-      <div class="turn"><div class="badge" style="background:${c1}">${turnLetter}</div></div>
-      <div class="leg ${leg2.role === "Passenger" ? "passenger" : ""}">
-        <div class="times"><span>${timeStr(leg2.trip.depMin)}</span><span>${timeStr(leg2.trip.arrMin)}</span></div>
-        <div class="trip-box">${leg2.trip.tripNo}</div>
-        <div class="trip-bar" style="background:${c2}"></div>
-      </div>
+      <div class="legs-wrap">${legsHtml}</div>
       <div>${d.driver.homeStation}</div>
       <div class="sign-out">${timeStr(d.signOut)}</div>
       <div class="duty-len">${Math.floor(d.dutyMin/60)}:${String(d.dutyMin%60).padStart(2,"0")}</div>
@@ -1341,17 +1343,27 @@
     if (!jointResult || !homeStation) return;
     const duties = jointResult.dutiesByStation[homeStation] || [];
     if (!duties.length) return;
+    // Leg count varies (2 for a normal round trip, 4 for a chained shuttle duty) -- size the
+    // sheet's leg columns to the widest duty actually present today instead of assuming 2.
+    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length)));
+    const legHeaders = [];
+    for (let i = 1; i <= maxLegs; i++) legHeaders.push(`Leg ${i} Trip`, `Leg ${i} Role`);
     const rows = [["Task Code", "Driver ID", "Driver Name", "Phone", "Sign In", "Origin",
-                    "Leg 1 Trip", "Leg 1 Role", "Leg 2 Trip", "Leg 2 Role", "Destination", "Sign Out", "Duty (min)", "Overtime"]];
+                    ...legHeaders, "Destination", "Sign Out", "Duty (min)", "Overtime"]];
     duties.forEach((d) => {
       if (d.isReserve) {
+        const legCells = Array(maxLegs * 2).fill("");
+        legCells[0] = "RESERVE";
         rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
-                   d.driver.homeStation, "RESERVE", "", "", "", d.driver.homeStation, timeStr(d.signOut), d.dutyMin, ""]);
+                   d.driver.homeStation, ...legCells, d.driver.homeStation, timeStr(d.signOut), d.dutyMin, ""]);
       } else {
-        const [l1, l2] = d.legs;
+        const legCells = [];
+        for (let i = 0; i < maxLegs; i++) {
+          const leg = d.legs[i];
+          legCells.push(leg ? leg.trip.tripNo : "", leg ? leg.role : "");
+        }
         rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
-                   d.driver.homeStation, l1.trip.tripNo, l1.role, l2.trip.tripNo, l2.role,
-                   d.driver.homeStation, timeStr(d.signOut), d.dutyMin, d.overtime ? "OT" : ""]);
+                   d.driver.homeStation, ...legCells, d.driver.homeStation, timeStr(d.signOut), d.dutyMin, d.overtime ? "OT" : ""]);
       }
     });
     const ws = XLSX.utils.aoa_to_sheet(rows);

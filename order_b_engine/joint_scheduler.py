@@ -35,10 +35,20 @@ Two rules matter here, in priority order:
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
-from .duty_builder import _try_build
-from .models import Driver, Duty, Leg, Role, Trip
+from .duty_builder import (
+    CAP_DUTY_MIN,
+    MIN_MAIN_CONNECTION_MIN,
+    SIGN_IN_BEFORE_MAIN_MIN,
+    SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN,
+    TARGET_DUTY_MIN,
+    _add_minutes,
+    _sub_minutes,
+    _try_build,
+)
+from .models import Driver, Duty, Leg, Role, Trip, minutes_between
 from .trip_codes import STATION_LETTER
 
 # Each shared family: (prefixes, station_a, station_b). Order doesn't imply priority.
@@ -95,6 +105,193 @@ def _same_day_dep_before_arr(dep, arr) -> bool:
     that doesn't arrive until 21:55, producing a ~14h phantom duty. Confirmed by hitting this
     exact failure against real data before adding the guard."""
     return (dep.hour, dep.minute) > (arr.hour, arr.minute)
+
+
+# ---------------------------------------------------------------------------------------------
+# Shuttle (05, MAK<->KAIA) duties: NOT built via the general Main+Main bipartite matching below.
+#
+# Shuttle legs are short (~1h) and run every ~2h in each direction, so pairing "any valid same-
+# day return" via Kuhn's algorithm can -- and did, in a real reported case -- leave a driver
+# sitting idle for 5-6h at the far station between two legs that are each individually valid but
+# far apart in time. The matching's tie-break never saw this: once a pairing's natural span fits
+# under the 7:30 target, its duty_min gets flattened to exactly TARGET_DUTY_MIN regardless of how
+# long the actual gap between legs was, so a 45-minute turnaround and a 5-hour wait looked
+# identically good to the tier ranking.
+#
+# The real operational pattern (taught directly, not inferred from data):
+#   Pattern 1 (chain): exactly 4 legs back-to-back, alternating direction, sign-in 30 min before
+#     the first leg (not the usual 60) -- one duty covers 4 physical trips.
+#   Pattern 2 (pair + Reserve): one round-trip pair, normal 60-min sign-in, padded out to the
+#     7:30 target with Reserve time. Reserve goes after the pair by default -- which is exactly
+#     what the general _try_build already does whenever a pairing finishes early, nothing new
+#     needed there -- and only moves before the pair (sign-in pulled backward from the return
+#     leg's arrival instead) when "after" would push sign-out past midnight.
+SHUTTLE_SIGN_IN_BEFORE_CHAIN_MIN = 30
+SHUTTLE_CHAIN_LEGS = 4
+
+
+def _wraps_midnight(start, end) -> bool:
+    """True if `end` is earlier in the clock than `start` -- i.e. adding minutes to reach it
+    crossed midnight. Used only to decide Reserve placement below, not for the general same-day
+    chaining guard (that's _same_day_dep_before_arr, a different check for a different question)."""
+    return (end.hour, end.minute) < (start.hour, start.minute)
+
+
+def _try_extend_shuttle_chain(current: Trip, pool_by_origin: dict, chain_trip_nos: set) -> Trip | None:
+    """Earliest same-day, >=45min-gap trip departing from wherever the chain has just arrived,
+    excluding only trips already in *this* chain (not a global claimed set -- see
+    _enumerate_shuttle_chains for why chains are enumerated independently of each other)."""
+    candidates = [
+        t for t in pool_by_origin.get(current.destination, [])
+        if t.trip_no not in chain_trip_nos
+        and _same_day_dep_before_arr(t.dep_time, current.arr_time)
+        and minutes_between(current.arr_time, t.dep_time) >= MIN_MAIN_CONNECTION_MIN
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda t: (t.dep_time.hour, t.dep_time.minute))
+
+
+def _try_build_shuttle_chain(leg1: Trip, pool_by_origin: dict):
+    """Pattern 1, structural validity only (no claimed-set check -- see
+    _enumerate_shuttle_chains). Returns (chain, sign_in, sign_out, duty_min) or None."""
+    chain = [leg1]
+    chain_trip_nos = {leg1.trip_no}
+    current = leg1
+    for _ in range(SHUTTLE_CHAIN_LEGS - 1):
+        nxt = _try_extend_shuttle_chain(current, pool_by_origin, chain_trip_nos)
+        if nxt is None:
+            return None
+        chain.append(nxt)
+        chain_trip_nos.add(nxt.trip_no)
+        current = nxt
+
+    sign_in = _sub_minutes(leg1.dep_time, SHUTTLE_SIGN_IN_BEFORE_CHAIN_MIN)
+    last_arr = chain[-1].arr_time
+    span = minutes_between(sign_in, last_arr)
+    if span > CAP_DUTY_MIN:
+        return None  # would need overtime -- never allowed, chain doesn't happen
+    sign_out = _add_minutes(last_arr, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
+    duty_min = minutes_between(sign_in, sign_out)
+    return chain, sign_in, sign_out, duty_min
+
+
+def _enumerate_shuttle_chains(all_trips: list[Trip], pool_by_origin: dict):
+    """Every structurally valid 4-leg chain, one attempt per possible starting trip, entirely
+    independent of each other (no shared claimed-set while enumerating -- two chains here can
+    legitimately both want the same trip; that conflict gets resolved by the greedy selection
+    in _solve_shuttle_family, not here).
+
+    Why enumerate-then-select instead of one greedy pass claiming trips as it goes: a single
+    greedy forward pass (claim chains as soon as a valid one is found, earliest trip first)
+    reliably produces clean, efficient chains for most of the day, but starves whichever trips
+    sit at the far end of the day -- the last two departures in each direction can only ever be
+    a chain's *last* leg, never a chain's start, so if the trips that could have fed into them
+    already got claimed by an earlier chain that stopped one leg short, they're stranded with no
+    same-day return at all under the 45-minute rule. Confirmed against the real 32-trip shuttle
+    timetable: forward-greedy left 4 trips uncovered at the end of the day. Enumerating every
+    possible chain first and then selecting greedily by *latest start time* (most-constrained
+    trips claimed first, since they have the fewest valid chains available to them) recovers
+    full coverage on that same data, at the cost of a longer link for the single pair of trips at
+    the very start of the operating day that don't fit any chain -- an irregular early-morning
+    timetable gap, not an algorithm gap."""
+    chains = []
+    for leg1 in all_trips:
+        result = _try_build_shuttle_chain(leg1, pool_by_origin)
+        if result is not None:
+            chains.append(result)
+    return chains
+
+
+def _try_build_shuttle_pair_with_reserve(leg1: Trip, pool_by_origin: dict, claimed: set):
+    """Pattern 2. Returns (leg1, leg2, sign_in, sign_out, duty_min) or None."""
+    candidates = [
+        t for t in pool_by_origin.get(leg1.destination, [])
+        if t.trip_no not in claimed
+        and t.destination == leg1.origin
+        and _same_day_dep_before_arr(t.dep_time, leg1.arr_time)
+        and minutes_between(leg1.arr_time, t.dep_time) >= MIN_MAIN_CONNECTION_MIN
+    ]
+    if not candidates:
+        return None
+    leg2 = min(candidates, key=lambda t: (t.dep_time.hour, t.dep_time.minute))
+
+    sign_in_fwd = _sub_minutes(leg1.dep_time, SIGN_IN_BEFORE_MAIN_MIN)
+    span_fwd = minutes_between(sign_in_fwd, leg2.arr_time)
+    if span_fwd <= CAP_DUTY_MIN:
+        if span_fwd <= TARGET_DUTY_MIN:
+            sign_out_fwd = _add_minutes(sign_in_fwd, TARGET_DUTY_MIN)
+        else:
+            sign_out_fwd = _add_minutes(leg2.arr_time, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
+        if not _wraps_midnight(sign_in_fwd, sign_out_fwd):
+            return leg1, leg2, sign_in_fwd, sign_out_fwd, minutes_between(sign_in_fwd, sign_out_fwd)
+
+    # Reserve-before: anchor from the return leg's own arrival (no sign-out buffer -- this is
+    # a computed backward target, not a "wrap up after arriving" pad) so the total is exactly
+    # the 7:30 target and sign-out never needs to cross midnight.
+    sign_out_bwd = leg2.arr_time
+    sign_in_bwd = _sub_minutes(sign_out_bwd, TARGET_DUTY_MIN)
+    return leg1, leg2, sign_in_bwd, sign_out_bwd, TARGET_DUTY_MIN
+
+
+def _make_shuttle_duty(legs: list[Trip], sign_in, sign_out, duty_min, home_station: str) -> Duty:
+    away_letter = STATION_LETTER.get(legs[0].destination, "?")
+    task_code = f"{sign_in.strftime('%H%M')}/{duty_min // 60}{away_letter}"
+    blank_driver = Driver(driver_id="", name="", phone="", home_station=home_station)
+    return Duty(
+        driver=blank_driver,
+        task_code=task_code,
+        sign_in=sign_in,
+        sign_out=sign_out,
+        legs=[Leg(t, Role.MAIN) for t in legs],
+        overtime=False,
+    )
+
+
+def _solve_shuttle_family(trips_a: list[Trip], trips_b: list[Trip], station_a: str, station_b: str):
+    """Two passes. Returns (duties_a, duties_b, uncovered), same shape as _solve_family.
+
+    Pass 1 (chains): enumerate every structurally valid 4-leg chain (see
+    _enumerate_shuttle_chains), then greedily select a maximum non-overlapping set, latest
+    start time first -- the most time-constrained trips (those nearest the end of the operating
+    day, with the fewest chains available to them at all) get first claim, so they're not left
+    stranded by an earlier, less-constrained chain that happened to be tried first.
+
+    Pass 2 (pairs): whatever's left after Pass 1 becomes a round-trip pair + Reserve (see
+    _try_build_shuttle_pair_with_reserve), or stays uncovered if even that has no valid return.
+    """
+    all_trips = sorted(trips_a + trips_b, key=lambda t: (t.dep_time.hour, t.dep_time.minute))
+    pool_by_origin: dict[str, list[Trip]] = defaultdict(list)
+    for t in all_trips:
+        pool_by_origin[t.origin].append(t)
+
+    claimed: set[str] = set()
+    duties_a: list[Duty] = []
+    duties_b: list[Duty] = []
+
+    all_chains = _enumerate_shuttle_chains(all_trips, pool_by_origin)
+    all_chains.sort(key=lambda c: (c[0][0].dep_time.hour, c[0][0].dep_time.minute), reverse=True)
+    for legs, sign_in, sign_out, duty_min in all_chains:
+        if any(t.trip_no in claimed for t in legs):
+            continue
+        claimed.update(t.trip_no for t in legs)
+        duty = _make_shuttle_duty(legs, sign_in, sign_out, duty_min, legs[0].origin)
+        (duties_a if legs[0].origin == station_a else duties_b).append(duty)
+
+    for leg1 in all_trips:
+        if leg1.trip_no in claimed:
+            continue
+        pair = _try_build_shuttle_pair_with_reserve(leg1, pool_by_origin, claimed)
+        if pair is None:
+            continue
+        l1, l2, sign_in, sign_out, duty_min = pair
+        claimed.add(l1.trip_no)
+        claimed.add(l2.trip_no)
+        duty = _make_shuttle_duty([l1, l2], sign_in, sign_out, duty_min, leg1.origin)
+        (duties_a if leg1.origin == station_a else duties_b).append(duty)
+
+    uncovered = [t for t in all_trips if t.trip_no not in claimed]
+    return duties_a, duties_b, uncovered
 
 
 def _best_main_main_edge(ta: Trip, tb: Trip):
@@ -235,10 +432,15 @@ def build_joint_schedule(trips: list[Trip], driver_counts: dict | None = None) -
         trips_a = [t for t in family_trips if t.origin == station_a]
         trips_b = [t for t in family_trips if t.origin == station_b]
 
-        total_pairs = round((len(trips_a) + len(trips_b)) / 2)
-        target_a, _ = target_duty_split(total_pairs, station_a, station_b, driver_counts)
+        if prefixes == {"05"}:
+            # Shuttle gets its own duty-shaping rules (4-leg chains / pair+Reserve) instead of
+            # the general Main+Main matching -- see _solve_shuttle_family's docstring for why.
+            duties_a, duties_b, uncovered = _solve_shuttle_family(trips_a, trips_b, station_a, station_b)
+        else:
+            total_pairs = round((len(trips_a) + len(trips_b)) / 2)
+            target_a, _ = target_duty_split(total_pairs, station_a, station_b, driver_counts)
+            duties_a, duties_b, uncovered = _solve_family(trips_a, trips_b, station_a, station_b, target_a)
 
-        duties_a, duties_b, uncovered = _solve_family(trips_a, trips_b, station_a, station_b, target_a)
         duties_by_station[station_a].extend(duties_a)
         duties_by_station[station_b].extend(duties_b)
         all_uncovered.extend(uncovered)

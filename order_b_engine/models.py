@@ -43,7 +43,7 @@ class Duty:
     task_code: str
     sign_in: dt.time
     sign_out: dt.time
-    legs: list  # list[Leg], length 1 or 2
+    legs: list  # list[Leg]: 0 for reserve, 2 for a normal round trip, 4 for a chained shuttle duty
     overtime: bool
     is_reserve: bool = False
 
