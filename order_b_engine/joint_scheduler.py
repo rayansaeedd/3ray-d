@@ -204,7 +204,10 @@ def _enumerate_shuttle_chains(all_trips: list[Trip], pool_by_origin: dict):
 
 
 def _try_build_shuttle_pair_with_reserve(leg1: Trip, pool_by_origin: dict, claimed: set):
-    """Pattern 2. Returns (leg1, leg2, sign_in, sign_out, duty_min) or None."""
+    """Pattern 2. Returns (leg1, leg2, sign_in, sign_out, duty_min, reserve_position) or None.
+    reserve_position is "after" when the pad to reach TARGET_DUTY_MIN sits between leg 2's
+    arrival and sign-out, "before" when it sits between sign-in and leg 1's departure, or None
+    when the round trip is already >= TARGET_DUTY_MIN on its own with no padding needed."""
     candidates = [
         t for t in pool_by_origin.get(leg1.destination, [])
         if t.trip_no not in claimed
@@ -221,20 +224,23 @@ def _try_build_shuttle_pair_with_reserve(leg1: Trip, pool_by_origin: dict, claim
     if span_fwd <= CAP_DUTY_MIN:
         if span_fwd <= TARGET_DUTY_MIN:
             sign_out_fwd = _add_minutes(sign_in_fwd, TARGET_DUTY_MIN)
+            reserve_position = "after"
         else:
             sign_out_fwd = _add_minutes(leg2.arr_time, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
+            reserve_position = None
         if not _wraps_midnight(sign_in_fwd, sign_out_fwd):
-            return leg1, leg2, sign_in_fwd, sign_out_fwd, minutes_between(sign_in_fwd, sign_out_fwd)
+            return leg1, leg2, sign_in_fwd, sign_out_fwd, minutes_between(sign_in_fwd, sign_out_fwd), reserve_position
 
     # Reserve-before: anchor from the return leg's own arrival (no sign-out buffer -- this is
     # a computed backward target, not a "wrap up after arriving" pad) so the total is exactly
     # the 7:30 target and sign-out never needs to cross midnight.
     sign_out_bwd = leg2.arr_time
     sign_in_bwd = _sub_minutes(sign_out_bwd, TARGET_DUTY_MIN)
-    return leg1, leg2, sign_in_bwd, sign_out_bwd, TARGET_DUTY_MIN
+    return leg1, leg2, sign_in_bwd, sign_out_bwd, TARGET_DUTY_MIN, "before"
 
 
-def _make_shuttle_duty(legs: list[Trip], sign_in, sign_out, duty_min, home_station: str) -> Duty:
+def _make_shuttle_duty(legs: list[Trip], sign_in, sign_out, duty_min, home_station: str,
+                        reserve_position: str | None = None) -> Duty:
     away_letter = STATION_LETTER.get(legs[0].destination, "?")
     task_code = f"{sign_in.strftime('%H%M')}/{duty_min // 60}{away_letter}"
     blank_driver = Driver(driver_id="", name="", phone="", home_station=home_station)
@@ -245,6 +251,7 @@ def _make_shuttle_duty(legs: list[Trip], sign_in, sign_out, duty_min, home_stati
         sign_out=sign_out,
         legs=[Leg(t, Role.MAIN) for t in legs],
         overtime=False,
+        reserve_position=reserve_position,
     )
 
 
@@ -284,10 +291,10 @@ def _solve_shuttle_family(trips_a: list[Trip], trips_b: list[Trip], station_a: s
         pair = _try_build_shuttle_pair_with_reserve(leg1, pool_by_origin, claimed)
         if pair is None:
             continue
-        l1, l2, sign_in, sign_out, duty_min = pair
+        l1, l2, sign_in, sign_out, duty_min, reserve_position = pair
         claimed.add(l1.trip_no)
         claimed.add(l2.trip_no)
-        duty = _make_shuttle_duty([l1, l2], sign_in, sign_out, duty_min, leg1.origin)
+        duty = _make_shuttle_duty([l1, l2], sign_in, sign_out, duty_min, leg1.origin, reserve_position)
         (duties_a if leg1.origin == station_a else duties_b).append(duty)
 
     uncovered = [t for t in all_trips if t.trip_no not in claimed]

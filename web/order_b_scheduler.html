@@ -105,6 +105,14 @@
   .duty-row .ot { font-weight: 700; }
   .duty-row.overtime .ot { background: #FFC000; }
   .duty-row .reserve-block { background: #BFBFBF; color: #fff; font-weight: 700; letter-spacing: 1px; }
+  /* A shuttle pair padded with Reserve time (see reservePosition) sits alongside real .leg/.turn
+     children inside legs-wrap, rather than being legs-wrap's only child (the all-day-Reserve
+     duty case above already gets flex/centering for free from being a direct .duty-row child --
+     this one needs it declared explicitly since it's nested one level deeper). */
+  .duty-row .legs-wrap .reserve-block.leg-reserve {
+    flex: 1 1 0; min-width: 0; display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; font-size: 11px;
+  }
 
   .uncovered { border: 1px solid #f3c1c1; background: #fff5f5; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
   .uncovered strong { color: var(--red); }
@@ -1396,12 +1404,21 @@
       const turnLetter = legTurnLetter(leg);
       return legHtml + `<div class="turn"><div class="badge editable-field" style="background:${color}" ${editAttrs("turnLetter", idx, i)}>${turnLetter}</div>${editedBadge(d, `leg${i}.color`)}${editedBadge(d, `leg${i}.turnLetter`)}</div>`;
     }).join("");
+    // Set only on a shuttle round-trip pair padded with Reserve time to reach the target duty
+    // length (see joint_scheduler.js's tryBuildShuttlePairWithReserve) -- shows the driver
+    // whether they're on standby before or after their actual trip, same as the real duty sheet.
+    const reserveBlockHtml = d.reservePosition
+      ? `<div class="reserve-block leg-reserve">RESERVE</div>`
+      : "";
+    const legsWrapHtml = (d.reservePosition === "before" ? reserveBlockHtml : "")
+      + legsHtml
+      + (d.reservePosition === "after" ? reserveBlockHtml : "");
     return `<div class="duty-row ${d.overtime ? "overtime" : ""} ${d.isManual ? "manual" : ""}">
       ${taskCodeCell}
       <div ${driverInfoAttrs}>${driverInfo}</div>
       <div class="sign-in"><span class="editable-field" ${editAttrs("signIn", idx)}>${timeStr(d.signIn)}</span>${editedBadge(d, "signIn")}</div>
       <div>${d.driver.homeStation}</div>
-      <div class="legs-wrap">${legsHtml}</div>
+      <div class="legs-wrap">${legsWrapHtml}</div>
       <div>${d.driver.homeStation}</div>
       <div class="sign-out"><span class="editable-field" ${editAttrs("signOut", idx)}>${timeStr(d.signOut)}</span>${editedBadge(d, "signOut")}</div>
       <div class="duty-len"><span class="editable-field" ${editAttrs("dutyMin", idx)}>${fmtDuty(d.dutyMin)}</span>${editedBadge(d, "dutyMin")}</div>
@@ -1684,7 +1701,11 @@
   async function buildStyledWorkbookBlob(duties, station) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Driver Tasks");
-    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length)));
+    // A reserve-padded shuttle pair needs one extra virtual slot for the RESERVE cell itself
+    // (reserve + 2 real legs = 3 slots), not just its 2 real legs -- otherwise its columns can
+    // collide with the fixed suffix columns (Destination/Sign Out/...) on a day with no 4-leg
+    // chains to otherwise force the sheet wide enough.
+    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length + (d.reservePosition ? 1 : 0))));
     const legsStartCol = 5;
     const legsEndCol = suffixStartCol(maxLegs) - 1;
     const destCol = suffixStartCol(maxLegs);
@@ -1789,27 +1810,32 @@
         rc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_RESERVE_FILL } };
         rc.border = xlBoxBorder;
       } else {
+        // A reserve-before pair occupies virtual slot 0 for its RESERVE cell, pushing its real
+        // legs to slots 1..N; a reserve-after pair (or no reserve at all) keeps legs at their
+        // natural slots 0..N-1 and the RESERVE cell (if any) takes the slot right after them.
+        const slotOffset = d.reservePosition === "before" ? 1 : 0;
         d.legs.forEach((leg, i) => {
+          const slot = i + slotOffset;
           const color = XL_ARGB(legColorHex(d, leg) || "#8064A2");
           const isPassenger = leg.role === "Passenger";
 
-          const depCell = ws.getCell(mainRow, legDepCol(i));
+          const depCell = ws.getCell(mainRow, legDepCol(slot));
           depCell.value = legDepMin(leg) / 1440;
           depCell.numFmt = "hh:mm";
           depCell.font = { name: "Arial", bold: true, size: isPassenger ? 8 : 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
           depCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
 
-          const boxCell = ws.getCell(mainRow, legBoxCol(i));
+          const boxCell = ws.getCell(mainRow, legBoxCol(slot));
           boxCell.value = legTripNo(leg);
           boxCell.font = { name: "Arial", bold: true, size: 12, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
           boxCell.alignment = { horizontal: "center", vertical: "middle" };
           boxCell.border = xlBoxBorder;
           boxCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_WHITE } };
-          const barCell = ws.getCell(barRow, legBoxCol(i));
+          const barCell = ws.getCell(barRow, legBoxCol(slot));
           barCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
           barCell.border = xlPlainBorder;
 
-          const arrCell = ws.getCell(mainRow, legArrCol(i));
+          const arrCell = ws.getCell(mainRow, legArrCol(slot));
           arrCell.value = legArrMin(leg) / 1440;
           arrCell.numFmt = "hh:mm";
           arrCell.font = { name: "Arial", bold: true, size: 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
@@ -1817,8 +1843,8 @@
 
           if (i < d.legs.length - 1) {
             const turnLetter = legTurnLetter(leg);
-            ws.mergeCells(mainRow, legTurnCol(i), barRow, legTurnCol(i));
-            const tc = ws.getCell(mainRow, legTurnCol(i));
+            ws.mergeCells(mainRow, legTurnCol(slot), barRow, legTurnCol(slot));
+            const tc = ws.getCell(mainRow, legTurnCol(slot));
             tc.value = turnLetter;
             tc.font = { name: "Arial", bold: true, size: 12, color: { argb: XL_WHITE } };
             tc.alignment = { horizontal: "center", vertical: "middle" };
@@ -1826,6 +1852,17 @@
             tc.border = xlPlainBorder;
           }
         });
+
+        if (d.reservePosition) {
+          const reserveSlot = d.reservePosition === "before" ? 0 : d.legs.length;
+          ws.mergeCells(mainRow, legDepCol(reserveSlot), barRow, legArrCol(reserveSlot));
+          const rc = ws.getCell(mainRow, legDepCol(reserveSlot));
+          rc.value = "RESERVE";
+          rc.font = { name: "Arial", bold: true, size: 11, color: { argb: XL_WHITE } };
+          rc.alignment = { horizontal: "center", vertical: "middle" };
+          rc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_RESERVE_FILL } };
+          rc.border = xlBoxBorder;
+        }
       }
 
       const destCell = ws.getCell(mainRow, destCol);

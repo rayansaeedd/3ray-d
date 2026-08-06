@@ -100,6 +100,16 @@ def main():
     assert max_shuttle_gap <= 180, f"shuttle duty has a {max_shuttle_gap}-min internal gap -- the 5-6h idle problem may have regressed"
     print(f"PASS: {len(shuttle_duties)} shuttle duties built, largest internal gap {max_shuttle_gap}min (well under the old 5-6h problem).")
 
+    # reserve_position: a round-trip pair padded to the target duty length must actually flag
+    # which side (before/after the 2 legs) got the padding, so the UI can show a RESERVE block
+    # there -- otherwise a driver has no way to know they're on standby before or after their trip.
+    reserve_pairs = [d for d in shuttle_duties if len(d.legs) == 2 and d.reserve_position]
+    assert reserve_pairs, "expected at least one shuttle round-trip pair padded with Reserve time"
+    assert all(d.reserve_position in ("before", "after") for d in reserve_pairs)
+    print(f"PASS: {len(reserve_pairs)} shuttle pair(s) correctly flagged with reserve_position "
+          f"({sum(d.reserve_position == 'before' for d in reserve_pairs)} before, "
+          f"{sum(d.reserve_position == 'after' for d in reserve_pairs)} after).")
+
 
 if __name__ == "__main__":
     main()

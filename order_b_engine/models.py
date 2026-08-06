@@ -46,6 +46,12 @@ class Duty:
     legs: list  # list[Leg]: 0 for reserve, 2 for a normal round trip, 4 for a chained shuttle duty
     overtime: bool
     is_reserve: bool = False
+    # Set only for a shuttle round-trip pair padded with Reserve time to reach the target duty
+    # length (see _try_build_shuttle_pair_with_reserve) -- "before" if the pad sits between
+    # sign-in and leg 1, "after" if it sits between leg 2 and sign-out. None for every other
+    # duty shape (chains never pad, and other families absorb padding between their two legs
+    # instead of bookending them, so there's nothing to call out).
+    reserve_position: str | None = None
 
     @property
     def origin(self) -> str:

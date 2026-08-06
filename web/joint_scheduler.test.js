@@ -91,3 +91,13 @@ for (const d of shuttleDuties) {
 }
 assert(maxShuttleGap <= 180, `shuttle duty has a ${maxShuttleGap}-min internal gap -- the 5-6h idle problem may have regressed`);
 console.log(`PASS: ${shuttleDuties.length} shuttle duties built, largest internal gap ${maxShuttleGap}min (well under the old 5-6h problem).`);
+
+// reservePosition: a round-trip pair padded to the target duty length must actually flag which
+// side (before/after the 2 legs) got the padding, so the UI can show a RESERVE block there --
+// otherwise a driver has no way to know they're on standby before or after their trip.
+const reservePairs = shuttleDuties.filter((d) => d.legs.length === 2 && d.reservePosition);
+assert(reservePairs.length > 0, "expected at least one shuttle round-trip pair padded with Reserve time");
+assert(reservePairs.every((d) => d.reservePosition === "before" || d.reservePosition === "after"));
+const beforeCount = reservePairs.filter((d) => d.reservePosition === "before").length;
+const afterCount = reservePairs.filter((d) => d.reservePosition === "after").length;
+console.log(`PASS: ${reservePairs.length} shuttle pair(s) correctly flagged with reservePosition (${beforeCount} before, ${afterCount} after).`);

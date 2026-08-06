@@ -155,11 +155,16 @@
     const signInFwd = addMinutes(leg1.depMin, -c.SIGN_IN_BEFORE_MAIN_MIN);
     const spanFwd = minutesBetween(signInFwd, leg2.arrMin);
     if (spanFwd <= c.CAP_DUTY_MIN) {
-      const signOutFwd = spanFwd <= c.TARGET_DUTY_MIN
-        ? addMinutes(signInFwd, c.TARGET_DUTY_MIN)
-        : addMinutes(leg2.arrMin, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+      let signOutFwd, reservePosition;
+      if (spanFwd <= c.TARGET_DUTY_MIN) {
+        signOutFwd = addMinutes(signInFwd, c.TARGET_DUTY_MIN);
+        reservePosition = "after";
+      } else {
+        signOutFwd = addMinutes(leg2.arrMin, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+        reservePosition = null;
+      }
       if (!wrapsMidnight(signInFwd, signOutFwd)) {
-        return [leg1, leg2, signInFwd, signOutFwd, minutesBetween(signInFwd, signOutFwd)];
+        return [leg1, leg2, signInFwd, signOutFwd, minutesBetween(signInFwd, signOutFwd), reservePosition];
       }
     }
 
@@ -168,10 +173,10 @@
     // the 7:30 target and sign-out never needs to cross midnight.
     const signOutBwd = leg2.arrMin;
     const signInBwd = addMinutes(signOutBwd, -c.TARGET_DUTY_MIN);
-    return [leg1, leg2, signInBwd, signOutBwd, c.TARGET_DUTY_MIN];
+    return [leg1, leg2, signInBwd, signOutBwd, c.TARGET_DUTY_MIN, "before"];
   }
 
-  function makeShuttleDuty(legs, signIn, signOut, dutyMin, homeStation) {
+  function makeShuttleDuty(legs, signIn, signOut, dutyMin, homeStation, reservePosition) {
     const awayLetter = STATION_LETTER[legs[0].destination] || "?";
     const taskCode = `${minutesToTimeStr(signIn).replace(":", "")}/${Math.floor(dutyMin / 60)}${awayLetter}`;
     const blankDriver = { driverId: "", name: "", phone: "", homeStation };
@@ -184,6 +189,7 @@
       overtime: false,
       dutyMin,
       isReserve: false,
+      reservePosition: reservePosition || null,
     };
   }
 
@@ -211,10 +217,10 @@
       if (claimed.has(leg1.tripNo)) continue;
       const pair = tryBuildShuttlePairWithReserve(leg1, poolByOrigin, claimed);
       if (!pair) continue;
-      const [l1, l2, signIn, signOut, dutyMin] = pair;
+      const [l1, l2, signIn, signOut, dutyMin, reservePosition] = pair;
       claimed.add(l1.tripNo);
       claimed.add(l2.tripNo);
-      const duty = makeShuttleDuty([l1, l2], signIn, signOut, dutyMin, leg1.origin);
+      const duty = makeShuttleDuty([l1, l2], signIn, signOut, dutyMin, leg1.origin, reservePosition);
       (leg1.origin === stationA ? dutiesA : dutiesB).push(duty);
     }
 
