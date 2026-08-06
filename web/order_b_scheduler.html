@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Order B Driver Task Scheduler</title>
 <script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/exceljs.min.js"></script>
 <script src="order_b_engine.js"></script>
 <script src="joint_scheduler.js"></script>
 <script src="reserve.js"></script>
@@ -1339,37 +1340,267 @@
     }
   }
 
-  downloadBtn.addEventListener("click", () => {
+  // Styled Excel export -- mirrors the live duty-row look (bordered trip-number box, route-color
+  // bar underneath, rotated leg times, turn-station badge, RESERVE block, red sign-in/out) so a
+  // supervisor reading the downloaded sheet doesn't have to learn a different visual language
+  // than the one they already use in the browser. SheetJS (vendor/xlsx.full.min.js, used for
+  // reading uploads) can't write cell styles in its free build -- verified empirically, it drops
+  // fills/fonts/borders entirely on write -- so this uses ExcelJS (vendor/exceljs.min.js) instead,
+  // which does. Leg count varies (2 for a normal round trip, 4 for a chained shuttle duty), so the
+  // leg-column layout sizes itself to the widest duty actually present, same idea as dutyRowHtml's
+  // flexible legs-wrap.
+  const XL_ARGB = (hex) => "FF" + hex.replace("#", "").toUpperCase();
+  const XL_INK = XL_ARGB("#0E6E63");
+  const XL_LINE = XL_ARGB("#14181C");
+  const XL_STRIPE = XL_ARGB("#EAF3EA");
+  const XL_WHITE = "FFFFFFFF";
+  const XL_RESERVE_FILL = "FFBFBFBF";
+  const XL_OT_FILL = "FFFFC000";
+  const XL_RED = XL_ARGB("#C00000");
+  const XL_FALLBACK_COLOR = XL_ARGB("#8064A2");
+  const xlThin = { style: "thin", color: { argb: XL_LINE } };
+  const xlMedium = { style: "medium", color: { argb: XL_LINE } };
+  const xlPlainBorder = { top: xlThin, bottom: xlThin, left: xlThin, right: xlThin };
+  const xlBoxBorder = { top: xlMedium, bottom: xlMedium, left: xlMedium, right: xlMedium };
+
+  // Column layout for N legs: 4 fixed prefix cols, then N groups of [dep, box, arr] separated by
+  // a turn col between consecutive legs, then 4 fixed suffix cols. legStartCol/suffixStart derived
+  // algebraically so this generalizes to any N (currently 2 or 4) without hardcoding either shape.
+  function legDepCol(i) { return 5 + 4 * i; }
+  function legBoxCol(i) { return legDepCol(i) + 1; }
+  function legArrCol(i) { return legDepCol(i) + 2; }
+  function legTurnCol(i) { return legDepCol(i) + 3; }
+  function suffixStartCol(maxLegs) { return 4 * maxLegs + 4; }
+
+  function legColorHex(duty, leg) {
+    return duty.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg.trip.prefix]] || null;
+  }
+
+  async function buildStyledWorkbookBlob(duties, station) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Driver Tasks");
+    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length)));
+    const legsStartCol = 5;
+    const legsEndCol = suffixStartCol(maxLegs) - 1;
+    const destCol = suffixStartCol(maxLegs);
+    const signOutCol = destCol + 1;
+    const dutyLenCol = destCol + 2;
+    const otCol = destCol + 3;
+    const totalCols = otCol;
+
+    ws.getCell(1, 1).value = `${station} Station — Driver Task Schedule`;
+    ws.getCell(1, 1).font = { name: "Arial", bold: true, size: 14 };
+    ws.mergeCells(1, 1, 1, totalCols);
+
+    // Legend: same route-color / station-letter key as the live tool's legend row.
+    const legendRow = 3;
+    ws.getCell(legendRow, 1).value = "Legend:";
+    ws.getCell(legendRow, 1).font = { name: "Arial", bold: true, size: 10 };
+    const legendItems = [
+      [XL_ARGB(E.ROUTE_COLOR_HEX.blue), "MAK ⇄ MAD trips (00 / 01 / 03)"],
+      [XL_ARGB(E.ROUTE_COLOR_HEX.green), "MAD ⇄ KAIA trips (07 / 08)"],
+      [XL_ARGB(E.ROUTE_COLOR_HEX.red), "Shuttle trips MAK ⇄ KAIA (05)"],
+    ];
+    let col = 2;
+    legendItems.forEach(([argb, label]) => {
+      const swatch = ws.getCell(legendRow, col);
+      swatch.fill = { type: "pattern", pattern: "solid", fgColor: { argb } };
+      swatch.border = xlPlainBorder;
+      const lbl = ws.getCell(legendRow, col + 1);
+      lbl.value = label;
+      lbl.font = { name: "Arial", size: 10 };
+      ws.mergeCells(legendRow, col + 1, legendRow, col + 3);
+      col += 4;
+    });
+    const letterRow = legendRow + 1;
+    ws.getCell(letterRow, 1).value = "Station letters:";
+    ws.getCell(letterRow, 1).font = { name: "Arial", bold: true, size: 10 };
+    ws.getCell(letterRow, 2).value = "L = MAK   M = MAD   A = KAIA   K = KAEC";
+    ws.getCell(letterRow, 2).font = { name: "Arial", size: 10 };
+    ws.mergeCells(letterRow, 2, letterRow, 6);
+
+    const headerRow = letterRow + 2;
+    const headerCells = [[1, "Task Code"], [2, "Driver Info (ID / Name / Phone)"], [3, "Sign In"], [4, "Origin"]];
+    for (let i = 0; i < maxLegs; i++) headerCells.push([legDepCol(i), `Leg ${i + 1}`]);
+    headerCells.push([destCol, "Destination"], [signOutCol, "Sign Out"], [dutyLenCol, "Total Duty"], [otCol, "OT"]);
+    for (let c = 1; c <= totalCols; c++) {
+      const cell = ws.getCell(headerRow, c);
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_INK } };
+      cell.border = xlPlainBorder;
+      cell.font = { name: "Arial", bold: true, size: 10, color: { argb: XL_WHITE } };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    headerCells.forEach(([c, label]) => { ws.getCell(headerRow, c).value = label; });
+    for (let i = 0; i < maxLegs; i++) ws.mergeCells(headerRow, legDepCol(i), headerRow, legArrCol(i));
+    ws.getRow(headerRow).height = 26;
+
+    let mainRow = headerRow + 1;
+    duties.forEach((d) => {
+      const barRow = mainRow + 1;
+      const mergeV = (c) => ws.mergeCells(mainRow, c, barRow, c);
+
+      const taskCell = ws.getCell(mainRow, 1);
+      taskCell.value = d.isManual ? `${d.taskCode} (SPECIAL)` : d.taskCode;
+      taskCell.font = { name: "Arial", size: 10 };
+      taskCell.alignment = { horizontal: "center", vertical: "middle" };
+      taskCell.border = xlPlainBorder;
+      mergeV(1);
+
+      const driverCell = ws.getCell(mainRow, 2);
+      driverCell.value = d.driver.name
+        ? `ID: ${d.driver.driverId}\n${d.driver.name}\nTel: ${d.driver.phone}`
+        : "(driver not yet assigned)";
+      driverCell.font = { name: "Arial", bold: true, size: 9 };
+      driverCell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      driverCell.border = xlPlainBorder;
+      mergeV(2);
+
+      const signInCell = ws.getCell(mainRow, 3);
+      signInCell.value = d.signIn / 1440;
+      signInCell.numFmt = "hh:mm";
+      signInCell.font = { name: "Arial", bold: true, size: 10, color: { argb: XL_RED } };
+      signInCell.alignment = { horizontal: "center", vertical: "middle" };
+      signInCell.border = xlPlainBorder;
+      mergeV(3);
+
+      const originCell = ws.getCell(mainRow, 4);
+      originCell.value = d.driver.homeStation;
+      originCell.font = { name: "Arial", size: 10 };
+      originCell.alignment = { horizontal: "center", vertical: "middle" };
+      originCell.border = xlPlainBorder;
+      mergeV(4);
+
+      for (let c = legsStartCol; c <= legsEndCol; c++) {
+        ws.getCell(mainRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_STRIPE } };
+        ws.getCell(barRow, c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_STRIPE } };
+      }
+
+      if (d.isReserve) {
+        ws.mergeCells(mainRow, legsStartCol, barRow, legsEndCol);
+        const rc = ws.getCell(mainRow, legsStartCol);
+        rc.value = "RESERVE";
+        rc.font = { name: "Arial", bold: true, size: 12, color: { argb: XL_WHITE } };
+        rc.alignment = { horizontal: "center", vertical: "middle" };
+        rc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_RESERVE_FILL } };
+        rc.border = xlBoxBorder;
+      } else {
+        d.legs.forEach((leg, i) => {
+          const color = XL_ARGB(legColorHex(d, leg) || "#8064A2");
+          const isPassenger = leg.role === "Passenger";
+
+          const depCell = ws.getCell(mainRow, legDepCol(i));
+          depCell.value = leg.trip.depMin / 1440;
+          depCell.numFmt = "hh:mm";
+          depCell.font = { name: "Arial", bold: true, size: isPassenger ? 8 : 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          depCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+
+          const boxCell = ws.getCell(mainRow, legBoxCol(i));
+          boxCell.value = leg.trip.tripNo;
+          boxCell.font = { name: "Arial", bold: true, size: 12, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          boxCell.alignment = { horizontal: "center", vertical: "middle" };
+          boxCell.border = xlBoxBorder;
+          boxCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_WHITE } };
+          const barCell = ws.getCell(barRow, legBoxCol(i));
+          barCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
+          barCell.border = xlPlainBorder;
+
+          const arrCell = ws.getCell(mainRow, legArrCol(i));
+          arrCell.value = leg.trip.arrMin / 1440;
+          arrCell.numFmt = "hh:mm";
+          arrCell.font = { name: "Arial", bold: true, size: 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          arrCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+
+          if (i < d.legs.length - 1) {
+            const turnLetter = E.STATION_LETTER[leg.trip.destination] || "?";
+            ws.mergeCells(mainRow, legTurnCol(i), barRow, legTurnCol(i));
+            const tc = ws.getCell(mainRow, legTurnCol(i));
+            tc.value = turnLetter;
+            tc.font = { name: "Arial", bold: true, size: 12, color: { argb: XL_WHITE } };
+            tc.alignment = { horizontal: "center", vertical: "middle" };
+            tc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
+            tc.border = xlPlainBorder;
+          }
+        });
+      }
+
+      const destCell = ws.getCell(mainRow, destCol);
+      destCell.value = d.driver.homeStation;
+      destCell.font = { name: "Arial", size: 10 };
+      destCell.alignment = { horizontal: "center", vertical: "middle" };
+      destCell.border = xlPlainBorder;
+      mergeV(destCol);
+
+      const signOutCell = ws.getCell(mainRow, signOutCol);
+      const signOutFrac = d.signOut < d.signIn ? (d.signOut + 1440) / 1440 : d.signOut / 1440;
+      signOutCell.value = signOutFrac;
+      signOutCell.numFmt = "hh:mm";
+      signOutCell.font = { name: "Arial", bold: true, size: 10, color: { argb: XL_RED } };
+      signOutCell.alignment = { horizontal: "center", vertical: "middle" };
+      signOutCell.border = xlPlainBorder;
+      mergeV(signOutCol);
+
+      const dutyLenCell = ws.getCell(mainRow, dutyLenCol);
+      dutyLenCell.value = d.dutyMin / 1440;
+      dutyLenCell.numFmt = "[h]:mm";
+      dutyLenCell.font = { name: "Arial", size: 10 };
+      dutyLenCell.alignment = { horizontal: "center", vertical: "middle" };
+      dutyLenCell.border = xlPlainBorder;
+      mergeV(dutyLenCol);
+
+      const otCell = ws.getCell(mainRow, otCol);
+      otCell.value = d.overtime ? "OT" : "";
+      otCell.font = { name: "Arial", bold: true, size: 10 };
+      otCell.alignment = { horizontal: "center", vertical: "middle" };
+      otCell.border = xlPlainBorder;
+      otCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: d.overtime ? XL_OT_FILL : "FFF2F2F2" } };
+      mergeV(otCol);
+
+      for (let c = 1; c <= totalCols; c++) {
+        const top = ws.getCell(mainRow, c);
+        const bottom = ws.getCell(barRow, c);
+        top.border = { ...top.border, top: xlMedium };
+        bottom.border = { ...bottom.border, bottom: xlMedium };
+      }
+
+      ws.getRow(mainRow).height = 40;
+      ws.getRow(barRow).height = 6;
+      mainRow = barRow + 1;
+    });
+
+    const widths = [10, 30, 8, 10];
+    for (let i = 0; i < maxLegs; i++) widths.push(6, 11, 6);
+    widths.push(10, 8, 9, 7);
+    // widths array is fixed-prefix + N leg groups (no turn-col width entries) + suffix; turn cols
+    // get a narrower default width applied separately since they interleave the leg groups.
+    let wIdx = 0;
+    for (let c = 1; c <= 4; c++) ws.getColumn(c).width = widths[wIdx++];
+    for (let i = 0; i < maxLegs; i++) {
+      ws.getColumn(legDepCol(i)).width = widths[wIdx++];
+      ws.getColumn(legBoxCol(i)).width = widths[wIdx++];
+      ws.getColumn(legArrCol(i)).width = widths[wIdx++];
+      if (i < maxLegs - 1) ws.getColumn(legTurnCol(i)).width = 5;
+    }
+    for (let c = destCol; c <= otCol; c++) ws.getColumn(c).width = widths[wIdx++];
+
+    ws.views = [{ state: "frozen", ySplit: headerRow }];
+
+    return wb.xlsx.writeBuffer();
+  }
+
+  downloadBtn.addEventListener("click", async () => {
     if (!jointResult || !homeStation) return;
     const duties = jointResult.dutiesByStation[homeStation] || [];
     if (!duties.length) return;
-    // Leg count varies (2 for a normal round trip, 4 for a chained shuttle duty) -- size the
-    // sheet's leg columns to the widest duty actually present today instead of assuming 2.
-    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length)));
-    const legHeaders = [];
-    for (let i = 1; i <= maxLegs; i++) legHeaders.push(`Leg ${i} Trip`, `Leg ${i} Role`);
-    const rows = [["Task Code", "Driver ID", "Driver Name", "Phone", "Sign In", "Origin",
-                    ...legHeaders, "Destination", "Sign Out", "Duty (min)", "Overtime"]];
-    duties.forEach((d) => {
-      if (d.isReserve) {
-        const legCells = Array(maxLegs * 2).fill("");
-        legCells[0] = "RESERVE";
-        rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
-                   d.driver.homeStation, ...legCells, d.driver.homeStation, timeStr(d.signOut), d.dutyMin, ""]);
-      } else {
-        const legCells = [];
-        for (let i = 0; i < maxLegs; i++) {
-          const leg = d.legs[i];
-          legCells.push(leg ? leg.trip.tripNo : "", leg ? leg.role : "");
-        }
-        rows.push([d.taskCode, d.driver.driverId, d.driver.name, d.driver.phone, timeStr(d.signIn),
-                   d.driver.homeStation, ...legCells, d.driver.homeStation, timeStr(d.signOut), d.dutyMin, d.overtime ? "OT" : ""]);
-      }
-    });
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Driver Tasks");
-    XLSX.writeFile(wb, `${homeStation}_task_schedule.xlsx`);
+    const buffer = await buildStyledWorkbookBlob(duties, homeStation);
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${homeStation}_task_schedule.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   });
 })();
 </script>
