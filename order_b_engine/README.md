@@ -16,8 +16,10 @@ earlier, separate prototype that predates this rule set — kept untouched, not 
   implies.
 - **`duty_builder.py`** — the rule engine. For a home station, pairs departing trips with return
   trips into two-leg duties: sign-in (1h before a Main first leg, 30min before a Passenger first
-  leg), the 45-minute minimum connection before any Main leg, the 7:30 target / 8:00 cap duty
-  length, and the overtime flag beyond that.
+  leg), the 45-minute minimum connection before any Main leg, and the 7:30 target / 8:00 hard cap
+  duty length. Overtime is never allowed (station-wide policy) — a pairing that would need more
+  than 8:00 is rejected as a candidate outright, not built and flagged; the trip may end up
+  uncovered instead.
 - **`reserve.py`** — spreads leftover drivers (no trip that day) across reserve shifts: fixed
   7:00 duty, no trip-pairing logic. Currently disabled in the web tool (see below).
 - **`joint_scheduler.py`** — the *real* entry point for a full day's Order B: one pass across all
@@ -63,7 +65,7 @@ trip per row instead of one trip per column.
 | Minimum connection gap before a Passenger leg | none (just must still finish before sign-out) |
 | Target duty length | 7:30 |
 | Contractual cap (no penalty) | 8:00 |
-| Beyond cap | allowed, flagged overtime |
+| Beyond cap | never — rejected as a candidate outright (zero-overtime policy), trip may go uncovered instead |
 | Reserve duty length | fixed 7:00 |
 | Reserve sign-in | a set shift-start time, spread across the day |
 

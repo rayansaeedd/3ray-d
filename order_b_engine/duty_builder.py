@@ -5,8 +5,10 @@ Rules encoded here (all confirmed against real examples in this conversation):
   - Sign-in = leg1.dep - 1h if leg1 is driven as Main, else -30min if leg1 is ridden as Passenger.
   - Before any leg where the driver is Main, the gap since the previous arrival must be >= 45 min.
     Before a Passenger leg there is no minimum gap.
-  - Target duty length is 7:30; contractually allowed up to 8:00 with no penalty; beyond 8:00 is
-    allowed only when nothing better fits, and gets flagged as overtime.
+  - Target duty length is 7:30; contractually allowed up to 8:00 with no penalty. Overtime is
+    never allowed (zero-overtime policy, station-wide) -- a pairing that would need more than
+    8:00 is rejected as a candidate outright rather than built and flagged. The trip may end up
+    uncovered instead; that's preferred to overtime, not a bug to work around.
   - The final leg must arrive at/before sign-out.
 
 Known simplification (flagged to the user, not silently assumed correct): this builder runs
@@ -33,9 +35,6 @@ CAP_DUTY_MIN = 8 * 60
 # last arrival 14:20, recorded sign-out 14:30). Confirm this wrap-up buffer with the user
 # before relying on it for real schedules.
 SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN = 10
-# Safety guard only (not a taught rule): reject a pairing whose total span is absurdly long,
-# rather than silently building a nonsensical multi-day duty.
-MAX_DUTY_SPAN_MIN = 14 * 60
 
 
 def _add_minutes(t: dt.time, minutes: int) -> dt.time:
@@ -59,9 +58,11 @@ class _Candidate:
 
     @property
     def tier(self) -> tuple:
-        # lower is better: (role preference, cap-exceeded?, duty length)
+        # lower is better: (role preference, duty length). Overtime used to be a middle tier
+        # here, but a candidate can no longer be built with overtime=True at all (see
+        # _try_build), so it dropped out of the ranking rather than being left in as dead weight.
         role_rank = 0 if self.leg2_role == Role.MAIN else 1
-        return (role_rank, self.overtime, self.duty_min)
+        return (role_rank, self.duty_min)
 
 
 def _try_build(leg1: Trip, leg1_role: Role, leg2: Trip, leg2_role: Role) -> _Candidate | None:
@@ -76,17 +77,18 @@ def _try_build(leg1: Trip, leg1_role: Role, leg2: Trip, leg2_role: Role) -> _Can
             return None
 
     span_to_arrival = minutes_between(sign_in, leg2.arr_time)
-    if span_to_arrival > MAX_DUTY_SPAN_MIN:
+    if span_to_arrival > CAP_DUTY_MIN:
+        # Would need overtime to cover -- never allowed, so this pairing isn't a candidate at
+        # all (the trip may end up uncovered instead of getting an overtime duty).
         return None
 
     if span_to_arrival <= TARGET_DUTY_MIN:
         sign_out = _add_minutes(sign_in, TARGET_DUTY_MIN)
         duty_min = TARGET_DUTY_MIN
-        overtime = False
     else:
         sign_out = _add_minutes(leg2.arr_time, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
         duty_min = minutes_between(sign_in, sign_out)
-        overtime = span_to_arrival > CAP_DUTY_MIN
+    overtime = False
 
     return _Candidate(leg1_role, leg2_role, sign_in, sign_out, duty_min, overtime)
 

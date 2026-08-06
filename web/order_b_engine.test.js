@@ -43,7 +43,7 @@ console.log("=== Scenario 1: reproduce Ziyad's real, already-verified duty ===")
   );
 }
 
-console.log("\n=== Scenario 2: uncovered + overtime path ===");
+console.log("\n=== Scenario 2: uncovered trips ===");
 {
   const driverMak = { driverId: "1000001", name: "TEST DRIVER MAK", phone: "500000001", homeStation: "MAK" };
   const { duties, uncovered } = OrderBEngine.buildDutiesForStation([TRIP_00060, TRIP_05200], "MAK", [driverMak]);
@@ -51,12 +51,13 @@ console.log("\n=== Scenario 2: uncovered + overtime path ===");
   assert(uncovered.length === 2, "expected 2 uncovered");
   console.log(`MAK station: ${duties.length} duties, ${uncovered.length} uncovered (${uncovered.map((t) => t.tripNo)})`);
 
+  // 07161's only same-day return (07230) would need a ~9:54 duty span -- rejected outright
+  // under the zero-overtime policy, so it's uncovered instead of built with an overtime flag.
   const driverKaia = { driverId: "1000002", name: "TEST DRIVER KAIA", phone: "500000002", homeStation: "MAD" };
   const r2 = OrderBEngine.buildDutiesForStation([TRIP_07161, TRIP_07230], "MAD", [driverKaia]);
-  assert(r2.duties.length === 1);
-  const d2 = r2.duties[0];
-  assert(d2.overtime === true, "expected overtime flag");
-  console.log(`MAD/KAIA pairing: legs=${d2.legs.map((l) => l.trip.tripNo)} duty=${d2.dutyMin}min overtime=${d2.overtime}`);
+  assert(r2.duties.length === 0, "expected 0 duties -- would need overtime");
+  assert(r2.uncovered.length === 1 && r2.uncovered[0].tripNo === "07161", "expected 07161 uncovered");
+  console.log(`MAD/KAIA pairing: ${r2.duties.length} duties, ${r2.uncovered.length} uncovered (${r2.uncovered.map((t) => t.tripNo)})`);
 }
 
 console.log("\n=== Scenario 3: reserve shift spread ===");

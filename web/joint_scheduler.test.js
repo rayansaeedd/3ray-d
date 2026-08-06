@@ -54,14 +54,24 @@ assert(doubled.length === 0, `trips with 2+ main drivers (double-booked): ${doub
 
 console.log(`PASS: all ${trips.length} trips have exactly one Main driver, zero uncovered, zero double-booked.`);
 
+const overtimeDuties = Object.values(result.dutiesByStation)
+  .flat()
+  .filter((d) => d.overtime)
+  .map((d) => d.taskCode);
+assert(overtimeDuties.length === 0, `zero-overtime policy violated by: ${overtimeDuties}`);
+console.log("PASS: zero overtime duties (station-wide policy).");
+
 // Cross-check against the Python run's exact station split (both use the same tie-break
 // order -- trips_a processed in departure-time order -- so this should match exactly, not
-// just "close enough").
-const expectedCounts = { MAK: 16, MAD: 16, KAIA: 16 };
+// just "close enough"). Not 16/16/16 anymore: the zero-overtime policy (tryBuild rejects any
+// pairing needing more than CAP_DUTY_MIN) rules out some Main+Main pairings that used to be
+// allowed with an overtime flag, so the maximum matching lands on a different -- still fully
+// covering -- split across the shared families.
+const expectedCounts = { MAK: 20, MAD: 15, KAIA: 13 };
 for (const station of Object.keys(expectedCounts)) {
   assert(
     countsByStation[station] === expectedCounts[station],
     `station ${station}: expected ${expectedCounts[station]} duties (matching the Python run), got ${countsByStation[station]}`
   );
 }
-console.log("PASS: station split matches the Python run exactly (16/16/16).");
+console.log("PASS: station split matches the Python run exactly (20/15/13).");

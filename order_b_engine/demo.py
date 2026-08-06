@@ -4,9 +4,11 @@ Primary proof: rebuild Ziyad's real duty (task 0630/8L: 01071 main out, 01120 ma
 sign-in 06:30, sign-out 14:30) purely from raw trip data + the rules -- no hardcoding of the
 answer -- and confirm the engine reproduces it exactly.
 
-Then a second run shows the "uncovered trip" path (a departing trip with no valid return in
-the sample data) and the overtime-flag path, using only real trip numbers/times already
-verified earlier in this project -- nothing fabricated.
+Then a second run shows the "uncovered trip" path: a departing trip with no valid return in the
+sample data, and a departing trip whose only same-day return would need overtime -- rejected
+outright under the zero-overtime policy, so it's uncovered too rather than built with an
+overtime flag. Real trip numbers/times already verified earlier in this project -- nothing
+fabricated.
 """
 from __future__ import annotations
 
@@ -57,21 +59,23 @@ def scenario_reproduce_ziyad():
 
 
 def scenario_uncovered_and_overtime():
-    print("\n=== Scenario 2: uncovered trip + overtime-flag path (real trip numbers, sparse sample) ===")
+    print("\n=== Scenario 2: uncovered trips (real trip numbers, sparse sample) ===")
     driver_mak = Driver(driver_id="1000001", name="TEST DRIVER MAK", phone="500000001", home_station="MAK")
     duties_mak, uncovered_mak = build_duties_for_station([TRIP_00060, TRIP_05200], "MAK", [driver_mak])
     print(f"MAK station: {len(duties_mak)} duties built, {len(uncovered_mak)} uncovered "
           f"({[t.trip_no for t in uncovered_mak]}) -- expected: both uncovered, no return-leg data in this sample")
     assert len(duties_mak) == 0 and {t.trip_no for t in uncovered_mak} == {"00060", "05200"}
 
+    # 07161's only same-day return (07230) would need a ~9:54 duty span. That used to build with
+    # an overtime flag; under the zero-overtime policy it's rejected as a candidate outright, so
+    # the trip is uncovered instead -- a human needs to look at it, not get a silent OT duty.
     driver_kaia = Driver(driver_id="1000002", name="TEST DRIVER KAIA", phone="500000002", home_station="MAD")
     duties_ot, uncovered_ot = build_duties_for_station([TRIP_07161, TRIP_07230], "MAD", [driver_kaia])
-    assert len(duties_ot) == 1
-    d = duties_ot[0]
-    print(f"MAD/KAIA pairing: legs={[l.trip.trip_no for l in d.legs]} sign_in={d.sign_in} "
-          f"sign_out={d.sign_out} duty={d.total_duty_minutes()}min overtime={d.overtime} "
-          f"-- expected: overtime True (only same-day return available is a long way off)")
-    assert d.overtime is True
+    print(f"MAD/KAIA pairing: {len(duties_ot)} duties built, {len(uncovered_ot)} uncovered "
+          f"({[t.trip_no for t in uncovered_ot]}) -- expected: 07161 uncovered "
+          f"(same-day return would need ~9:54, over the 8:00 cap -- zero-overtime policy rejects it)")
+    assert len(duties_ot) == 0
+    assert {t.trip_no for t in uncovered_ot} == {"07161"}
     return duties_mak + duties_ot
 
 

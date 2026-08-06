@@ -72,6 +72,15 @@ def main():
 
     print(f"PASS: all {len(trips)} trips have exactly one Main driver, zero uncovered, zero double-booked.")
 
+    overtime_duties = [
+        duty.task_code
+        for duties in result.duties_by_station.values()
+        for duty in duties
+        if duty.overtime
+    ]
+    assert not overtime_duties, f"zero-overtime policy violated by: {overtime_duties}"
+    print("PASS: zero overtime duties (station-wide policy).")
+
 
 if __name__ == "__main__":
     main()

@@ -86,7 +86,6 @@
   const TARGET_DUTY_MIN = 7 * 60 + 30;
   const CAP_DUTY_MIN = 8 * 60;
   const SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN = 10;
-  const MAX_DUTY_SPAN_MIN = 14 * 60;
 
   function tryBuild(leg1, leg1Role, leg2, leg2Role) {
     const signIn = leg1.depMin - (leg1Role === "Main" ? SIGN_IN_BEFORE_MAIN_MIN : SIGN_IN_BEFORE_PASSENGER_MIN);
@@ -98,20 +97,24 @@
     }
 
     const spanToArrival = minutesBetween(signInMod, leg2.arrMin);
-    if (spanToArrival > MAX_DUTY_SPAN_MIN) return null;
+    // Would need overtime to cover -- never allowed (zero-overtime policy), so this pairing
+    // isn't a candidate at all. The trip may end up uncovered instead of getting an overtime
+    // duty; that's the intended tradeoff, not a bug.
+    if (spanToArrival > CAP_DUTY_MIN) return null;
 
-    let signOutMod, dutyMin, overtime;
+    let signOutMod, dutyMin;
     if (spanToArrival <= TARGET_DUTY_MIN) {
       signOutMod = (signInMod + TARGET_DUTY_MIN) % 1440;
       dutyMin = TARGET_DUTY_MIN;
-      overtime = false;
     } else {
       signOutMod = (leg2.arrMin + SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN) % 1440;
       dutyMin = minutesBetween(signInMod, signOutMod);
-      overtime = spanToArrival > CAP_DUTY_MIN;
     }
+    const overtime = false;
 
-    const tier = [leg2Role === "Main" ? 0 : 1, overtime ? 1 : 0, dutyMin];
+    // lower is better: (role preference, duty length) -- overtime dropped out of the tier since
+    // a candidate can no longer be built with overtime=true at all.
+    const tier = [leg2Role === "Main" ? 0 : 1, dutyMin];
     return { leg1Role, leg2Role, signIn: signInMod, signOut: signOutMod, dutyMin, overtime, tier };
   }
 

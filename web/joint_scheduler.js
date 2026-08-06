@@ -50,20 +50,24 @@
     }
 
     const spanToArrival = minutesBetween(signIn, leg2.arrMin);
-    if (spanToArrival > 14 * 60) return null; // MAX_DUTY_SPAN_MIN
+    // Would need overtime to cover -- never allowed (zero-overtime policy), so this pairing
+    // isn't a candidate at all. The trip may end up uncovered instead of getting an overtime
+    // duty; that's the intended tradeoff, not a bug.
+    if (spanToArrival > c.CAP_DUTY_MIN) return null;
 
-    let signOut, dutyMin, overtime;
+    let signOut, dutyMin;
     if (spanToArrival <= c.TARGET_DUTY_MIN) {
       signOut = addMinutes(signIn, c.TARGET_DUTY_MIN);
       dutyMin = c.TARGET_DUTY_MIN;
-      overtime = false;
     } else {
       signOut = addMinutes(leg2.arrMin, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
       dutyMin = minutesBetween(signIn, signOut);
-      overtime = spanToArrival > c.CAP_DUTY_MIN;
     }
+    const overtime = false;
 
-    const tier = [leg2Role === "Main" ? 0 : 1, overtime ? 1 : 0, dutyMin];
+    // lower is better: (role preference, duty length) -- overtime dropped out of the tier since
+    // a candidate can no longer be built with overtime=true at all.
+    const tier = [leg2Role === "Main" ? 0 : 1, dutyMin];
     return { leg1Role, leg2Role, signIn, signOut, dutyMin, overtime, tier };
   }
 
