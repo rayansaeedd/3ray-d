@@ -18,7 +18,7 @@ export function Hero({ category }: { category: Category }) {
         <WaitlistForm />
       </div>
 
-      {first && (
+      {first?.images && first.images.length > 0 && (
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-10 rounded-[2.5rem] bg-stone px-6 py-16 sm:px-16 sm:py-20">
           <div className="relative mx-auto flex h-[260px] w-full max-w-3xl items-center justify-center sm:h-[320px]">
             {third && (
