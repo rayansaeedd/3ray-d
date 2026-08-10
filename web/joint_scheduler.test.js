@@ -37,18 +37,12 @@ const totalDuties = Object.values(countsByStation).reduce((a, b) => a + b, 0);
 console.log("Duties by station:", countsByStation);
 console.log("Total duties:", totalDuties);
 
-// Sweep duties are mandatory overhead added on top of the loaded trips (see buildSweepDuties):
-// MAK's sweep consumes one real shuttle trip (05085) as its own Main-role return leg, which
-// shifts what's left for the shuttle chain-selection algorithm and, on this specific real
-// dataset, leaves a different trip (05140) without a same-day partner it would otherwise have
-// had. Confirmed deterministic (matches the Python run exactly) -- a real, explained consequence
-// of the feature, not a regression -- so this is pinned to the exact known trip.
-const expectedUncovered = new Set(["05140"]);
-const actualUncovered = new Set(result.uncovered.map((t) => t.tripNo));
-assert(
-  actualUncovered.size === expectedUncovered.size && [...actualUncovered].every((t) => expectedUncovered.has(t)),
-  `expected only the known sweep side-effect ${[...expectedUncovered]} uncovered, got ${[...actualUncovered]}`
-);
+// Sweep duties are mandatory overhead added on top of the loaded trips (see buildSweepDuties).
+// MAK's sweep used to consume one real shuttle trip (05085) as its own Main-role return leg,
+// which shifted what was left for the shuttle chain-selection algorithm and left a different
+// trip (05140) without a same-day partner -- fixed by giving MAK's sweep no return leg at all
+// (driver goes on Reserve after instead), so coverage is back to strict.
+assert(result.uncovered.length === 0, `expected 0 uncovered, got ${result.uncovered.map((t) => t.tripNo)}`);
 
 const mainCount = {};
 for (const duties of Object.values(result.dutiesByStation)) {
@@ -60,14 +54,10 @@ for (const duties of Object.values(result.dutiesByStation)) {
 }
 const missing = trips.filter((t) => !mainCount[t.tripNo]).map((t) => t.tripNo);
 const doubled = Object.entries(mainCount).filter(([, count]) => count > 1).map(([tripNo]) => tripNo);
-assert(
-  missing.length === expectedUncovered.size && missing.every((t) => expectedUncovered.has(t)),
-  `trips with NO main driver: ${missing}`
-);
+assert(missing.length === 0, `trips with NO main driver: ${missing}`);
 assert(doubled.length === 0, `trips with 2+ main drivers (double-booked): ${doubled}`);
 
-console.log(`PASS: all ${trips.length} trips have exactly one Main driver except the known sweep `
-  + `side-effect (${[...expectedUncovered]}), zero double-booked.`);
+console.log(`PASS: all ${trips.length} trips have exactly one Main driver, zero uncovered, zero double-booked.`);
 
 const sweepDuties = Object.values(result.dutiesByStation).flat().filter((d) => d.legs.length && d.legs[0].trip.prefix === "SWEEP");
 assert(sweepDuties.length === 4, `expected 4 sweep duties (MAD, MAK, KAIA x2), got ${sweepDuties.length}`);
@@ -79,6 +69,12 @@ assert(
 );
 assert(sweepDuties.every((d) => !d.overtime), "sweep duty violates zero-overtime policy");
 console.log("PASS: all 4 sweep duties built with the correct fixed trip numbers, zero overtime.");
+
+// MAK's sweep has no return leg at all (driver goes on Reserve after instead of picking up a
+// real shuttle trip) -- verify that's actually what got built, not a stale 2-leg duty.
+const makSweep = sweepDuties.find((d) => d.legs[0].trip.tripNo === "12050");
+assert(makSweep.legs.length === 1, `expected MAK's sweep to have no return leg, got ${makSweep.legs.length} legs`);
+console.log("PASS: MAK's sweep has no return leg (Reserve after instead).");
 
 // Every driver's day must be at least 7:00 -- a sweep's natural length (sweep leg + earliest
 // available return, no slack) came in as short as ~5:09 on real data before this floor was
@@ -99,16 +95,15 @@ console.log("PASS: zero overtime duties (station-wide policy).");
 
 // Cross-check against the Python run's exact station split (both use the same tie-break
 // order -- trips_a processed in departure-time order -- so this should match exactly, not
-// just "close enough"). +1 duty on MAD/MAK, +2 on KAIA versus the pre-sweep counts (17/15/10),
-// matching the 1 sweep duty added to each of MAD/MAK and the 2 added to KAIA.
-const expectedCounts = { MAK: 19, MAD: 16, KAIA: 11 };
+// just "close enough").
+const expectedCounts = { MAK: 18, MAD: 16, KAIA: 12 };
 for (const station of Object.keys(expectedCounts)) {
   assert(
     countsByStation[station] === expectedCounts[station],
     `station ${station}: expected ${expectedCounts[station]} duties (matching the Python run), got ${countsByStation[station]}`
   );
 }
-console.log("PASS: station split matches the Python run exactly (19/16/11).");
+console.log("PASS: station split matches the Python run exactly (18/16/12).");
 
 // Shuttle-specific: the whole point of this rework was killing the 5-6h idle-gap problem.
 // Every internal gap between consecutive Main legs of a shuttle duty must be reasonable --

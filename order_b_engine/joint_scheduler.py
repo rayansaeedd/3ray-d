@@ -315,7 +315,11 @@ def _solve_shuttle_family(trips_a: list[Trip], trips_b: list[Trip], station_a: s
 SWEEP_ROUTES = [
     # (home_station, away_station, trip_no, duration_min, return_prefixes, return_role)
     ("MAD", "KAIA", "19065", 120, ("07", "08"), Role.PASSENGER),
-    ("MAK", "KAIA", "12050", 60, ("05",), Role.MAIN),
+    # MAK's sweep has no return leg at all -- picking up a real shuttle trip as Main (the
+    # original design) consumed that trip from the shuttle-pairing pool and, on real data, left
+    # a different shuttle trip without a same-day partner. The driver just stays on Reserve
+    # after the sweep instead; SWEEP_MIN_DUTY_MIN below pads that out to a real 7:00 day.
+    ("MAK", "KAIA", "12050", 60, None, None),
     ("KAIA", "MAK", "14351", 100, ("05",), Role.PASSENGER),
     ("KAIA", "MAD", "14950", 150, ("07", "08"), Role.PASSENGER),
 ]
@@ -331,11 +335,12 @@ def _build_sweep_duties(trips: list[Trip]) -> tuple[dict[str, list[Duty]], set[s
     """Returns (duties_by_station, claimed_trip_nos). The return leg -- the real commercial trip
     the sweep driver picks up to get back home -- is whichever same-family trip is earliest
     available after the sweep arrives (same 45-min connection rule and zero-overtime cap as every
-    other pairing here). Main for the MAK route (short hop, driver just keeps driving back);
-    Passenger for the other three (driver rides back, someone else is that trip's actual Main --
-    a Passenger leg doesn't claim the trip, multiple people can ride the same train). If no
-    same-day return fits at all, the duty still gets built with just the mandatory sweep leg --
-    it must always exist regardless, that's the whole point of it.
+    other pairing here). Passenger role (driver rides back, someone else is that trip's actual
+    Main -- a Passenger leg doesn't claim the trip, multiple people can ride the same train) for
+    MAD and both KAIA routes. MAK's route has no return leg at all -- return_prefixes is None,
+    so the driver just goes on Reserve after the sweep instead (see SWEEP_ROUTES above for why).
+    If no same-day return fits (or none is sought at all), the duty still gets built with just
+    the mandatory sweep leg -- it must always exist regardless, that's the whole point of it.
 
     Once the return leg (or lack of one) pins down a natural sign-out, the duty is topped up to
     SWEEP_MIN_DUTY_MIN if it's still short: push sign-out later (Reserve after) by default, or
@@ -365,7 +370,7 @@ def _build_sweep_duties(trips: list[Trip]) -> tuple[dict[str, list[Duty]], set[s
              and minutes_between(sweep_arr, t.dep_time) >= MIN_MAIN_CONNECTION_MIN
              and minutes_between(sign_in, t.arr_time) <= CAP_DUTY_MIN),
             key=lambda t: (t.dep_time.hour, t.dep_time.minute),
-        )
+        ) if return_prefixes else []
 
         if candidates:
             return_trip = candidates[0]

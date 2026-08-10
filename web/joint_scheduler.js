@@ -234,7 +234,11 @@
   const SWEEP_ROUTES = [
     // [homeStation, awayStation, tripNo, durationMin, returnPrefixes, returnRole]
     ["MAD", "KAIA", "19065", 120, new Set(["07", "08"]), "Passenger"],
-    ["MAK", "KAIA", "12050", 60, new Set(["05"]), "Main"],
+    // MAK's sweep has no return leg at all -- picking up a real shuttle trip as Main (the
+    // original design) consumed that trip from the shuttle-pairing pool and, on real data, left
+    // a different shuttle trip without a same-day partner. The driver just stays on Reserve
+    // after the sweep instead; SWEEP_MIN_DUTY_MIN below pads that out to a real 7:00 day.
+    ["MAK", "KAIA", "12050", 60, null, null],
     ["KAIA", "MAK", "14351", 100, new Set(["05"]), "Passenger"],
     ["KAIA", "MAD", "14950", 150, new Set(["07", "08"]), "Passenger"],
   ];
@@ -257,12 +261,14 @@
       const sweepTrip = { tripNo, origin: homeStation, destination: awayStation, depMin: sweepDep, arrMin: sweepArr, prefix: "SWEEP" };
       const legs = [{ trip: sweepTrip, role: "Main" }];
 
-      const candidates = trips
-        .filter((t) => returnPrefixes.has(t.prefix) && t.origin === awayStation && t.destination === homeStation
-          && sameDayDepBeforeArr(t.depMin, sweepArr)
-          && minutesBetween(sweepArr, t.depMin) >= c.MIN_MAIN_CONNECTION_MIN
-          && minutesBetween(signIn, t.arrMin) <= c.CAP_DUTY_MIN)
-        .sort((a, b) => a.depMin - b.depMin);
+      const candidates = returnPrefixes
+        ? trips
+            .filter((t) => returnPrefixes.has(t.prefix) && t.origin === awayStation && t.destination === homeStation
+              && sameDayDepBeforeArr(t.depMin, sweepArr)
+              && minutesBetween(sweepArr, t.depMin) >= c.MIN_MAIN_CONNECTION_MIN
+              && minutesBetween(signIn, t.arrMin) <= c.CAP_DUTY_MIN)
+            .sort((a, b) => a.depMin - b.depMin)
+        : [];
 
       let signOut;
       if (candidates.length) {

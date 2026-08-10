@@ -57,17 +57,11 @@ def main():
     print(f"Total duties: {total_duties}")
 
     # Sweep duties are mandatory overhead added on top of the loaded trips (see
-    # _build_sweep_duties): MAK's sweep consumes one real shuttle trip (05085) as its own
-    # Main-role return leg, which shifts what's left for the shuttle chain-selection algorithm
-    # and, on this specific real dataset, leaves a different trip (05140) without a same-day
-    # partner it would otherwise have had. Confirmed deterministic across repeated runs -- a
-    # real, explained consequence of the feature, not an algorithm regression -- so this is
-    # pinned to the exact known trip rather than asserting zero uncovered.
-    expected_uncovered = {"05140"}
-    actual_uncovered = {t.trip_no for t in result.uncovered}
-    assert actual_uncovered == expected_uncovered, (
-        f"expected only the known sweep side-effect {expected_uncovered} uncovered, got {actual_uncovered}"
-    )
+    # _build_sweep_duties). MAK's sweep used to consume one real shuttle trip (05085) as its own
+    # Main-role return leg, which shifted what was left for the shuttle chain-selection algorithm
+    # and left a different trip (05140) without a same-day partner -- fixed by giving MAK's sweep
+    # no return leg at all (driver goes on Reserve after instead), so coverage is back to strict.
+    assert len(result.uncovered) == 0, f"expected 0 uncovered, got {[t.trip_no for t in result.uncovered]}"
 
     main_count: dict[str, int] = {}
     for duties in result.duties_by_station.values():
@@ -78,11 +72,10 @@ def main():
 
     missing = [t.trip_no for t in trips if main_count.get(t.trip_no, 0) == 0]
     doubled = [trip_no for trip_no, count in main_count.items() if count > 1]
-    assert set(missing) == expected_uncovered, f"trips with NO main driver: {missing}"
+    assert not missing, f"trips with NO main driver: {missing}"
     assert not doubled, f"trips with 2+ main drivers (double-booked): {doubled}"
 
-    print(f"PASS: all {len(trips)} trips have exactly one Main driver except the known "
-          f"sweep side-effect ({expected_uncovered}), zero double-booked.")
+    print(f"PASS: all {len(trips)} trips have exactly one Main driver, zero uncovered, zero double-booked.")
 
     sweep_duties = [
         duty
@@ -105,6 +98,12 @@ def main():
         duty_min = duty.total_duty_minutes()
         assert 420 <= duty_min <= 480, f"sweep duty {duty.task_code} is {duty_min}min, expected 7:00-8:00"
     print("PASS: every sweep duty is between 7:00 and 8:00.")
+
+    # MAK's sweep has no return leg at all (driver goes on Reserve after instead of picking up a
+    # real shuttle trip) -- verify that's actually what got built, not a stale 2-leg duty.
+    mak_sweep = next(d for d in sweep_duties if d.legs[0].trip.trip_no == "12050")
+    assert len(mak_sweep.legs) == 1, f"expected MAK's sweep to have no return leg, got {len(mak_sweep.legs)} legs"
+    print("PASS: MAK's sweep has no return leg (Reserve after instead).")
 
     overtime_duties = [
         duty.task_code
