@@ -29,8 +29,8 @@
 
   const HOME_STATIONS = [MAD, MAK, KAIA];
 
-  const ROUTE_COLOR = { "00": "blue", "01": "blue", "03": "blue", "05": "red", "07": "green", "08": "green" };
-  const ROUTE_COLOR_HEX = { blue: "#4472C4", green: "#70AD47", red: "#C00000" };
+  const ROUTE_COLOR = { "00": "blue", "01": "blue", "03": "blue", "05": "red", "07": "green", "08": "green", SWEEP: "black" };
+  const ROUTE_COLOR_HEX = { blue: "#4472C4", green: "#70AD47", red: "#C00000", black: "#1a1d24" };
   const STATION_LETTER = { MAK: "L", MAD: "M", KAIA: "A", KAEC: "K" };
 
   class TripNumberError extends Error {}

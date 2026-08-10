@@ -102,13 +102,15 @@ def decode_trip_number(trip_no: str) -> TripCode:
 
 
 def route_color(prefix: str) -> str:
-    """Route-family color code, as defined by the supervisor (blue/green/red)."""
+    """Route-family color code, as defined by the supervisor (blue/green/red/black)."""
     if prefix in ("00", "01", "03"):
         return "blue"      # MAK <-> MAD
     if prefix == "05":
         return "red"       # shuttle MAK <-> KAIA
     if prefix in ("07", "08"):
         return "green"     # MAD <-> KAIA
+    if prefix == "SWEEP":
+        return "black"     # track-inspection run before commercial operation starts
     raise TripNumberError(f"unknown prefix {prefix!r}")
 
 

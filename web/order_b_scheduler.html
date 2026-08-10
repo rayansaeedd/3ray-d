@@ -100,7 +100,9 @@
     border: 2px solid #222; background: #fff; border-radius: 4px; padding: 3px 8px; font-weight: 700; font-size: 13px;
   }
   .duty-row .trip-bar { height: 5px; width: 70%; border-radius: 2px; margin-top: 2px; }
-  .duty-row .leg.passenger .trip-box { opacity: .55; font-style: italic; }
+  /* Real duty sheets mark a Passenger leg (riding back, not driving) with a solid yellow trip
+     box instead of the normal white one -- matches that convention directly. */
+  .duty-row .leg.passenger .trip-box { background: #FFD700; }
   .duty-row .legs-wrap .turn { flex: 0 0 auto; background: transparent; }
   .duty-row .legs-wrap .turn .badge {
     width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center;
@@ -294,6 +296,8 @@
       <span><span class="swatch" style="background:var(--blue)"></span>MAK &#8644; MAD (00/01/03)</span>
       <span><span class="swatch" style="background:var(--green)"></span>MAD &#8644; KAIA (07/08)</span>
       <span><span class="swatch" style="background:var(--red)"></span>Shuttle MAK &#8644; KAIA (05)</span>
+      <span><span class="swatch" style="background:#1a1d24"></span>Sweep (track check before commercial ops)</span>
+      <span><span class="swatch" style="background:#FFD700"></span>Passenger (riding back, not driving)</span>
       <span>L=MAK &nbsp; M=MAD &nbsp; A=KAIA &nbsp; K=KAEC</span>
     </div>
     <div class="uncovered" id="duplicateDriverWarning" style="display:none;"></div>
@@ -1878,15 +1882,17 @@
           const depCell = ws.getCell(mainRow, legDepCol(slot));
           depCell.value = legDepMin(leg) / 1440;
           depCell.numFmt = "hh:mm";
-          depCell.font = { name: "Arial", bold: true, size: isPassenger ? 8 : 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          depCell.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
           depCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
 
+          // Real duty sheets mark a Passenger leg (riding back, not driving) with a solid
+          // yellow trip box instead of the normal white one -- matches that convention directly.
           const boxCell = ws.getCell(mainRow, legBoxCol(slot));
           boxCell.value = legTripNo(leg);
-          boxCell.font = { name: "Arial", bold: true, size: 12, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          boxCell.font = { name: "Arial", bold: true, size: 12, color: { argb: "FF000000" } };
           boxCell.alignment = { horizontal: "center", vertical: "middle" };
           boxCell.border = xlBoxBorder;
-          boxCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_WHITE } };
+          boxCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isPassenger ? "FFFFD700" : XL_WHITE } };
           const barCell = ws.getCell(barRow, legBoxCol(slot));
           barCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color } };
           barCell.border = xlPlainBorder;
@@ -1894,7 +1900,7 @@
           const arrCell = ws.getCell(mainRow, legArrCol(slot));
           arrCell.value = legArrMin(leg) / 1440;
           arrCell.numFmt = "hh:mm";
-          arrCell.font = { name: "Arial", bold: true, size: 8, color: { argb: isPassenger ? "FF666666" : "FF000000" }, italic: isPassenger };
+          arrCell.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
           arrCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
 
           if (i < d.legs.length - 1) {

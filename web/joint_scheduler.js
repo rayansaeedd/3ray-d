@@ -228,6 +228,61 @@
     return { dutiesA, dutiesB, uncovered };
   }
 
+  // Sweep ("monitoring") trains: one mandatory track-inspection run per row below, always
+  // departing before commercial operation starts. See joint_scheduler.py's _build_sweep_duties
+  // for the full rationale -- this is a line-for-line mirror.
+  const SWEEP_ROUTES = [
+    // [homeStation, awayStation, tripNo, durationMin, returnPrefixes, returnRole]
+    ["MAD", "KAIA", "19065", 120, new Set(["07", "08"]), "Passenger"],
+    ["MAK", "KAIA", "12050", 60, new Set(["05"]), "Main"],
+    ["KAIA", "MAK", "14351", 100, new Set(["05"]), "Passenger"],
+    ["KAIA", "MAD", "14950", 150, new Set(["07", "08"]), "Passenger"],
+  ];
+
+  function buildSweepDuties(trips) {
+    const dutiesByStation = { MAK: [], MAD: [], KAIA: [] };
+    const claimed = new Set();
+
+    for (const [homeStation, awayStation, tripNo, durationMin, returnPrefixes, returnRole] of SWEEP_ROUTES) {
+      const homeTrips = trips.filter((t) => t.origin === homeStation);
+      if (!homeTrips.length) continue;
+      const anchor = homeTrips.reduce((min, t) => Math.min(min, t.depMin), Infinity);
+      const sweepDep = addMinutes(anchor, -60);
+      const sweepArr = addMinutes(sweepDep, durationMin);
+      const signIn = addMinutes(sweepDep, -c.SIGN_IN_BEFORE_MAIN_MIN);
+
+      const sweepTrip = { tripNo, origin: homeStation, destination: awayStation, depMin: sweepDep, arrMin: sweepArr, prefix: "SWEEP" };
+      const legs = [{ trip: sweepTrip, role: "Main" }];
+
+      const candidates = trips
+        .filter((t) => returnPrefixes.has(t.prefix) && t.origin === awayStation && t.destination === homeStation
+          && sameDayDepBeforeArr(t.depMin, sweepArr)
+          && minutesBetween(sweepArr, t.depMin) >= c.MIN_MAIN_CONNECTION_MIN
+          && minutesBetween(signIn, t.arrMin) <= c.CAP_DUTY_MIN)
+        .sort((a, b) => a.depMin - b.depMin);
+
+      let signOut;
+      if (candidates.length) {
+        const returnTrip = candidates[0];
+        legs.push({ trip: returnTrip, role: returnRole });
+        signOut = addMinutes(returnTrip.arrMin, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+        if (returnRole === "Main") claimed.add(returnTrip.tripNo);
+      } else {
+        signOut = addMinutes(sweepArr, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
+      }
+
+      const dutyMin = minutesBetween(signIn, signOut);
+      const awayLetter = STATION_LETTER[awayStation] || "?";
+      const taskCode = `${minutesToTimeStr(signIn).replace(":", "")}/${Math.floor(dutyMin / 60)}${awayLetter}`;
+      const blankDriver = { driverId: "", name: "", phone: "", homeStation };
+      dutiesByStation[homeStation].push({
+        driver: blankDriver, taskCode, signIn, signOut, legs, overtime: false, dutyMin, isReserve: false,
+      });
+    }
+
+    return { dutiesByStation, claimed };
+  }
+
   function bestMainMainEdge(ta, tb) {
     const options = [];
     if (sameDayDepBeforeArr(tb.depMin, ta.arrMin)) {
@@ -350,8 +405,17 @@
     const dutiesByStation = { MAK: [], MAD: [], KAIA: [] };
     const allUncovered = [];
 
+    // Sweep duties are built first and independently of the family loop below -- they're
+    // synthesized, not drawn from `trips` at all, except for whichever real trip becomes a
+    // sweep's Main-role return leg (only the MAK route does this), which has to be pulled out of
+    // its family's pool so the normal solver doesn't also hand it to a different driver.
+    const { dutiesByStation: sweepDutiesByStation, claimed: claimedBySweep } = buildSweepDuties(trips);
+    for (const station in sweepDutiesByStation) {
+      dutiesByStation[station].push(...sweepDutiesByStation[station]);
+    }
+
     for (const [prefixes, stationA, stationB] of FAMILIES) {
-      const familyTrips = trips.filter((t) => prefixes.has(t.prefix));
+      const familyTrips = trips.filter((t) => prefixes.has(t.prefix) && !claimedBySweep.has(t.tripNo));
       const tripsA = familyTrips.filter((t) => t.origin === stationA);
       const tripsB = familyTrips.filter((t) => t.origin === stationB);
 

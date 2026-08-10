@@ -301,6 +301,81 @@ def _solve_shuttle_family(trips_a: list[Trip], trips_b: list[Trip], station_a: s
     return duties_a, duties_b, uncovered
 
 
+# ---------------------------------------------------------------------------------------------
+# Sweep ("monitoring") trains: one mandatory track-inspection run per row below, always departing
+# before commercial operation starts. Taught directly (not inferred): trip numbers and transit
+# durations are fixed, real-world constants verified against real duty-sheet photos -- these
+# trips never appear in the dropped Order B file itself, they're synthesized here every time,
+# same idea as a manual Add Task entry but automatic and always present regardless of file
+# contents. Departure is always 1 hour before that station's single earliest commercial
+# departure that day, across every family (not just the family the sweep itself feeds into --
+# confirmed by KAIA's two sweeps, in opposite directions, departing at the exact same time in
+# the reference photos, which only makes sense if both anchor to one shared "earliest from KAIA"
+# time rather than each to its own direction).
+SWEEP_ROUTES = [
+    # (home_station, away_station, trip_no, duration_min, return_prefixes, return_role)
+    ("MAD", "KAIA", "19065", 120, ("07", "08"), Role.PASSENGER),
+    ("MAK", "KAIA", "12050", 60, ("05",), Role.MAIN),
+    ("KAIA", "MAK", "14351", 100, ("05",), Role.PASSENGER),
+    ("KAIA", "MAD", "14950", 150, ("07", "08"), Role.PASSENGER),
+]
+
+
+def _build_sweep_duties(trips: list[Trip]) -> tuple[dict[str, list[Duty]], set[str]]:
+    """Returns (duties_by_station, claimed_trip_nos). The return leg -- the real commercial trip
+    the sweep driver picks up to get back home -- is whichever same-family trip is earliest
+    available after the sweep arrives (same 45-min connection rule and zero-overtime cap as every
+    other pairing here; no Reserve padding, the duty is whatever length that natural gap makes
+    it). Main for the MAK route (short hop, driver just keeps driving back); Passenger for the
+    other three (driver rides back, someone else is that trip's actual Main -- a Passenger leg
+    doesn't claim the trip, multiple people can ride the same train). If no same-day return fits
+    at all, the duty still gets built with just the mandatory sweep leg -- it must always exist
+    regardless, that's the whole point of it -- ending shortly after the sweep's own arrival."""
+    duties_by_station: dict[str, list[Duty]] = {"MAK": [], "MAD": [], "KAIA": []}
+    claimed: set[str] = set()
+
+    for home_station, away_station, trip_no, duration_min, return_prefixes, return_role in SWEEP_ROUTES:
+        home_trips = [t for t in trips if t.origin == home_station]
+        if not home_trips:
+            continue  # no commercial trips from this station in the dropped file -- nothing to anchor to
+        anchor = min(t.dep_time for t in home_trips)
+        sweep_dep = _sub_minutes(anchor, 60)
+        sweep_arr = _add_minutes(sweep_dep, duration_min)
+        sign_in = _sub_minutes(sweep_dep, SIGN_IN_BEFORE_MAIN_MIN)
+
+        sweep_trip = Trip(trip_no=trip_no, origin=home_station, destination=away_station,
+                           dep_time=sweep_dep, arr_time=sweep_arr, prefix="SWEEP")
+        legs = [Leg(sweep_trip, Role.MAIN)]
+
+        candidates = sorted(
+            (t for t in trips
+             if t.prefix in return_prefixes and t.origin == away_station and t.destination == home_station
+             and _same_day_dep_before_arr(t.dep_time, sweep_arr)
+             and minutes_between(sweep_arr, t.dep_time) >= MIN_MAIN_CONNECTION_MIN
+             and minutes_between(sign_in, t.arr_time) <= CAP_DUTY_MIN),
+            key=lambda t: (t.dep_time.hour, t.dep_time.minute),
+        )
+
+        if candidates:
+            return_trip = candidates[0]
+            legs.append(Leg(return_trip, return_role))
+            sign_out = _add_minutes(return_trip.arr_time, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
+            if return_role == Role.MAIN:
+                claimed.add(return_trip.trip_no)
+        else:
+            sign_out = _add_minutes(sweep_arr, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
+
+        duty_min = minutes_between(sign_in, sign_out)
+        away_letter = STATION_LETTER.get(away_station, "?")
+        task_code = f"{sign_in.strftime('%H%M')}/{duty_min // 60}{away_letter}"
+        blank_driver = Driver(driver_id="", name="", phone="", home_station=home_station)
+        duty = Duty(driver=blank_driver, task_code=task_code, sign_in=sign_in, sign_out=sign_out,
+                    legs=legs, overtime=False)
+        duties_by_station[home_station].append(duty)
+
+    return duties_by_station, claimed
+
+
 def _best_main_main_edge(ta: Trip, tb: Trip):
     """Best (direction, candidate) for pairing ta and tb with BOTH legs driven as Main --
     the only case where a single duty provides full coverage for two trips at once. Tries
@@ -434,8 +509,16 @@ def build_joint_schedule(trips: list[Trip], driver_counts: dict | None = None) -
     duties_by_station: dict[str, list[Duty]] = {"MAK": [], "MAD": [], "KAIA": []}
     all_uncovered: list[Trip] = []
 
+    # Sweep duties are built first and independently of the family loop below -- they're
+    # synthesized, not drawn from `trips` at all, except for whichever real trip becomes a
+    # sweep's Main-role return leg (only the MAK route does this), which has to be pulled out of
+    # its family's pool so the normal solver doesn't also hand it to a different driver.
+    sweep_duties, claimed_by_sweep = _build_sweep_duties(trips)
+    for station, duties in sweep_duties.items():
+        duties_by_station[station].extend(duties)
+
     for prefixes, station_a, station_b in FAMILIES:
-        family_trips = [t for t in trips if t.prefix in prefixes]
+        family_trips = [t for t in trips if t.prefix in prefixes and t.trip_no not in claimed_by_sweep]
         trips_a = [t for t in family_trips if t.origin == station_a]
         trips_b = [t for t in family_trips if t.origin == station_b]
 
