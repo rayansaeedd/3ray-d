@@ -257,6 +257,20 @@
   .edits-summary ul { margin: 0; padding-left: 18px; }
   .edits-summary li { margin-bottom: 3px; }
   .edits-summary .task-ref { font-weight: 700; }
+
+  /* Trip-box click menu: clicking a trip number offers editing it OR flipping its role
+     between Main and Passenger, instead of jumping straight into inline-edit mode. */
+  .trip-box-actions { flex-direction: column; }
+  .trip-box-actions button { width: 100%; box-sizing: border-box; }
+
+  #toastNotice {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%) translateY(-10px);
+    background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 13px;
+    font-weight: 700; box-shadow: 0 6px 20px rgba(0,0,0,.25); z-index: 80; opacity: 0;
+    pointer-events: none; transition: opacity .2s ease, transform .2s ease; max-width: 90vw; text-align: center;
+  }
+  #toastNotice.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toastNotice.show.warn { background: var(--red); }
 </style>
 </head>
 <body>
@@ -377,6 +391,22 @@
   </div>
 </div>
 
+<div id="tripBoxOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal confirm-edit-modal">
+    <div class="driver-picker-header">
+      <span>Trip <span id="tripBoxTripNo"></span></span>
+      <button type="button" id="tripBoxClose" class="driver-picker-close">&times;</button>
+    </div>
+    <div class="actions trip-box-actions">
+      <button class="primary" id="tripBoxEditBtn">Edit trip number</button>
+      <button type="button" class="plain" id="tripBoxRoleBtn">Mark as Passenger (no Main driver)</button>
+      <button type="button" class="plain" id="tripBoxCancelBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastNotice"></div>
+
 <div id="addTaskOverlay" class="driver-picker-overlay" style="display:none;">
   <div class="driver-picker-modal add-task-modal">
     <div class="driver-picker-header">
@@ -448,6 +478,13 @@
   const confirmEditYes = document.getElementById("confirmEditYes");
   const confirmEditNo = document.getElementById("confirmEditNo");
   const confirmEditClose = document.getElementById("confirmEditClose");
+  const tripBoxOverlay = document.getElementById("tripBoxOverlay");
+  const tripBoxTripNoEl = document.getElementById("tripBoxTripNo");
+  const tripBoxEditBtn = document.getElementById("tripBoxEditBtn");
+  const tripBoxRoleBtn = document.getElementById("tripBoxRoleBtn");
+  const tripBoxCancelBtn = document.getElementById("tripBoxCancelBtn");
+  const tripBoxClose = document.getElementById("tripBoxClose");
+  const toastNotice = document.getElementById("toastNotice");
   const downloadBtn = document.getElementById("downloadBtn");
   const signedInBadge = document.getElementById("signedInBadge");
   const rosterCard = document.getElementById("rosterCard");
@@ -998,6 +1035,47 @@
   confirmEditClose.addEventListener("click", () => closeConfirmEdit(false));
   confirmEditOverlay.addEventListener("click", (e) => { if (e.target === confirmEditOverlay) closeConfirmEdit(false); });
 
+  // Clicking a trip box offers two things: editing the trip number (existing behavior), or
+  // flipping that leg between Main and Passenger by hand -- the "roleMode" argument controls
+  // whether the second button reads "Mark as Passenger" or "Restore as Main driver", or is
+  // hidden entirely for a leg that's Passenger straight from the engine (nothing to restore).
+  let _tripBoxResolve = null;
+  function openTripBoxMenu(tripNo, roleMode) {
+    tripBoxTripNoEl.textContent = tripNo;
+    if (roleMode === "toPassenger") {
+      tripBoxRoleBtn.style.display = "";
+      tripBoxRoleBtn.textContent = "Mark as Passenger (no Main driver)";
+    } else if (roleMode === "toMain") {
+      tripBoxRoleBtn.style.display = "";
+      tripBoxRoleBtn.textContent = "Restore as Main driver";
+    } else {
+      tripBoxRoleBtn.style.display = "none";
+    }
+    tripBoxOverlay.style.display = "flex";
+    return new Promise((resolve) => { _tripBoxResolve = resolve; });
+  }
+  function closeTripBoxMenu(result) {
+    tripBoxOverlay.style.display = "none";
+    if (_tripBoxResolve) {
+      const resolve = _tripBoxResolve;
+      _tripBoxResolve = null;
+      resolve(result);
+    }
+  }
+  tripBoxEditBtn.addEventListener("click", () => closeTripBoxMenu("edit"));
+  tripBoxRoleBtn.addEventListener("click", () => closeTripBoxMenu(tripBoxRoleBtn.textContent.startsWith("Restore") ? "restore" : "passenger"));
+  tripBoxCancelBtn.addEventListener("click", () => closeTripBoxMenu(null));
+  tripBoxClose.addEventListener("click", () => closeTripBoxMenu(null));
+  tripBoxOverlay.addEventListener("click", (e) => { if (e.target === tripBoxOverlay) closeTripBoxMenu(null); });
+
+  let _toastTimer = null;
+  function showToast(message, kind) {
+    toastNotice.textContent = message;
+    toastNotice.className = kind ? `show ${kind}` : "show";
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { toastNotice.className = ""; }, 5000);
+  }
+
   function renderDriverPickerList(query) {
     const data = rosterSheetByStation[homeStation];
     const dateKey = rosterSelectedDateByStation[homeStation];
@@ -1386,6 +1464,10 @@
     return leg._colorOverride || duty.manualColorHex || E.ROUTE_COLOR_HEX[E.ROUTE_COLOR[leg.trip.prefix]] || "#8064A2";
   }
   function legTurnLetter(leg) { return leg._turnLetterOverride || E.STATION_LETTER[leg.trip.destination] || "?"; }
+  // A supervisor can flip a leg between Main and Passenger by hand (see the trip-box menu below)
+  // -- falls back to whatever role the engine actually generated when no override is present,
+  // same pattern as every other overridable leg field.
+  function legRole(leg) { return leg._roleOverride || leg.role; }
 
   function fieldLabel(field, legIndex) {
     const n = legIndex != null ? legIndex + 1 : null;
@@ -1452,12 +1534,12 @@
     // click-to-edit trip-bar) always wins over both.
     const legsHtml = d.legs.map((leg, i) => {
       const color = legColorHex(d, leg);
-      const legHtml = `<div class="leg ${leg.role === "Passenger" ? "passenger" : ""}">
+      const legHtml = `<div class="leg ${legRole(leg) === "Passenger" ? "passenger" : ""}">
         <div class="times">
           <span class="time-with-badge"><span class="editable-field" ${editAttrs("depMin", idx, i)}>${timeStr(legDepMin(leg))}</span>${editedBadge(d, `leg${i}.depMin`)}</span>
           <span class="time-with-badge"><span class="editable-field" ${editAttrs("arrMin", idx, i)}>${timeStr(legArrMin(leg))}</span>${editedBadge(d, `leg${i}.arrMin`)}</span>
         </div>
-        <div class="trip-box"><span class="editable-field" ${editAttrs("tripNo", idx, i)}>${legTripNo(leg)}</span>${editedBadge(d, `leg${i}.tripNo`)}</div>
+        <div class="trip-box"><span class="editable-field" ${editAttrs("tripNo", idx, i)}>${legTripNo(leg)}</span>${editedBadge(d, `leg${i}.tripNo`)}${editedBadge(d, `leg${i}.role`)}</div>
         <div class="trip-bar editable-field" style="background:${color}" ${editAttrs("color", idx, i)}></div>
       </div>`;
       if (i === d.legs.length - 1) return legHtml;
@@ -1589,6 +1671,38 @@
     renderForStation();
   }
 
+  // Flips a single leg between Main and Passenger from the trip-box menu -- unlike every other
+  // override above, this one has a real scheduling consequence: turning a leg's Main driver into
+  // a Passenger removes that trip's only Main coverage, so it goes back into "needs attention"
+  // (jointResult.uncovered), the same place deleteDuty() already sends a fully-removed trip.
+  // Restoring it as Main just reverses that.
+  function setLegRole(duty, legIndex, newRole) {
+    const leg = duty.legs[legIndex];
+    if (!leg) return;
+    const fieldKey = `leg${legIndex}.role`;
+    const prior = duty._editsByField && duty._editsByField[fieldKey];
+    const original = prior ? prior.originalDisplay : leg.role;
+    recordEdit(duty, fieldKey, `Trip ${legIndex + 1} role`, original, newRole, newRole !== original);
+    leg._roleOverride = newRole;
+
+    // A manual/special task (see Add Task) isn't a real Order B trip -- toggling its role still
+    // recolors the box, but it has no "Main coverage" to lose, so it never belongs in the
+    // uncovered list (deleteDuty() draws the same line for the same reason).
+    const tripNo = legTripNo(leg);
+    if (newRole === "Passenger" && leg.trip && !duty.isManual) {
+      if (!jointResult.uncovered.some((t) => t === leg.trip)) jointResult.uncovered.push(leg.trip);
+      showToast(`Trip ${tripNo} now has no Main driver -- please adjust sign-in coverage for this trip.`, "warn");
+    } else if (newRole === "Main" && leg.trip && !duty.isManual) {
+      jointResult.uncovered = jointResult.uncovered.filter((t) => t !== leg.trip);
+      showToast(`Trip ${tripNo} restored with a Main driver.`, "");
+    } else if (newRole === "Passenger") {
+      showToast(`Trip ${tripNo} marked as Passenger.`, "warn");
+    } else if (newRole === "Main") {
+      showToast(`Trip ${tripNo} restored as Main driver.`, "");
+    }
+    renderForStation();
+  }
+
   function enterEditMode(cellEl, field, dutyIndex, legIndex, currentRawValue) {
     cellEl.classList.remove("editable-field");
     let inputHtml;
@@ -1635,6 +1749,29 @@
     const duty = duties[dutyIndex];
     if (!duty) return;
 
+    // A trip box offers a choice instead of jumping straight into inline-edit: edit the trip
+    // number (as before), or flip this leg between Main and Passenger. "Restore as Main driver"
+    // only appears once a supervisor has actually made that manual change (_roleOverride) -- a
+    // leg that's Passenger straight from the engine has nothing to "restore".
+    if (field === "tripNo" && legIndex != null) {
+      const leg = duty.legs[legIndex];
+      if (!leg) return;
+      const roleMode = leg._roleOverride === "Passenger"
+        ? "toMain"
+        : (legRole(leg) === "Main" ? "toPassenger" : null);
+      const choice = await openTripBoxMenu(legTripNo(leg), roleMode);
+      if (choice === "edit") {
+        const ok = await confirmEdit(
+          `Edit ${fieldLabel("tripNo", legIndex)}? This value was generated by the scheduling engine -- ` +
+          `overriding it only changes what's shown/printed here, not the underlying trip data.`
+        );
+        if (ok) enterEditMode(target, "tripNo", dutyIndex, legIndex, legTripNo(leg));
+      } else if (choice === "passenger" || choice === "restore") {
+        setLegRole(duty, legIndex, choice === "passenger" ? "Passenger" : "Main");
+      }
+      return;
+    }
+
     const ok = await confirmEdit(
       `Edit ${fieldLabel(field, legIndex)}? This value was generated by the scheduling engine -- ` +
       `overriding it only changes what's shown/printed here, not the underlying trip data.`
@@ -1648,8 +1785,7 @@
     else if (field === "dutyMin") currentRawValue = fmtDuty(duty.dutyMin);
     else if (legIndex != null) {
       const leg = duty.legs[legIndex];
-      if (field === "tripNo") currentRawValue = legTripNo(leg);
-      else if (field === "depMin") currentRawValue = timeStr(legDepMin(leg));
+      if (field === "depMin") currentRawValue = timeStr(legDepMin(leg));
       else if (field === "arrMin") currentRawValue = timeStr(legArrMin(leg));
       else if (field === "color") currentRawValue = COLOR_HEX_TO_NAME[legColorHex(duty, leg)] || "blue";
       else if (field === "turnLetter") currentRawValue = legTurnLetter(leg);
@@ -1878,7 +2014,7 @@
         d.legs.forEach((leg, i) => {
           const slot = i + slotOffset;
           const color = XL_ARGB(legColorHex(d, leg) || "#8064A2");
-          const isPassenger = leg.role === "Passenger";
+          const isPassenger = legRole(leg) === "Passenger";
 
           const depCell = ws.getCell(mainRow, legDepCol(slot));
           depCell.value = legDepMin(leg) / 1440;
