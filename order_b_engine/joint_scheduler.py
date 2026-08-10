@@ -320,17 +320,28 @@ SWEEP_ROUTES = [
     ("KAIA", "MAD", "14950", 150, ("07", "08"), Role.PASSENGER),
 ]
 
+# Every driver's day must be at least 7:00, capped at the standing 8:00 zero-overtime ceiling --
+# a sweep's natural length (sweep leg + earliest available return, no slack added) came in under
+# that floor on real data (as short as ~5:09), so it gets padded with Reserve time up to exactly
+# 7:00 when short, same idea as the shuttle round-trip-pair pattern (reservePosition before/after).
+SWEEP_MIN_DUTY_MIN = 420
+
 
 def _build_sweep_duties(trips: list[Trip]) -> tuple[dict[str, list[Duty]], set[str]]:
     """Returns (duties_by_station, claimed_trip_nos). The return leg -- the real commercial trip
     the sweep driver picks up to get back home -- is whichever same-family trip is earliest
     available after the sweep arrives (same 45-min connection rule and zero-overtime cap as every
-    other pairing here; no Reserve padding, the duty is whatever length that natural gap makes
-    it). Main for the MAK route (short hop, driver just keeps driving back); Passenger for the
-    other three (driver rides back, someone else is that trip's actual Main -- a Passenger leg
-    doesn't claim the trip, multiple people can ride the same train). If no same-day return fits
-    at all, the duty still gets built with just the mandatory sweep leg -- it must always exist
-    regardless, that's the whole point of it -- ending shortly after the sweep's own arrival."""
+    other pairing here). Main for the MAK route (short hop, driver just keeps driving back);
+    Passenger for the other three (driver rides back, someone else is that trip's actual Main --
+    a Passenger leg doesn't claim the trip, multiple people can ride the same train). If no
+    same-day return fits at all, the duty still gets built with just the mandatory sweep leg --
+    it must always exist regardless, that's the whole point of it.
+
+    Once the return leg (or lack of one) pins down a natural sign-out, the duty is topped up to
+    SWEEP_MIN_DUTY_MIN if it's still short: push sign-out later (Reserve after) by default, or
+    pull sign-in earlier instead (Reserve before) only if pushing sign-out would cross midnight --
+    which in practice never happens here (every sweep starts around 4-5am and the whole duty is
+    capped at 8h regardless), but the fallback exists for consistency with the shuttle pattern."""
     duties_by_station: dict[str, list[Duty]] = {"MAK": [], "MAD": [], "KAIA": []}
     claimed: set[str] = set()
 
@@ -365,12 +376,22 @@ def _build_sweep_duties(trips: list[Trip]) -> tuple[dict[str, list[Duty]], set[s
         else:
             sign_out = _add_minutes(sweep_arr, SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN)
 
+        reserve_position = None
+        if minutes_between(sign_in, sign_out) < SWEEP_MIN_DUTY_MIN:
+            candidate_sign_out = _add_minutes(sign_in, SWEEP_MIN_DUTY_MIN)
+            if not _wraps_midnight(sign_in, candidate_sign_out):
+                sign_out = candidate_sign_out
+                reserve_position = "after"
+            else:
+                sign_in = _sub_minutes(sign_out, SWEEP_MIN_DUTY_MIN)
+                reserve_position = "before"
+
         duty_min = minutes_between(sign_in, sign_out)
         away_letter = STATION_LETTER.get(away_station, "?")
         task_code = f"{sign_in.strftime('%H%M')}/{duty_min // 60}{away_letter}"
         blank_driver = Driver(driver_id="", name="", phone="", home_station=home_station)
         duty = Duty(driver=blank_driver, task_code=task_code, sign_in=sign_in, sign_out=sign_out,
-                    legs=legs, overtime=False)
+                    legs=legs, overtime=False, reserve_position=reserve_position)
         duties_by_station[home_station].append(duty)
 
     return duties_by_station, claimed

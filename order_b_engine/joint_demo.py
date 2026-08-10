@@ -97,6 +97,15 @@ def main():
         assert not duty.overtime, f"sweep duty {duty.task_code} violates zero-overtime policy"
     print(f"PASS: all 4 sweep duties built with the correct fixed trip numbers, zero overtime.")
 
+    # Every driver's day must be at least 7:00 -- a sweep's natural length (sweep leg + earliest
+    # available return, no slack) came in as short as ~5:09 on real data before this floor was
+    # added, so it gets padded with Reserve time; verify that floor actually holds and the
+    # existing 8:00 zero-overtime ceiling still caps the other end.
+    for duty in sweep_duties:
+        duty_min = duty.total_duty_minutes()
+        assert 420 <= duty_min <= 480, f"sweep duty {duty.task_code} is {duty_min}min, expected 7:00-8:00"
+    print("PASS: every sweep duty is between 7:00 and 8:00.")
+
     overtime_duties = [
         duty.task_code
         for duties in result.duties_by_station.values()

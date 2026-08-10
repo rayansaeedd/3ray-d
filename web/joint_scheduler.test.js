@@ -80,6 +80,16 @@ assert(
 assert(sweepDuties.every((d) => !d.overtime), "sweep duty violates zero-overtime policy");
 console.log("PASS: all 4 sweep duties built with the correct fixed trip numbers, zero overtime.");
 
+// Every driver's day must be at least 7:00 -- a sweep's natural length (sweep leg + earliest
+// available return, no slack) came in as short as ~5:09 on real data before this floor was
+// added, so it gets padded with Reserve time; verify that floor holds and the existing 8:00
+// zero-overtime ceiling still caps the other end.
+assert(
+  sweepDuties.every((d) => d.dutyMin >= 420 && d.dutyMin <= 480),
+  `sweep duty out of the 7:00-8:00 range: ${sweepDuties.map((d) => `${d.taskCode}=${d.dutyMin}min`)}`
+);
+console.log("PASS: every sweep duty is between 7:00 and 8:00.");
+
 const overtimeDuties = Object.values(result.dutiesByStation)
   .flat()
   .filter((d) => d.overtime)

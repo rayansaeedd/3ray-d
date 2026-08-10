@@ -239,6 +239,9 @@
     ["KAIA", "MAD", "14950", 150, new Set(["07", "08"]), "Passenger"],
   ];
 
+  // Every driver's day must be at least 7:00, capped at the standing 8:00 zero-overtime ceiling.
+  const SWEEP_MIN_DUTY_MIN = 420;
+
   function buildSweepDuties(trips) {
     const dutiesByStation = { MAK: [], MAD: [], KAIA: [] };
     const claimed = new Set();
@@ -249,7 +252,7 @@
       const anchor = homeTrips.reduce((min, t) => Math.min(min, t.depMin), Infinity);
       const sweepDep = addMinutes(anchor, -60);
       const sweepArr = addMinutes(sweepDep, durationMin);
-      const signIn = addMinutes(sweepDep, -c.SIGN_IN_BEFORE_MAIN_MIN);
+      let signIn = addMinutes(sweepDep, -c.SIGN_IN_BEFORE_MAIN_MIN);
 
       const sweepTrip = { tripNo, origin: homeStation, destination: awayStation, depMin: sweepDep, arrMin: sweepArr, prefix: "SWEEP" };
       const legs = [{ trip: sweepTrip, role: "Main" }];
@@ -271,12 +274,24 @@
         signOut = addMinutes(sweepArr, c.SIGN_OUT_BUFFER_AFTER_ARRIVAL_MIN);
       }
 
+      let reservePosition = null;
+      if (minutesBetween(signIn, signOut) < SWEEP_MIN_DUTY_MIN) {
+        const candidateSignOut = addMinutes(signIn, SWEEP_MIN_DUTY_MIN);
+        if (!wrapsMidnight(signIn, candidateSignOut)) {
+          signOut = candidateSignOut;
+          reservePosition = "after";
+        } else {
+          signIn = addMinutes(signOut, -SWEEP_MIN_DUTY_MIN);
+          reservePosition = "before";
+        }
+      }
+
       const dutyMin = minutesBetween(signIn, signOut);
       const awayLetter = STATION_LETTER[awayStation] || "?";
       const taskCode = `${minutesToTimeStr(signIn).replace(":", "")}/${Math.floor(dutyMin / 60)}${awayLetter}`;
       const blankDriver = { driverId: "", name: "", phone: "", homeStation };
       dutiesByStation[homeStation].push({
-        driver: blankDriver, taskCode, signIn, signOut, legs, overtime: false, dutyMin, isReserve: false,
+        driver: blankDriver, taskCode, signIn, signOut, legs, overtime: false, dutyMin, isReserve: false, reservePosition,
       });
     }
 
