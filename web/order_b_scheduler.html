@@ -75,10 +75,15 @@
      shuttle duty) plus a turn badge between each consecutive pair -- one flexible grid column
      instead of fixed leg1/turn/leg2 columns, so it can grow to fit any leg count. */
   .duty-row {
-    display: grid; grid-template-columns: 90px 190px 60px 70px 1fr 70px 60px 70px 60px;
+    display: grid; grid-template-columns: 90px 190px 60px 70px 1fr 70px 60px 70px 60px 34px;
     align-items: stretch; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
     margin-bottom: 10px; font-size: 12px;
   }
+  .duty-row .delete-btn {
+    background: none; border: none; color: #b0b4bd; font-size: 18px; line-height: 1; cursor: pointer;
+    padding: 0; font-weight: 700;
+  }
+  .duty-row .delete-btn:hover { color: var(--red); }
   .duty-row > div { padding: 8px 6px; display: flex; align-items: center; justify-content: center; text-align: center; }
   .duty-row .task-code { font-weight: 700; background: #f7f8fa; flex-direction: column; gap: 1px; }
   .duty-row .driver-info { flex-direction: column; align-items: center; font-weight: 700; line-height: 1.3; background: #f7f8fa; }
@@ -964,12 +969,14 @@
   driverPickerOverlay.addEventListener("click", (e) => { if (e.target === driverPickerOverlay) closeDriverPicker(); });
   driverPickerSearch.addEventListener("input", () => renderDriverPickerList(driverPickerSearch.value));
 
-  // Confirm-before-edit gate for every generated field made clickable in dutyRowHtml -- a stray
-  // click can't silently change a printed/dispatched task; the supervisor has to explicitly say
-  // yes first. Promise-based so the click handler can just `await confirmEdit(...)`.
+  // Confirm-before-edit gate for every generated field made clickable in dutyRowHtml (and, with
+  // a different yesLabel, for deleting a task entirely) -- a stray click can't silently change
+  // or remove a printed/dispatched task; the supervisor has to explicitly say yes first.
+  // Promise-based so the click handler can just `await confirmEdit(...)`.
   let _confirmEditResolve = null;
-  function confirmEdit(message) {
+  function confirmEdit(message, yesLabel) {
     confirmEditMessage.textContent = message;
+    confirmEditYes.textContent = yesLabel || "Yes, edit it";
     confirmEditOverlay.style.display = "flex";
     return new Promise((resolve) => { _confirmEditResolve = resolve; });
   }
@@ -1027,6 +1034,19 @@
     if (duty) openDriverPicker(duty);
   });
 
+  dutyList.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".delete-btn");
+    if (!btn || !homeStation || !jointResult) return;
+    const duty = (jointResult.dutiesByStation[homeStation] || [])[parseInt(btn.dataset.dutyIndex, 10)];
+    if (!duty) return;
+    const what = duty.isManual ? "this special task" : "this task";
+    const consequence = (!duty.isManual && !duty.isReserve)
+      ? " Its trip(s) will go back to needing a driver."
+      : "";
+    const ok = await confirmEdit(`Delete ${what} (${duty.taskCode})?${consequence}`, "Yes, delete it");
+    if (ok) deleteDuty(duty);
+  });
+
   // Reassigns `duty` to `newDriverId`. If that driver already has a different task or reserve
   // slot today, this is a full swap -- whoever's currently on `duty` takes over the picked
   // driver's other slot, exactly as asked ("Rayan will go on the other driver's task"). If the
@@ -1075,6 +1095,39 @@
     renderForStation();
     renderRoster();
     renderRosterSheet();
+  }
+
+  // Removes a task entirely -- covers both a special task added via Add Task (the case that
+  // prompted this) and a normal engine-generated one (a supervisor may just have the wrong
+  // assignment and want it gone rather than edited field-by-field).
+  function deleteDuty(duty) {
+    const duties = jointResult.dutiesByStation[homeStation] || [];
+    jointResult.dutiesByStation[homeStation] = duties.filter((d) => d !== duty);
+
+    // A real (non-manual) trip that had a driver doesn't stop needing one just because this
+    // assignment got deleted -- put it back in "needs attention" instead of letting it vanish.
+    if (!duty.isManual && !duty.isReserve && duty.legs) {
+      duty.legs.forEach((leg) => { if (leg.trip) jointResult.uncovered.push(leg.trip); });
+    }
+
+    // If a roster is loaded, the driver this task belonged to should go back to "Available"
+    // rather than leaving a task-code in their roster cell for a task that no longer exists.
+    const data = rosterSheetByStation[homeStation];
+    const dateKey = rosterSelectedDateByStation[homeStation];
+    if (data && dateKey && duty.driver && duty.driver.driverId) {
+      const driverEntry = data.drivers.find((d) => d.id === duty.driver.driverId);
+      if (driverEntry) driverEntry.days[dateKey] = "";
+      saveRosterSheetState();
+    }
+
+    if (duty.isManual && manualDutiesByStation[homeStation]) {
+      manualDutiesByStation[homeStation] = manualDutiesByStation[homeStation].filter((d) => d !== duty);
+      saveManualDuties();
+    }
+
+    renderForStation();
+    renderRoster();
+    if (data && dateKey) renderRosterSheet();
   }
 
   // --- Add Task (manual/special tasks not derived from Order B) ---------------------------
@@ -1373,6 +1426,7 @@
     const taskCodeCell = d.isManual
       ? `<div class="task-code">${taskCodeInner}<span class="manual-tag">SPECIAL</span></div>`
       : `<div class="task-code">${taskCodeInner}</div>`;
+    const deleteBtnHtml = `<div><button type="button" class="delete-btn" data-duty-index="${idx}" title="Delete this task">&times;</button></div>`;
     if (d.isReserve) {
       return `<div class="duty-row ${d.overtime ? "overtime" : ""} ${d.isManual ? "manual" : ""}">
         ${taskCodeCell}
@@ -1384,6 +1438,7 @@
         <div class="sign-out"><span class="editable-field" ${editAttrs("signOut", idx)}>${timeStr(d.signOut)}</span>${editedBadge(d, "signOut")}</div>
         <div class="duty-len"><span class="editable-field" ${editAttrs("dutyMin", idx)}>${fmtDuty(d.dutyMin)}</span>${editedBadge(d, "dutyMin")}</div>
         <div class="ot"></div>
+        ${deleteBtnHtml}
       </div>`;
     }
     // Variable leg count: 2 for a normal round trip, 4 for a chained shuttle duty. A manual
@@ -1423,6 +1478,7 @@
       <div class="sign-out"><span class="editable-field" ${editAttrs("signOut", idx)}>${timeStr(d.signOut)}</span>${editedBadge(d, "signOut")}</div>
       <div class="duty-len"><span class="editable-field" ${editAttrs("dutyMin", idx)}>${fmtDuty(d.dutyMin)}</span>${editedBadge(d, "dutyMin")}</div>
       <div class="ot">${d.overtime ? "OT" : ""}</div>
+      ${deleteBtnHtml}
     </div>`;
   }
 
