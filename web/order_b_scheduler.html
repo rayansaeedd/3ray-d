@@ -103,6 +103,10 @@
   /* Real duty sheets mark a Passenger leg (riding back, not driving) with a solid yellow trip
      box instead of the normal white one -- matches that convention directly. */
   .duty-row .leg.passenger .trip-box { background: #FFD700; }
+  /* KAEC Reserve, KAIA variant: no return train, so the last slot is a "TRANSFER TO ... AT ..."
+     label (driven back by road) instead of a trip box -- same yellow convention, smaller text. */
+  .duty-row .leg.kaec-transfer { justify-content: center; }
+  .duty-row .kaec-transfer-box { background: #FFD700; font-size: 10px; line-height: 1.5; padding: 5px 6px; }
   .duty-row .legs-wrap .turn { flex: 0 0 auto; background: transparent; }
   .duty-row .legs-wrap .turn .badge {
     width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center;
@@ -1189,7 +1193,10 @@
 
     // A real (non-manual) trip that had a driver doesn't stop needing one just because this
     // assignment got deleted -- put it back in "needs attention" instead of letting it vanish.
-    if (!duty.isManual && !duty.isReserve && duty.legs) {
+    // KAEC Reserve duties are excluded the same way manual ones are: their legs are never real
+    // Main coverage of anything (MAD's morning slot even shares a leg's trip object with the
+    // real sweep duty), so deleting one must never flag that trip as needing a driver.
+    if (!duty.isManual && !duty.isReserve && !duty.isKaecReserve && duty.legs) {
       duty.legs.forEach((leg) => { if (leg.trip) jointResult.uncovered.push(leg.trip); });
     }
 
@@ -1238,6 +1245,65 @@
         .concat(list)
         .sort((a, b) => a.signIn - b.signIn);
     }
+  }
+
+  // --- KAEC Reserve (mandatory standby driver posted at KAEC) -----------------------------
+  // KAEC sits roughly in the middle of the network, and there's always a standing reserve train
+  // there -- every station keeps a driver posted at KAEC so they can jump on it and go help any
+  // train stuck on the open line. The driver always rides Passenger both ways and never drives a
+  // real trip, so unlike Sweep this never touches the joint bipartite matching -- it's injected
+  // here, purely at the UI layer, right after every jointResult build so the right number of
+  // slots is always there to fill in and (once a roster's loaded) picks up a driver the same
+  // random way every other non-Reserve duty does.
+  //
+  // Per station, taught directly by the supervisor who runs this today:
+  //   MAD  -- 2/day. Morning slot rides out on that day's actual sweep train (real trip, known),
+  //           turns off at KAEC instead of continuing to KAIA, then a blank return leg. The
+  //           afternoon slot (departs 11:30 or 14:30 depending on that day's operating time) is
+  //           entirely blank -- which real trip that is varies day to day.
+  //   MAK  -- 2/day (morning + afternoon), both entirely blank both ways.
+  //   KAIA -- 1/day, outbound leg blank; no return train at all -- driven back to KAIA by road,
+  //           shown as a "TRANSFER TO ... AT ..." label instead of a second trip box.
+  //
+  // Every blank field here is a real placeholder (null time / empty trip number), not a guess --
+  // legTripNo/timeStr render that as an obvious "click to fill in" cue rather than a fabricated
+  // value, and it's edited through the exact same click-to-edit system as everything else.
+  const KAEC_RESERVE_DUTY_MIN = 420; // 7:00 placeholder length -- editable like any other duty
+  function blankKaecLeg(origin, destination) {
+    return { trip: { tripNo: "", origin, destination, depMin: null, arrMin: null, prefix: "KAECRES" }, role: "Passenger" };
+  }
+  function makeKaecReserveDuty(station, taskCode, signIn, legs) {
+    return {
+      taskCode, signIn, signOut: (signIn + KAEC_RESERVE_DUTY_MIN) % 1440, dutyMin: KAEC_RESERVE_DUTY_MIN,
+      overtime: false, driver: { driverId: "", name: "", phone: "", homeStation: station },
+      isReserve: false, isManual: false, isKaecReserve: true, legs,
+    };
+  }
+  function injectKaecReserveDuties() {
+    if (!jointResult) return;
+
+    const madDuties = jointResult.dutiesByStation.MAD || [];
+    const madSweep = madDuties.find((d) => d.legs && d.legs[0] && d.legs[0].trip && d.legs[0].trip.prefix === "SWEEP");
+    const madList = [];
+    if (madSweep) {
+      const leg1 = { trip: madSweep.legs[0].trip, role: "Passenger" };
+      leg1._turnLetterOverride = "K"; // rides the sweep train but turns off at KAEC, not KAIA
+      madList.push(makeKaecReserveDuty("MAD", "KAEC RESERVE (AM)", madSweep.signIn, [leg1, blankKaecLeg("KAEC", "MAD")]));
+    }
+    madList.push(makeKaecReserveDuty("MAD", "KAEC RESERVE (PM)", 11 * 60, [blankKaecLeg("MAD", "KAEC"), blankKaecLeg("KAEC", "MAD")]));
+    jointResult.dutiesByStation.MAD = madDuties.concat(madList).sort((a, b) => a.signIn - b.signIn);
+
+    const makDuties = jointResult.dutiesByStation.MAK || [];
+    const makList = [
+      makeKaecReserveDuty("MAK", "KAEC RESERVE (AM)", 5 * 60, [blankKaecLeg("MAK", "KAEC"), blankKaecLeg("KAEC", "MAK")]),
+      makeKaecReserveDuty("MAK", "KAEC RESERVE (PM)", 13 * 60, [blankKaecLeg("MAK", "KAEC"), blankKaecLeg("KAEC", "MAK")]),
+    ];
+    jointResult.dutiesByStation.MAK = makDuties.concat(makList).sort((a, b) => a.signIn - b.signIn);
+
+    const kaiaDuties = jointResult.dutiesByStation.KAIA || [];
+    const kaiaDuty = makeKaecReserveDuty("KAIA", "KAEC RESERVE", 17 * 60, [blankKaecLeg("KAIA", "KAEC")]);
+    kaiaDuty.kaecTransfer = { atMin: null };
+    jointResult.dutiesByStation.KAIA = kaiaDuties.concat([kaiaDuty]).sort((a, b) => a.signIn - b.signIn);
   }
 
   // A manual task doesn't come with a real Order B route prefix, so its trip-box color
@@ -1437,6 +1503,7 @@
         // not per-browser (still a known gap, see order_b_engine/README.md).
         jointResult = J.buildJointSchedule(trips);
         reinjectManualDuties();
+        injectKaecReserveDuties();
         renderForStation();
         renderRoster();
         const totalDuties = Object.values(jointResult.dutiesByStation).reduce((a, v) => a + v.length, 0);
@@ -1452,12 +1519,20 @@
     reader.readAsArrayBuffer(file);
   }
 
-  function timeStr(mins) { return E.minutesToTimeStr(mins); }
+  // A KAEC Reserve duty's blank/placeholder legs (see injectKaecReserveDuties) carry a real
+  // null instead of a fabricated time, so this needs to render that as "not filled in yet"
+  // rather than crash -- every other caller only ever passes a real minute value.
+  function timeStr(mins) { return mins == null ? "--:--" : E.minutesToTimeStr(mins); }
   function fmtDuty(mins) { return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`; }
 
   // Effective values for the leg-level fields a supervisor can override -- each falls back to
-  // whatever the engine actually generated when no override is present.
-  function legTripNo(leg) { return leg._tripNoOverride != null ? leg._tripNoOverride : leg.trip.tripNo; }
+  // whatever the engine actually generated when no override is present. A blank/placeholder
+  // trip number (see injectKaecReserveDuties) falls back to a visible "click to fill in" hint
+  // instead of an empty, invisible span.
+  function legTripNo(leg) {
+    if (leg._tripNoOverride != null) return leg._tripNoOverride;
+    return leg.trip.tripNo || "— fill in —";
+  }
   function legDepMin(leg) { return leg._depOverride != null ? leg._depOverride : leg.trip.depMin; }
   function legArrMin(leg) { return leg._arrOverride != null ? leg._arrOverride : leg.trip.arrMin; }
   function legColorHex(duty, leg) {
@@ -1481,6 +1556,7 @@
       case "arrMin": return `Trip ${n} arrival time`;
       case "color": return `Trip ${n} color`;
       case "turnLetter": return `Turn badge after Trip ${n}`;
+      case "transferAt": return "Transfer time";
       default: return field;
     }
   }
@@ -1514,6 +1590,57 @@
       ? `<div class="task-code">${taskCodeInner}<span class="manual-tag">SPECIAL</span></div>`
       : `<div class="task-code">${taskCodeInner}</div>`;
     const deleteBtnHtml = `<div><button type="button" class="delete-btn" data-duty-index="${idx}" title="Delete this task">&times;</button></div>`;
+    // KAEC Reserve: a standby driver posted at KAEC (the station in the middle of the network)
+    // who always rides Passenger both ways -- outbound leg, a K turn badge, a RESERVE block
+    // while they wait at KAEC, then either a real leg back (MAD/MAK) or, for KAIA, no return
+    // train at all -- they're driven back to KAIA by road instead (see injectKaecReserveDuties).
+    if (d.isKaecReserve) {
+      const leg1 = d.legs[0];
+      const leg2 = d.legs[1];
+      const color1 = legColorHex(d, leg1);
+      const leg1Html = `<div class="leg ${legRole(leg1) === "Passenger" ? "passenger" : ""}">
+        <div class="times">
+          <span class="time-with-badge"><span class="editable-field" ${editAttrs("depMin", idx, 0)}>${timeStr(legDepMin(leg1))}</span>${editedBadge(d, "leg0.depMin")}</span>
+          <span class="time-with-badge"><span class="editable-field" ${editAttrs("arrMin", idx, 0)}>${timeStr(legArrMin(leg1))}</span>${editedBadge(d, "leg0.arrMin")}</span>
+        </div>
+        <div class="trip-box"><span class="editable-field" ${editAttrs("tripNo", idx, 0)}>${legTripNo(leg1)}</span>${editedBadge(d, "leg0.tripNo")}${editedBadge(d, "leg0.role")}</div>
+        <div class="trip-bar editable-field" style="background:${color1}" ${editAttrs("color", idx, 0)}></div>
+      </div>`;
+      const turnLetter = legTurnLetter(leg1);
+      const turnHtml = `<div class="turn"><div class="badge editable-field" style="background:${color1}" ${editAttrs("turnLetter", idx, 0)}>${turnLetter}</div>${editedBadge(d, "leg0.color")}${editedBadge(d, "leg0.turnLetter")}</div>`;
+      const reserveHtml = `<div class="reserve-block leg-reserve">RESERVE</div>`;
+      let tailHtml;
+      if (leg2) {
+        const color2 = legColorHex(d, leg2);
+        tailHtml = `<div class="leg ${legRole(leg2) === "Passenger" ? "passenger" : ""}">
+          <div class="times">
+            <span class="time-with-badge"><span class="editable-field" ${editAttrs("depMin", idx, 1)}>${timeStr(legDepMin(leg2))}</span>${editedBadge(d, "leg1.depMin")}</span>
+            <span class="time-with-badge"><span class="editable-field" ${editAttrs("arrMin", idx, 1)}>${timeStr(legArrMin(leg2))}</span>${editedBadge(d, "leg1.arrMin")}</span>
+          </div>
+          <div class="trip-box"><span class="editable-field" ${editAttrs("tripNo", idx, 1)}>${legTripNo(leg2)}</span>${editedBadge(d, "leg1.tripNo")}${editedBadge(d, "leg1.role")}</div>
+          <div class="trip-bar editable-field" style="background:${color2}" ${editAttrs("color", idx, 1)}></div>
+        </div>`;
+      } else {
+        const atMin = d.kaecTransfer ? d.kaecTransfer.atMin : null;
+        tailHtml = `<div class="leg kaec-transfer">
+          <div class="trip-box kaec-transfer-box">TRANSFER TO ${STATION_NAME[d.driver.homeStation] || d.driver.homeStation}<br>
+            AT <span class="editable-field" ${editAttrs("transferAt", idx)}>${timeStr(atMin)}</span>${editedBadge(d, "transferAt")}
+          </div>
+        </div>`;
+      }
+      return `<div class="duty-row ${d.isManual ? "manual" : ""}">
+        ${taskCodeCell}
+        <div ${driverInfoAttrs}>${driverInfo}</div>
+        <div class="sign-in"><span class="editable-field" ${editAttrs("signIn", idx)}>${timeStr(d.signIn)}</span>${editedBadge(d, "signIn")}</div>
+        <div>${d.driver.homeStation}</div>
+        <div class="legs-wrap">${leg1Html}${turnHtml}${reserveHtml}${tailHtml}</div>
+        <div>${d.driver.homeStation}</div>
+        <div class="sign-out"><span class="editable-field" ${editAttrs("signOut", idx)}>${timeStr(d.signOut)}</span>${editedBadge(d, "signOut")}</div>
+        <div class="duty-len"><span class="editable-field" ${editAttrs("dutyMin", idx)}>${fmtDuty(d.dutyMin)}</span>${editedBadge(d, "dutyMin")}</div>
+        <div class="ot"></div>
+        ${deleteBtnHtml}
+      </div>`;
+    }
     if (d.isReserve) {
       return `<div class="duty-row ${d.overtime ? "overtime" : ""} ${d.isManual ? "manual" : ""}">
         ${taskCodeCell}
@@ -1636,6 +1763,15 @@
       const original = prior ? prior.originalDisplay : fmtDuty(duty.dutyMin);
       recordEdit(duty, "dutyMin", label, original, fmtDuty(mins), fmtDuty(mins) !== original);
       duty.dutyMin = mins;
+    } else if (field === "transferAt") {
+      // KAIA's KAEC Reserve duty has no return train -- this is the "TRANSFER TO ... AT ..."
+      // road-transfer time instead, always starts blank since it varies day to day.
+      const mins = parseTimeInput(rawValue);
+      if (mins == null) { renderForStation(); return; }
+      const prior = duty._editsByField && duty._editsByField.transferAt;
+      const original = prior ? prior.originalDisplay : "--:--";
+      recordEdit(duty, "transferAt", label, original, timeStr(mins), timeStr(mins) !== original);
+      duty.kaecTransfer = { atMin: mins };
     } else if (legIndex != null && duty.legs && duty.legs[legIndex]) {
       const leg = duty.legs[legIndex];
       const fieldKey = `leg${legIndex}.${field}`;
@@ -1685,14 +1821,14 @@
     recordEdit(duty, fieldKey, `Trip ${legIndex + 1} role`, original, newRole, newRole !== original);
     leg._roleOverride = newRole;
 
-    // A manual/special task (see Add Task) isn't a real Order B trip -- toggling its role still
-    // recolors the box, but it has no "Main coverage" to lose, so it never belongs in the
-    // uncovered list (deleteDuty() draws the same line for the same reason).
+    // A manual/special task (see Add Task) or a KAEC Reserve duty (whose legs are never really
+    // "Main coverage" of anything -- MAD's morning slot even shares a leg's trip object with the
+    // real sweep duty) never belongs in the uncovered list -- deleteDuty() draws the same line.
     const tripNo = legTripNo(leg);
-    if (newRole === "Passenger" && leg.trip && !duty.isManual) {
+    if (newRole === "Passenger" && leg.trip && !duty.isManual && !duty.isKaecReserve) {
       if (!jointResult.uncovered.some((t) => t === leg.trip)) jointResult.uncovered.push(leg.trip);
       showToast(`Trip ${tripNo} now has no Main driver -- please adjust sign-in coverage for this trip.`, "warn");
-    } else if (newRole === "Main" && leg.trip && !duty.isManual) {
+    } else if (newRole === "Main" && leg.trip && !duty.isManual && !duty.isKaecReserve) {
       jointResult.uncovered = jointResult.uncovered.filter((t) => t !== leg.trip);
       showToast(`Trip ${tripNo} restored with a Main driver.`, "");
     } else if (newRole === "Passenger") {
@@ -1716,7 +1852,7 @@
         <option value="L">L (Makkah)</option><option value="M">M (Madinah)</option>
         <option value="A">A (KAIA)</option><option value="K">K (KAEC)</option>
       </select>`;
-    } else if (field === "signIn" || field === "signOut" || field === "depMin" || field === "arrMin") {
+    } else if (field === "signIn" || field === "signOut" || field === "depMin" || field === "arrMin" || field === "transferAt") {
       inputHtml = `<input type="time" class="inline-edit-input" />`;
     } else {
       inputHtml = `<input type="text" class="inline-edit-input" />`;
@@ -1783,6 +1919,7 @@
     else if (field === "signIn") currentRawValue = timeStr(duty.signIn);
     else if (field === "signOut") currentRawValue = timeStr(duty.signOut);
     else if (field === "dutyMin") currentRawValue = fmtDuty(duty.dutyMin);
+    else if (field === "transferAt") currentRawValue = timeStr(duty.kaecTransfer ? duty.kaecTransfer.atMin : null);
     else if (legIndex != null) {
       const leg = duty.legs[legIndex];
       if (field === "depMin") currentRawValue = timeStr(legDepMin(leg));
@@ -1902,7 +2039,9 @@
     // (reserve + 2 real legs = 3 slots), not just its 2 real legs -- otherwise its columns can
     // collide with the fixed suffix columns (Destination/Sign Out/...) on a day with no 4-leg
     // chains to otherwise force the sheet wide enough.
-    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.legs.length + (d.reservePosition ? 1 : 0))));
+    // A KAEC Reserve duty always takes exactly 3 slots (leg, RESERVE, leg-or-transfer-label),
+    // regardless of how many real legs it actually has (1 for KAIA's transfer variant, 2 otherwise).
+    const maxLegs = Math.max(2, ...duties.map((d) => (d.isReserve ? 0 : d.isKaecReserve ? 3 : d.legs.length + (d.reservePosition ? 1 : 0))));
     const legsStartCol = 5;
     const legsEndCol = suffixStartCol(maxLegs) - 1;
     const destCol = suffixStartCol(maxLegs);
@@ -2006,6 +2145,83 @@
         rc.alignment = { horizontal: "center", vertical: "middle" };
         rc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_RESERVE_FILL } };
         rc.border = xlBoxBorder;
+      } else if (d.isKaecReserve) {
+        // Always 3 slots: leg1 (dep/box/arr), a K turn badge + RESERVE together in slot 1, then
+        // either a real leg2 (slot 2) or, for KAIA, a "TRANSFER TO ... AT ..." label there instead.
+        const leg1 = d.legs[0];
+        const leg2 = d.legs[1];
+        const color1 = XL_ARGB(legColorHex(d, leg1) || "#8064A2");
+        const isPassenger1 = legRole(leg1) === "Passenger";
+
+        const depCell = ws.getCell(mainRow, legDepCol(0));
+        if (legDepMin(leg1) != null) { depCell.value = legDepMin(leg1) / 1440; depCell.numFmt = "hh:mm"; }
+        depCell.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
+        depCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+
+        const boxCell = ws.getCell(mainRow, legBoxCol(0));
+        boxCell.value = legTripNo(leg1);
+        boxCell.font = { name: "Arial", bold: true, size: 12, color: { argb: "FF000000" } };
+        boxCell.alignment = { horizontal: "center", vertical: "middle" };
+        boxCell.border = xlBoxBorder;
+        boxCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isPassenger1 ? "FFFFD700" : XL_WHITE } };
+        const barCell = ws.getCell(barRow, legBoxCol(0));
+        barCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color1 } };
+        barCell.border = xlPlainBorder;
+
+        const arrCell = ws.getCell(mainRow, legArrCol(0));
+        if (legArrMin(leg1) != null) { arrCell.value = legArrMin(leg1) / 1440; arrCell.numFmt = "hh:mm"; }
+        arrCell.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
+        arrCell.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+
+        ws.mergeCells(mainRow, legTurnCol(0), barRow, legTurnCol(0));
+        const tc = ws.getCell(mainRow, legTurnCol(0));
+        tc.value = legTurnLetter(leg1);
+        tc.font = { name: "Arial", bold: true, size: 12, color: { argb: XL_WHITE } };
+        tc.alignment = { horizontal: "center", vertical: "middle" };
+        tc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color1 } };
+        tc.border = xlPlainBorder;
+
+        ws.mergeCells(mainRow, legDepCol(1), barRow, legArrCol(1));
+        const rc = ws.getCell(mainRow, legDepCol(1));
+        rc.value = "RESERVE";
+        rc.font = { name: "Arial", bold: true, size: 11, color: { argb: XL_WHITE } };
+        rc.alignment = { horizontal: "center", vertical: "middle" };
+        rc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: XL_RESERVE_FILL } };
+        rc.border = xlBoxBorder;
+
+        if (leg2) {
+          const color2 = XL_ARGB(legColorHex(d, leg2) || "#8064A2");
+          const isPassenger2 = legRole(leg2) === "Passenger";
+          const depCell2 = ws.getCell(mainRow, legDepCol(2));
+          if (legDepMin(leg2) != null) { depCell2.value = legDepMin(leg2) / 1440; depCell2.numFmt = "hh:mm"; }
+          depCell2.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
+          depCell2.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+
+          const boxCell2 = ws.getCell(mainRow, legBoxCol(2));
+          boxCell2.value = legTripNo(leg2);
+          boxCell2.font = { name: "Arial", bold: true, size: 12, color: { argb: "FF000000" } };
+          boxCell2.alignment = { horizontal: "center", vertical: "middle" };
+          boxCell2.border = xlBoxBorder;
+          boxCell2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: isPassenger2 ? "FFFFD700" : XL_WHITE } };
+          const barCell2 = ws.getCell(barRow, legBoxCol(2));
+          barCell2.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color2 } };
+          barCell2.border = xlPlainBorder;
+
+          const arrCell2 = ws.getCell(mainRow, legArrCol(2));
+          if (legArrMin(leg2) != null) { arrCell2.value = legArrMin(leg2) / 1440; arrCell2.numFmt = "hh:mm"; }
+          arrCell2.font = { name: "Arial", bold: true, size: 8, color: { argb: "FF000000" } };
+          arrCell2.alignment = { textRotation: 90, horizontal: "center", vertical: "middle" };
+        } else {
+          // KAIA: no return train -- driven back to the home station by road instead.
+          ws.mergeCells(mainRow, legDepCol(2), barRow, legArrCol(2));
+          const trc = ws.getCell(mainRow, legDepCol(2));
+          const atMin = d.kaecTransfer ? d.kaecTransfer.atMin : null;
+          trc.value = `TRANSFER TO ${d.driver.homeStation} AT ${atMin != null ? E.minutesToTimeStr(atMin) : "--:--"}`;
+          trc.font = { name: "Arial", bold: true, size: 10, color: { argb: "FF000000" } };
+          trc.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+          trc.border = xlBoxBorder;
+          trc.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFD700" } };
+        }
       } else {
         // A reserve-before pair occupies virtual slot 0 for its RESERVE cell, pushing its real
         // legs to slots 1..N; a reserve-after pair (or no reserve at all) keeps legs at their
