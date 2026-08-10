@@ -908,7 +908,7 @@
     duties.forEach((duty, i) => {
       const drv = forTrips[i];
       if (!drv) return; // not enough drivers today -- this duty stays unassigned, flagged below
-      duty.driver = { driverId: drv.id, name: drv.name, phone: "", homeStation };
+      duty.driver = { driverId: drv.id, name: drv.name, phone: drv.phone || "", homeStation };
       drv.days[dateKey] = duty.taskCode;
       generatedIds.push(drv.id);
     });
@@ -917,9 +917,10 @@
     reserveDuties.forEach((rd) => {
       rd.driver.days[dateKey] = rd.taskCode;
       generatedIds.push(rd.driver.id);
-      // Reserve duties carry the roster driver object itself (id/name/days) -- normalize to the
-      // {driverId,name,phone,homeStation} shape dutyRowHtml/downloadBtn expect, same as trip duties.
-      rd.driver = { driverId: rd.driver.id, name: rd.driver.name, phone: "", homeStation };
+      // Reserve duties carry the roster driver object itself (id/name/phone/days) -- normalize
+      // to the {driverId,name,phone,homeStation} shape dutyRowHtml/downloadBtn expect, same as
+      // trip duties.
+      rd.driver = { driverId: rd.driver.id, name: rd.driver.name, phone: rd.driver.phone || "", homeStation };
     });
 
     jointResult.dutiesByStation[homeStation] = duties.concat(reserveDuties)
@@ -1069,13 +1070,13 @@
     const oldDriverEntry = oldDriverId ? data.drivers.find((d) => d.id === oldDriverId) : null;
     const otherDuty = findStationDutyByDriverId(newDriverId, duty);
 
-    duty.driver = { driverId: newDriver.id, name: newDriver.name, phone: "", homeStation };
+    duty.driver = { driverId: newDriver.id, name: newDriver.name, phone: newDriver.phone || "", homeStation };
     newDriver.days[dateKey] = duty.taskCode;
 
     const touchedIds = [newDriver.id];
     if (otherDuty) {
       otherDuty.driver = oldDriverEntry
-        ? { driverId: oldDriverEntry.id, name: oldDriverEntry.name, phone: "", homeStation }
+        ? { driverId: oldDriverEntry.id, name: oldDriverEntry.name, phone: oldDriverEntry.phone || "", homeStation }
         : { driverId: "", name: "", phone: "", homeStation };
       if (oldDriverEntry) {
         oldDriverEntry.days[dateKey] = otherDuty.taskCode;
