@@ -406,26 +406,34 @@
 
   // When several reserve tasks share the exact same start time, filling all of them stacks
   // redundant standby coverage at one moment while a distinct, later reserve slot can go
-  // completely uncovered with no driver at all -- reported directly against a real day: two
-  // drivers both sitting reserve at 14:00 while several late-shift reserve slots showed no name
-  // at all. Reordering so the FIRST reserve task at each distinct start time is tried before any
-  // repeat of an already-covered time is what makes the day's limited driver pool spread across
-  // every distinct reserve time first, rather than one time absorbing several drivers while
-  // another gets none -- a driver freed up from a redundant duplicate becomes available for
-  // whichever later time still has nobody. Only reordering; every task is still attempted.
+  // completely uncovered with no driver at all -- reported directly against a real day, twice:
+  // first two drivers both sitting reserve at the same time while late-shift slots showed no
+  // name, then (after a first attempt at this fix that only separated "first at a time" from
+  // "any repeat") three consecutive reserve slots at 09:00 all filled while slots at 12:00 and
+  // 13:00 that ALSO had duplicates went empty -- because every duplicate, regardless of which
+  // time it belonged to, was still being tried in plain chronological order, so an early time's
+  // 2nd or 3rd slot could exhaust the driver pool before a later time's 2nd slot ever got a turn.
+  // The actual fix has to be a round-robin by depth, not just a two-tier split: rank every
+  // reserve task by its position among same-time siblings (1st, 2nd, 3rd, ...), then process
+  // every time's 1st slot (in time order) before any time's 2nd slot, every 2nd before any 3rd,
+  // and so on. That's what guarantees a distinct time's first shot at coverage always outranks
+  // a DIFFERENT time's second-or-later slot, no matter how early or late either time falls in
+  // the day. Only reordering; every task is still attempted exactly once.
   function spreadReserveTasks(reserveTasks) {
-    const seenStartMin = new Set();
-    const firstAtEachTime = [];
-    const repeatsOfATime = [];
-    reserveTasks.forEach((t) => {
-      if (!seenStartMin.has(t.startMin)) {
-        seenStartMin.add(t.startMin);
-        firstAtEachTime.push(t);
-      } else {
-        repeatsOfATime.push(t);
-      }
-    });
-    return firstAtEachTime.concat(repeatsOfATime);
+    const byStartMin = {};
+    reserveTasks.forEach((t) => { (byStartMin[t.startMin] = byStartMin[t.startMin] || []).push(t); });
+    // Object keys that look like non-negative integers (every startMin here) always iterate in
+    // ascending numeric order in JS, regardless of insertion order -- this naturally walks times
+    // chronologically without needing an explicit sort.
+    const times = Object.keys(byStartMin);
+    const maxDepth = Math.max(0, ...times.map((t) => byStartMin[t].length));
+    const result = [];
+    for (let depth = 0; depth < maxDepth; depth++) {
+      times.forEach((t) => {
+        if (byStartMin[t][depth]) result.push(byStartMin[t][depth]);
+      });
+    }
+    return result;
   }
 
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
