@@ -260,8 +260,27 @@
     });
   }
 
+  // The Task Program file also has actual drawing shapes (not just images) on every day-sheet --
+  // its original xl/drawings/drawing1.xml is ~460KB. Confirmed by unzipping both sides: this
+  // vendored ExcelJS build only understands plain images (worksheet.getImages() sees exactly
+  // one), and when writing rebuilds each drawing part from just that -- a ~1KB stub -- silently
+  // discarding whatever else was in the original ~460KB of shape XML, while still linking the
+  // now-mismatched drawing into the worksheet. That's what "Excel found a problem with this file
+  // and can't open it" is detecting; it's a hard failure, not just a repairable warning, because
+  // the rebuilt drawing part doesn't actually match what the worksheet and its own internal
+  // shape IDs expect. ExcelJS doesn't expose a public way to drop images before writing (no
+  // removeImage()), so this reaches into the worksheet's internal media list directly -- the
+  // roster file has no drawings of this kind (its VML comment-indicator drawing is a different,
+  // unrelated mechanism that already round-trips correctly), so this is a no-op there.
+  function stripBrokenDrawings(workbook) {
+    workbook.worksheets.forEach((ws) => {
+      if (Array.isArray(ws._media)) ws._media = [];
+    });
+  }
+
   return {
     dateKey, addDays, isAvailable, classifyCode,
-    parseRoster, parseTaskProgram, assignSimple, applyAssignments, stripDanglingExternalRefs,
+    parseRoster, parseTaskProgram, assignSimple, applyAssignments,
+    stripDanglingExternalRefs, stripBrokenDrawings,
   };
 });

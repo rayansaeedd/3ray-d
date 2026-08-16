@@ -237,6 +237,11 @@
       // into their last cached value (the same thing Excel was already displaying) avoids that.
       E.stripDanglingExternalRefs(rosterWorkbook);
       E.stripDanglingExternalRefs(taskWorkbook);
+      // The Task Program's drawing shapes can't survive an ExcelJS write intact -- see the
+      // engine's comment on stripBrokenDrawings for the full story. Without this, the file
+      // fails to open at all in real Excel, not just a repairable warning.
+      E.stripBrokenDrawings(rosterWorkbook);
+      E.stripBrokenDrawings(taskWorkbook);
 
       renderSummary(plan);
       taskDownloadBtn.disabled = false;
