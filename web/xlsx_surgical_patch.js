@@ -110,12 +110,30 @@
     return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
   }
 
-  // Fill color used to flag a driver who was available on a given day but had no task left to
-  // give them once every task that day was filled -- chosen to be visually distinct from every
-  // fill color already present in the real roster's palette (checked directly against its
-  // xl/styles.xml: reds, oranges, yellows, greens and purples are already in use for other
-  // statuses, this bright magenta is not).
-  const IDLE_FLAG_ARGB = "FFFF00FF";
+  // Candidate fill colors to flag a driver who was available on a given day but had no task
+  // left to give them once every task that day was filled. A single hardcoded color is not
+  // safe: a real roster's own palette can already use a given color for something else entirely
+  // (confirmed directly against a real file whose own template already painted "not scheduled"
+  // day cells with this exact magenta, unrelated to this tool) -- reusing it would make the new
+  // flag visually indistinguishable from an existing, different meaning already in the file.
+  // pickIdleFlagColor() checks each candidate, in order, against the specific file being patched
+  // and picks the first one not already present anywhere in its xl/styles.xml <fills> palette.
+  const IDLE_FLAG_ARGB_CANDIDATES = ["FFFF00FF", "FF00FFFF", "FFFF3399", "FF33CCFF", "FF9933FF", "FF00CC99"];
+
+  async function pickIdleFlagColor(zip) {
+    const stylesFile = zip.file("xl/styles.xml");
+    if (!stylesFile) return IDLE_FLAG_ARGB_CANDIDATES[0];
+    const xml = await stylesFile.async("string");
+    const fillsMatch = /<fills count="\d+">([\s\S]*?)<\/fills>/.exec(xml);
+    const existingRgbs = new Set();
+    if (fillsMatch) {
+      const rgbRe = /rgb="([0-9A-Fa-f]{8})"/g;
+      let m;
+      while ((m = rgbRe.exec(fillsMatch[1]))) existingRgbs.add(m[1].toUpperCase());
+    }
+    const pick = IDLE_FLAG_ARGB_CANDIDATES.find((c) => !existingRgbs.has(c));
+    return pick || IDLE_FLAG_ARGB_CANDIDATES[0];
+  }
 
   // Finds (or, the first time it's needed, appends) a solid-fill cellXf style in xl/styles.xml
   // for the given ARGB color, reusing the real roster's standard day-cell border (borderId="1")
@@ -209,8 +227,9 @@
   }
 
   // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true }, ...] }
-  // A `flag: true` entry is style-only -- it recolors the cell to IDLE_FLAG_ARGB without touching
-  // whatever value is already there (used to mark an available-but-unused driver's day cell).
+  // A `flag: true` entry is style-only -- it recolors the cell (to whichever candidate color
+  // pickIdleFlagColor() finds unused in this specific file) without touching whatever value is
+  // already there (used to mark an available-but-unused driver's day cell).
   // Returns a new ArrayBuffer for the patched .xlsx -- every part not named in patchesBySheetIndex
   // (plus xl/styles.xml, only if a flag patch is actually present) is carried through by JSZip
   // unchanged.
@@ -228,7 +247,10 @@
 
     let flagStyleIndex = null;
     async function getFlagStyleIndex() {
-      if (flagStyleIndex == null) flagStyleIndex = await ensureFillStyle(zip, IDLE_FLAG_ARGB);
+      if (flagStyleIndex == null) {
+        const color = await pickIdleFlagColor(zip);
+        flagStyleIndex = await ensureFillStyle(zip, color);
+      }
       return flagStyleIndex;
     }
 
@@ -262,6 +284,7 @@
 
   return {
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
-    patchCellInSheetXml, patchCellStyleInSheetXml, ensureFillStyle, IDLE_FLAG_ARGB,
+    patchCellInSheetXml, patchCellStyleInSheetXml, ensureFillStyle,
+    pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES,
   };
 });
