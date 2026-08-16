@@ -215,72 +215,29 @@
     return { perDay };
   }
 
-  // Writes the plan into both live ExcelJS workbook objects -- setting .value on a cell that
-  // currently holds a formula (the NAME column's VLOOKUP) replaces it with a plain literal,
-  // which is exactly what's wanted: the downloaded file shows the resolved name, not a formula
-  // pointing at a workbook the recipient won't have open.
-  function applyAssignments(rosterWorkbook, taskWorkbook, plan) {
-    const rosterWs = rosterWorkbook.worksheets[0];
+  // Converts a plan into plain {row, col, value} patch lists, grouped by sheet index, ready for
+  // xlsx_surgical_patch.js's applyCellPatches() -- deliberately NOT an ExcelJS workbook mutation.
+  // Earlier versions of this engine wrote assignments directly into a live ExcelJS workbook and
+  // asked ExcelJS to serialize the whole file back out, which turned out to be provably lossy in
+  // ways that corrupted real output files (dropped external-link formulas left dangling, and a
+  // ~460KB drawing part rebuilt as a ~1KB stub that made the file unopenable in real Excel).
+  // Producing plain patch data here, with no ExcelJS involvement in the write path at all, is
+  // what lets the surgical patcher touch only the exact cells being changed and nothing else.
+  function buildPatches(plan) {
+    const rosterPatches = { 0: [] };
+    const taskPatches = {};
     plan.perDay.forEach((day) => {
-      const taskWs = taskWorkbook.worksheets[day.sheetIndex];
+      if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       day.assignments.forEach(({ task, driver }) => {
-        taskWs.getRow(task.row).getCell(day.nameCol).value = driver.name;
-        rosterWs.getRow(driver.row).getCell(driver.colByDateKey[day.dateKey]).value = task.code;
+        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: driver.name });
+        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code });
       });
     });
-  }
-
-  // Both real files are riddled with formulas that reference an external linked workbook (e.g.
-  // "=VLOOKUP(C8,[1]OCT!$H$5:$AM$104,32,)", or the roster's identity columns pulling from a
-  // master "JAN" sheet) -- confirmed by unzipping the .xlsx: this vendored ExcelJS build drops
-  // the xl/externalLinks/* parts and the workbook's <externalReference> declaration on every
-  // single write, even with zero edits, but leaves the formula text in each cell still pointing
-  // at that now-undefined external reference. That mismatch is exactly what Excel's "we found a
-  // problem with some content" repair prompt is detecting -- it isn't specific to the cells this
-  // engine touches, so touching fewer cells wouldn't have avoided it.
-  //
-  // The fix: since ExcelJS can't be made to preserve external links through a write, every
-  // formula anywhere in the workbook that points at one gets frozen into its last cached result
-  // instead -- the exact same value Excel was already showing (a resolved name, a date, or a
-  // cached #N/A), just as a plain value instead of a now-dangling formula. That removes every
-  // dangling reference from the file rather than leaving some behind.
-  function stripDanglingExternalRefs(workbook) {
-    workbook.worksheets.forEach((ws) => {
-      ws.eachRow({ includeEmpty: false }, (row) => {
-        row.eachCell({ includeEmpty: false }, (cell) => {
-          const v = cell.value;
-          if (!v || typeof v !== "object" || v instanceof Date || !("formula" in v)) return;
-          if (typeof v.formula !== "string" || !/\[\d+\]/.test(v.formula)) return;
-          // A few of these have no cached result at all (never recalculated in the source
-          // file) -- displayValue() would leave those untouched since it only converts a
-          // formula object once it sees a "result" key, so handle the no-result case directly.
-          cell.value = "result" in v ? displayValue(cell) : null;
-        });
-      });
-    });
-  }
-
-  // The Task Program file also has actual drawing shapes (not just images) on every day-sheet --
-  // its original xl/drawings/drawing1.xml is ~460KB. Confirmed by unzipping both sides: this
-  // vendored ExcelJS build only understands plain images (worksheet.getImages() sees exactly
-  // one), and when writing rebuilds each drawing part from just that -- a ~1KB stub -- silently
-  // discarding whatever else was in the original ~460KB of shape XML, while still linking the
-  // now-mismatched drawing into the worksheet. That's what "Excel found a problem with this file
-  // and can't open it" is detecting; it's a hard failure, not just a repairable warning, because
-  // the rebuilt drawing part doesn't actually match what the worksheet and its own internal
-  // shape IDs expect. ExcelJS doesn't expose a public way to drop images before writing (no
-  // removeImage()), so this reaches into the worksheet's internal media list directly -- the
-  // roster file has no drawings of this kind (its VML comment-indicator drawing is a different,
-  // unrelated mechanism that already round-trips correctly), so this is a no-op there.
-  function stripBrokenDrawings(workbook) {
-    workbook.worksheets.forEach((ws) => {
-      if (Array.isArray(ws._media)) ws._media = [];
-    });
+    return { rosterPatches, taskPatches };
   }
 
   return {
     dateKey, addDays, isAvailable, classifyCode,
-    parseRoster, parseTaskProgram, assignSimple, applyAssignments,
-    stripDanglingExternalRefs, stripBrokenDrawings,
+    parseRoster, parseTaskProgram, assignSimple, buildPatches,
   };
 });

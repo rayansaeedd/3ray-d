@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Driver Task Assignment — Madinah Station</title>
 <script src="vendor/exceljs.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
 <script src="driver_assignment_engine.js"></script>
+<script src="xlsx_surgical_patch.js"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
@@ -157,9 +159,16 @@
   const summaryCard = document.getElementById("summaryCard");
   const summaryTable = document.getElementById("summaryTable");
 
-  let taskWorkbook = null, taskFileName = null;
-  let rosterWorkbook = null, rosterFileName = null;
+  // taskWorkbook/rosterWorkbook (ExcelJS) are read-only -- used only to understand the file's
+  // structure (parseRoster/parseTaskProgram). The actual write path never touches them; it
+  // patches taskArrayBuffer/rosterArrayBuffer (the original raw bytes) directly via
+  // xlsx_surgical_patch.js, since asking ExcelJS to serialize these files back out is what
+  // corrupted earlier attempts (dropped external-link formulas left dangling, and a real
+  // drawing rebuilt as a broken stub that made the file unopenable).
+  let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
+  let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
   let plan = null;
+  let patchedTaskBuffer = null, patchedRosterBuffer = null;
 
   function setStatus(msg, isError) {
     statusLine.textContent = msg || "";
@@ -186,15 +195,20 @@
   async function loadWorkbook(file) {
     const buf = await file.arrayBuffer();
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.load(buf);
-    return wb;
+    // ExcelJS mutates/detaches the buffer it's given while parsing, so hand it a copy and keep
+    // the original untouched -- the untouched one is what the surgical patcher needs later.
+    await wb.xlsx.load(buf.slice(0));
+    return { wb, buf };
   }
 
   wireDropzone(taskDropzone, taskFileInput, taskBrowseLink, async (file) => {
     try {
       setStatus("Reading " + file.name + "...");
-      taskWorkbook = await loadWorkbook(file);
+      const loaded = await loadWorkbook(file);
+      taskWorkbook = loaded.wb;
+      taskArrayBuffer = loaded.buf;
       taskFileName = file.name;
+      patchedTaskBuffer = null;
       taskLoadedLabel.textContent = `Loaded: ${file.name} (${taskWorkbook.worksheets.length} sheet${taskWorkbook.worksheets.length === 1 ? "" : "s"})`;
       setStatus("");
       updateGenerateEnabled();
@@ -207,8 +221,11 @@
   wireDropzone(rosterDropzone, rosterFileInput, rosterBrowseLink, async (file) => {
     try {
       setStatus("Reading " + file.name + "...");
-      rosterWorkbook = await loadWorkbook(file);
+      const loaded = await loadWorkbook(file);
+      rosterWorkbook = loaded.wb;
+      rosterArrayBuffer = loaded.buf;
       rosterFileName = file.name;
+      patchedRosterBuffer = null;
       const data = E.parseRoster(rosterWorkbook);
       rosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
       setStatus("");
@@ -220,8 +237,9 @@
     }
   });
 
-  generateBtn.addEventListener("click", () => {
+  generateBtn.addEventListener("click", async () => {
     try {
+      generateBtn.disabled = true;
       const [y, m, d] = startDateInput.value.split("-").map((x) => parseInt(x, 10));
       const startDate = new Date(y, m - 1, d);
 
@@ -230,18 +248,15 @@
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file.");
 
       plan = E.assignSimple(rosterData, taskDays);
-      E.applyAssignments(rosterWorkbook, taskWorkbook, plan);
-      // Both real files use formulas linked to an external workbook (e.g. a VLOOKUP into the
-      // roster) that this vendored ExcelJS build can't preserve through a write -- left as-is,
-      // those formulas end up dangling and Excel flags the file as needing repair. Freezing them
-      // into their last cached value (the same thing Excel was already displaying) avoids that.
-      E.stripDanglingExternalRefs(rosterWorkbook);
-      E.stripDanglingExternalRefs(taskWorkbook);
-      // The Task Program's drawing shapes can't survive an ExcelJS write intact -- see the
-      // engine's comment on stripBrokenDrawings for the full story. Without this, the file
-      // fails to open at all in real Excel, not just a repairable warning.
-      E.stripBrokenDrawings(rosterWorkbook);
-      E.stripBrokenDrawings(taskWorkbook);
+      const { rosterPatches, taskPatches } = E.buildPatches(plan);
+
+      // Surgical edit: only the exact cells being changed get touched, in the ORIGINAL file's
+      // own bytes -- everything else (styles, drawings, formulas, comments, printer settings)
+      // passes through completely unchanged, which is what actually keeps these real files
+      // openable (see xlsx_surgical_patch.js for why asking a library to rebuild the whole file
+      // isn't safe for these specific files).
+      patchedRosterBuffer = await XlsxSurgicalPatch.applyCellPatches(rosterArrayBuffer, rosterPatches);
+      patchedTaskBuffer = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
 
       renderSummary(plan);
       taskDownloadBtn.disabled = false;
@@ -250,6 +265,8 @@
     } catch (err) {
       console.error(err);
       setStatus("Could not generate: " + err.message, true);
+    } finally {
+      generateBtn.disabled = false;
     }
   });
 
@@ -267,22 +284,20 @@
     summaryCard.style.display = "block";
   }
 
-  function downloadWorkbook(workbook, fileName) {
-    workbook.xlsx.writeBuffer().then((buf) => {
-      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    });
+  function downloadBuffer(buf, fileName) {
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
-  taskDownloadBtn.addEventListener("click", () => downloadWorkbook(taskWorkbook, taskFileName));
-  rosterDownloadBtn.addEventListener("click", () => downloadWorkbook(rosterWorkbook, rosterFileName));
+  taskDownloadBtn.addEventListener("click", () => downloadBuffer(patchedTaskBuffer, taskFileName));
+  rosterDownloadBtn.addEventListener("click", () => downloadBuffer(patchedRosterBuffer, rosterFileName));
 })();
 </script>
 </body>
