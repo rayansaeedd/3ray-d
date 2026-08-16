@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Driver Task Assignment — Madinah Station</title>
+<script src="vendor/exceljs.min.js"></script>
+<script src="driver_assignment_engine.js"></script>
+<style>
+  :root {
+    --blue: #4472C4; --green: #70AD47; --red: #C00000;
+    --ink: #0E6E63; --line: #14181C; --stripe: #EAF3EA; --paper: #FFFFFF; --border: #d7dbe3;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; background: #f4f5f7; color: #1a1d24; }
+  header { background: var(--ink); color: #fff; padding: 18px 28px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+  main { max-width: 1080px; margin: 24px auto; padding: 0 20px 60px; }
+
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .note { font-size: 11px; color: #888; margin-top: 6px; }
+
+  .stage-banner {
+    background: #fff8e6; border: 1px solid #f0d68a; border-radius: 8px; padding: 10px 14px;
+    font-size: 12px; color: #7a5c00; margin-bottom: 18px;
+  }
+
+  label.field { font-size: 12px; color: #555; font-weight: 700; display: flex; flex-direction: column; gap: 4px; max-width: 220px; }
+  input[type=date] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+
+  .drop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .drop-grid { grid-template-columns: 1fr; } }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; background: #fbfbfd;
+    padding: 30px 16px; text-align: center; color: #666; transition: all .15s ease; cursor: pointer;
+  }
+  .dropzone.drag-over { border-color: var(--ink); background: #eafaf7; color: var(--ink); }
+  .dropzone .icon { font-size: 30px; margin-bottom: 6px; }
+  .dropzone .hint { font-size: 11px; margin-top: 6px; color: #999; }
+  .dropzone input[type=file] { display: none; }
+  .browse-link { color: var(--ink); text-decoration: underline; cursor: pointer; }
+  .drop-loaded { font-size: 12px; font-weight: 700; color: var(--ink); margin-top: 10px; }
+  .drop-actions { margin-top: 12px; display: flex; justify-content: center; }
+
+  button.primary {
+    background: var(--ink); color: #fff; border: 2px solid var(--line); padding: 9px 18px; border-radius: 8px;
+    font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 3px 3px 0 var(--line);
+    transition: transform .1s ease, box-shadow .1s ease;
+  }
+  button.primary:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--line); }
+  button.primary:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--line); }
+  button.primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; }
+  button.plain {
+    background: none; border: 1.5px solid var(--border); border-radius: 6px; padding: 8px 14px;
+    font-weight: 700; font-size: 12px; cursor: pointer;
+  }
+
+  .generate-row { display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
+
+  .summary-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .summary-table th, .summary-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
+  .summary-table th { background: #f0f1f4; }
+  .summary-table td.warn { color: var(--red); font-weight: 700; }
+
+  .status-line { font-size: 12px; color: #666; margin-top: 10px; }
+  .status-line.error { color: var(--red); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Driver Task Assignment — Madinah Station</h1>
+  <div class="sub">Stage 1: drop the Task Program and Roster files, set a start date, and generate -- assigns available drivers to blank task slots and writes the results into both files.</div>
+</header>
+
+<main>
+  <div class="stage-banner">
+    <strong>Stage 1 of this engine.</strong> This does a straightforward available-driver-to-task assignment
+    (no shift rotation, ratio balancing, or rest-time rules yet -- that's Stage 2). Right now it proves the
+    core loop: read both real files with formatting intact, assign, write back, download unchanged except for
+    the driver names/task codes.
+  </div>
+
+  <div class="card">
+    <h2>1. Schedule start date</h2>
+    <label class="field">First day this Task Program covers
+      <input type="date" id="startDate" />
+    </label>
+    <div class="note">Each tab in the Task Program file is treated as one consecutive day starting from this date, in the order the tabs appear in the workbook.</div>
+  </div>
+
+  <div class="card">
+    <h2>2. Drop your files</h2>
+    <div class="drop-grid">
+      <div>
+        <div class="dropzone" id="taskDropzone">
+          <div class="icon">&#8595;</div>
+          <div><strong>Task Program</strong></div>
+          <div class="hint">Drop the .xlsx file here, or <span class="browse-link" id="taskBrowseLink">browse</span>.</div>
+          <input type="file" id="taskFileInput" accept=".xlsx" />
+        </div>
+        <div class="drop-loaded" id="taskLoadedLabel"></div>
+        <div class="drop-actions">
+          <button type="button" class="plain" id="taskDownloadBtn" disabled>Download Task Program as Excel</button>
+        </div>
+      </div>
+      <div>
+        <div class="dropzone" id="rosterDropzone">
+          <div class="icon">&#8595;</div>
+          <div><strong>Roster</strong></div>
+          <div class="hint">Drop the .xlsx file here, or <span class="browse-link" id="rosterBrowseLink">browse</span>.</div>
+          <input type="file" id="rosterFileInput" accept=".xlsx" />
+        </div>
+        <div class="drop-loaded" id="rosterLoadedLabel"></div>
+        <div class="drop-actions">
+          <button type="button" class="plain" id="rosterDownloadBtn" disabled>Download Roster as Excel</button>
+        </div>
+      </div>
+    </div>
+    <div class="generate-row">
+      <button type="button" class="primary" id="generateBtn" disabled>Generate</button>
+      <span class="status-line" id="statusLine"></span>
+    </div>
+  </div>
+
+  <div class="card" id="summaryCard" style="display:none;">
+    <h2>3. Result</h2>
+    <table class="summary-table" id="summaryTable"></table>
+    <div class="note">"Unassigned tasks" = more task slots than available drivers that day. "Unassigned drivers" = more available drivers than task slots (nobody forced onto Reserve yet -- Stage 2).</div>
+  </div>
+</main>
+
+<script>
+(function () {
+  const STATION = "MAD";
+  const E = window.DriverAssignmentEngine;
+
+  const startDateInput = document.getElementById("startDate");
+  const taskDropzone = document.getElementById("taskDropzone");
+  const taskFileInput = document.getElementById("taskFileInput");
+  const taskBrowseLink = document.getElementById("taskBrowseLink");
+  const taskLoadedLabel = document.getElementById("taskLoadedLabel");
+  const taskDownloadBtn = document.getElementById("taskDownloadBtn");
+  const rosterDropzone = document.getElementById("rosterDropzone");
+  const rosterFileInput = document.getElementById("rosterFileInput");
+  const rosterBrowseLink = document.getElementById("rosterBrowseLink");
+  const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
+  const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
+  const generateBtn = document.getElementById("generateBtn");
+  const statusLine = document.getElementById("statusLine");
+  const summaryCard = document.getElementById("summaryCard");
+  const summaryTable = document.getElementById("summaryTable");
+
+  let taskWorkbook = null, taskFileName = null;
+  let rosterWorkbook = null, rosterFileName = null;
+  let plan = null;
+
+  function setStatus(msg, isError) {
+    statusLine.textContent = msg || "";
+    statusLine.className = "status-line" + (isError ? " error" : "");
+  }
+
+  function updateGenerateEnabled() {
+    generateBtn.disabled = !(taskWorkbook && rosterWorkbook && startDateInput.value);
+  }
+  startDateInput.addEventListener("change", updateGenerateEnabled);
+
+  function wireDropzone(zoneEl, inputEl, browseLinkEl, onFile) {
+    browseLinkEl.addEventListener("click", () => inputEl.click());
+    zoneEl.addEventListener("click", (e) => { if (e.target === zoneEl || zoneEl.contains(e.target)) inputEl.click(); });
+    inputEl.addEventListener("click", (e) => e.stopPropagation());
+    inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
+    ["dragenter", "dragover"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.add("drag-over"); }));
+    ["dragleave", "drop"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.remove("drag-over"); }));
+    zoneEl.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+  }
+
+  async function loadWorkbook(file) {
+    const buf = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    return wb;
+  }
+
+  wireDropzone(taskDropzone, taskFileInput, taskBrowseLink, async (file) => {
+    try {
+      setStatus("Reading " + file.name + "...");
+      taskWorkbook = await loadWorkbook(file);
+      taskFileName = file.name;
+      taskLoadedLabel.textContent = `Loaded: ${file.name} (${taskWorkbook.worksheets.length} sheet${taskWorkbook.worksheets.length === 1 ? "" : "s"})`;
+      setStatus("");
+      updateGenerateEnabled();
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  wireDropzone(rosterDropzone, rosterFileInput, rosterBrowseLink, async (file) => {
+    try {
+      setStatus("Reading " + file.name + "...");
+      rosterWorkbook = await loadWorkbook(file);
+      rosterFileName = file.name;
+      const data = E.parseRoster(rosterWorkbook);
+      rosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
+      setStatus("");
+      updateGenerateEnabled();
+    } catch (err) {
+      console.error(err);
+      rosterWorkbook = null;
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  generateBtn.addEventListener("click", () => {
+    try {
+      const [y, m, d] = startDateInput.value.split("-").map((x) => parseInt(x, 10));
+      const startDate = new Date(y, m - 1, d);
+
+      const rosterData = E.parseRoster(rosterWorkbook);
+      const taskDays = E.parseTaskProgram(taskWorkbook, startDate);
+      if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file.");
+
+      plan = E.assignSimple(rosterData, taskDays);
+      E.applyAssignments(rosterWorkbook, taskWorkbook, plan);
+
+      renderSummary(plan);
+      taskDownloadBtn.disabled = false;
+      rosterDownloadBtn.disabled = false;
+      setStatus(`Generated ${plan.perDay.length} day(s). Download both files below.`);
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not generate: " + err.message, true);
+    }
+  });
+
+  function renderSummary(plan) {
+    const rows = plan.perDay.map((d) => `
+      <tr>
+        <td>${d.date.toISOString().slice(0, 10)}</td>
+        <td>${d.assignments.length}</td>
+        <td class="${d.unassignedTasks.length ? "warn" : ""}">${d.unassignedTasks.length}</td>
+        <td class="${d.unassignedDrivers.length ? "warn" : ""}">${d.unassignedDrivers.length}</td>
+      </tr>`).join("");
+    summaryTable.innerHTML = `
+      <tr><th>Date</th><th>Assigned</th><th>Unassigned tasks</th><th>Unassigned drivers</th></tr>
+      ${rows}`;
+    summaryCard.style.display = "block";
+  }
+
+  function downloadWorkbook(workbook, fileName) {
+    workbook.xlsx.writeBuffer().then((buf) => {
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  taskDownloadBtn.addEventListener("click", () => downloadWorkbook(taskWorkbook, taskFileName));
+  rosterDownloadBtn.addEventListener("click", () => downloadWorkbook(rosterWorkbook, rosterFileName));
+})();
+</script>
+</body>
+</html>
