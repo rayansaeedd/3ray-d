@@ -230,8 +230,38 @@
     });
   }
 
+  // Both real files are riddled with formulas that reference an external linked workbook (e.g.
+  // "=VLOOKUP(C8,[1]OCT!$H$5:$AM$104,32,)", or the roster's identity columns pulling from a
+  // master "JAN" sheet) -- confirmed by unzipping the .xlsx: this vendored ExcelJS build drops
+  // the xl/externalLinks/* parts and the workbook's <externalReference> declaration on every
+  // single write, even with zero edits, but leaves the formula text in each cell still pointing
+  // at that now-undefined external reference. That mismatch is exactly what Excel's "we found a
+  // problem with some content" repair prompt is detecting -- it isn't specific to the cells this
+  // engine touches, so touching fewer cells wouldn't have avoided it.
+  //
+  // The fix: since ExcelJS can't be made to preserve external links through a write, every
+  // formula anywhere in the workbook that points at one gets frozen into its last cached result
+  // instead -- the exact same value Excel was already showing (a resolved name, a date, or a
+  // cached #N/A), just as a plain value instead of a now-dangling formula. That removes every
+  // dangling reference from the file rather than leaving some behind.
+  function stripDanglingExternalRefs(workbook) {
+    workbook.worksheets.forEach((ws) => {
+      ws.eachRow({ includeEmpty: false }, (row) => {
+        row.eachCell({ includeEmpty: false }, (cell) => {
+          const v = cell.value;
+          if (!v || typeof v !== "object" || v instanceof Date || !("formula" in v)) return;
+          if (typeof v.formula !== "string" || !/\[\d+\]/.test(v.formula)) return;
+          // A few of these have no cached result at all (never recalculated in the source
+          // file) -- displayValue() would leave those untouched since it only converts a
+          // formula object once it sees a "result" key, so handle the no-result case directly.
+          cell.value = "result" in v ? displayValue(cell) : null;
+        });
+      });
+    });
+  }
+
   return {
     dateKey, addDays, isAvailable, classifyCode,
-    parseRoster, parseTaskProgram, assignSimple, applyAssignments,
+    parseRoster, parseTaskProgram, assignSimple, applyAssignments, stripDanglingExternalRefs,
   };
 });

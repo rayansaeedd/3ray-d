@@ -231,6 +231,12 @@
 
       plan = E.assignSimple(rosterData, taskDays);
       E.applyAssignments(rosterWorkbook, taskWorkbook, plan);
+      // Both real files use formulas linked to an external workbook (e.g. a VLOOKUP into the
+      // roster) that this vendored ExcelJS build can't preserve through a write -- left as-is,
+      // those formulas end up dangling and Excel flags the file as needing repair. Freezing them
+      // into their last cached value (the same thing Excel was already displaying) avoids that.
+      E.stripDanglingExternalRefs(rosterWorkbook);
+      E.stripDanglingExternalRefs(taskWorkbook);
 
       renderSummary(plan);
       taskDownloadBtn.disabled = false;
