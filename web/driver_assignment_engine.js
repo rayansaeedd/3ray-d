@@ -275,14 +275,29 @@
     return minutes >= startMin || minutes < endMin;
   }
 
+  // Circular distance (in minutes, around a 1440-minute day) between two times of day.
+  function circularMinuteDist(a, b) {
+    const d = Math.abs(a - b) % 1440;
+    return Math.min(d, 1440 - d);
+  }
+
+  // A task's start time doesn't have to fall inside a configured shift's window to belong to
+  // that shift -- if every window is exact and a task starts in a genuine gap between two of
+  // them (e.g. a 03:00 task when the earliest shift opens at 03:30), it's assigned to whichever
+  // shift's window it's nearest to in clock time, by policy: "consider that the closest shift."
+  // An exact window match always wins outright; only a task in a true gap falls back to nearest.
   function classifyShiftForMinutes(conditions, minutes) {
     if (minutes == null) return null;
+    let bestIdx = null, bestDist = Infinity;
     for (let i = 0; i < conditions.shifts.length; i++) {
       const s = conditions.shifts[i];
       const startMin = parseHHMM(s.start), endMin = parseHHMM(s.end);
-      if (startMin != null && endMin != null && minutesInWindow(minutes, startMin, endMin)) return i;
+      if (startMin == null || endMin == null) continue;
+      if (minutesInWindow(minutes, startMin, endMin)) return i;
+      const dist = Math.min(circularMinuteDist(minutes, startMin), circularMinuteDist(minutes, endMin));
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
     }
-    return null;
+    return bestIdx;
   }
 
   // A driver's locked shift for a given date is computed purely from an anchor point (the date
@@ -372,7 +387,15 @@
         return gap >= conditions.restHours * 60;
       });
 
-      day.tasks.forEach((task) => {
+      // Policy: trip (and sweep) tasks are filled before reserve tasks whenever the day's
+      // driver pool runs short -- "make priority to the trip tasks... a reserve task can have
+      // no driver assigned... make sure the trip task always filled." Processing every
+      // non-reserve task first, reserve tasks last, is what makes a scarce driver pool exhaust
+      // itself on reserve tasks rather than on trips. Only the processing order changes here --
+      // day.tasks itself (and its row/col patch targets) is untouched.
+      const orderedTasks = day.tasks.filter((t) => t.kind !== "reserve").concat(day.tasks.filter((t) => t.kind === "reserve"));
+
+      orderedTasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
 
