@@ -146,6 +146,14 @@
   // is carried through by JSZip unchanged.
   async function applyCellPatches(originalArrayBuffer, patchesBySheetIndex) {
     const zip = await JSZip.loadAsync(originalArrayBuffer);
+    // Real .xlsx files (including every one this engine has been tested against) don't carry
+    // explicit directory entries -- a part's path implies its folders, nothing more. Capture the
+    // original entry list before any edits, since JSZip's file() silently synthesizes folder
+    // placeholder entries (e.g. "xl/", "xl/worksheets/") for any nested path it's asked to set,
+    // even when that exact file already existed at that path. Left in, those become a genuine
+    // structural difference from the original package -- confirmed as the actual cause of a real
+    // "can't open this file" failure, not just a cosmetic one.
+    const originalNames = new Set(Object.keys(zip.files));
     const sheetParts = await getSheetPartNames(zip);
 
     for (const sheetIndexStr of Object.keys(patchesBySheetIndex)) {
@@ -157,6 +165,14 @@
         xml = patchCellInSheetXml(xml, cellAddress(row, col), value);
       }
       zip.file(partName, xml);
+    }
+
+    // Deleting straight from the internal map (not zip.remove(), which recursively deletes
+    // everything nested under a folder path -- "xl/" is the parent of nearly the whole package,
+    // so calling remove() on it would wipe out real content, not just the phantom placeholder).
+    for (const name of Object.keys(zip.files)) {
+      const entry = zip.files[name];
+      if (entry && entry.dir && !originalNames.has(name)) delete zip.files[name];
     }
 
     return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
