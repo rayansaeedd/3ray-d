@@ -75,6 +75,29 @@
     return "trip";
   }
 
+  // The first letter of a trip code's suffix names its destination -- confirmed directly by the
+  // supervisor: L = MAK (Makkah), A = KAIA (the airport), M = MAD (Madinah). Only meaningful for
+  // "trip" kind codes (reserve/sweep codes use R/S for that same position to mean something
+  // else entirely, handled by classifyCode above).
+  function classifyDestination(code) {
+    const m = /^(\d{3,4})\/(\d{1,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    if (!m) return null;
+    const first = m[3][0].toUpperCase();
+    if (first === "L") return "MAK";
+    if (first === "A") return "KAIA";
+    if (first === "M") return "MAD";
+    return null;
+  }
+
+  // A task's cell being highlighted yellow in the Task Program is how the supervisor marks that
+  // specific leg as a Passenger assignment (as opposed to Main/driving) -- confirmed directly.
+  function isPassengerLegCell(cell) {
+    const fill = cell.fill;
+    if (!fill || fill.type !== "pattern" || fill.pattern !== "solid") return false;
+    const argb = fill.fgColor && fill.fgColor.argb;
+    return typeof argb === "string" && argb.toUpperCase().endsWith("FFFF00");
+  }
+
   // Finds a header row by scanning for an exact (case-insensitive) label match rather than
   // assuming fixed row/column numbers -- the real files aren't guaranteed to keep the same
   // layout from month to month, only the same labels.
@@ -185,12 +208,16 @@
       const date = addDays(startDate, idx);
       const tasks = [];
       for (let r = tasksCell.row + 1; r <= ws.rowCount; r++) {
-        const raw = displayValue(ws.getRow(r).getCell(tasksCell.col));
+        const taskCell = ws.getRow(r).getCell(tasksCell.col);
+        const raw = displayValue(taskCell);
         const code = typeof raw === "string" ? raw.trim() : null;
         if (code && /^\d{3,4}\/\d{1,2}[A-Za-z]{1,3}$/.test(code)) {
           const startMin = startCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(startCell.col))) : null;
           const endMin = endCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(endCell.col))) : null;
-          tasks.push({ row: r, code, kind: classifyCode(code), startMin, endMin });
+          tasks.push({
+            row: r, code, kind: classifyCode(code), destination: classifyDestination(code),
+            startMin, endMin, isPassengerLeg: isPassengerLegCell(taskCell),
+          });
         }
       }
       days.push({
@@ -355,8 +382,31 @@
   // lastDutyEndMin, recentKinds: [] } } -- passed in and mutated in place so the caller can
   // persist it (e.g. to localStorage per station) and hand it back in on the next run to
   // continue every driver's rotation/rest-time/ratio history instead of restarting cold.
-  function assignWithConditions(rosterData, taskDays, conditions, rotationState) {
+  // specialRules (optional): per-driver overrides layered on top of the general rules, e.g. a
+  // named driver who should never take a sweep, or should be steered toward/away from trips to
+  // a particular destination. Each entry: { match(driver) => bool, excludeKinds: [...],
+  // tripDestinationBias: {KAIA:n, MAK:n, MAD:n}, passengerLegBonus: {KAIA:n, MAK:n, MAD:n} }.
+  // excludeKinds is a hard filter (that driver is never even a candidate for that task kind);
+  // the bias fields are soft nudges added to the normal ratio-preference sort score, so they
+  // steer selection without ever overriding the hard rest-time rule or leaving a task unfilled
+  // when this driver was the only option.
+  function isExcludedBySpecialRule(driver, task, specialRules) {
+    return specialRules.some((rule) => rule.match(driver) && rule.excludeKinds && rule.excludeKinds.includes(task.kind));
+  }
+  function specialRuleBias(driver, task, specialRules) {
+    if (task.kind !== "trip" || !task.destination) return 0;
+    let bias = 0;
+    specialRules.forEach((rule) => {
+      if (!rule.match(driver)) return;
+      if (rule.tripDestinationBias) bias += rule.tripDestinationBias[task.destination] || 0;
+      if (task.isPassengerLeg && rule.passengerLegBonus) bias += rule.passengerLegBonus[task.destination] || 0;
+    });
+    return bias;
+  }
+
+  function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
     const state = rotationState || {};
+    const rules = specialRules || [];
     const cycleLen = conditions.shifts.length;
     const perDay = taskDays.map((day) => {
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
@@ -385,6 +435,7 @@
       const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
 
       const restFilter = (list, task) => list.filter((d) => {
+        if (isExcludedBySpecialRule(d, task, rules)) return false;
         const st = state[d.id];
         if (st.lastDutyEndMin == null) return true;
         const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
@@ -427,14 +478,20 @@
           // this task's start time, so the relaxation degrades gracefully rather than picking
           // arbitrarily.
           restOk.sort((a, b) => {
-            const ratioDiff = ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind);
+            const scoreA = ratioPreference(state[a.id], conditions, wantKind) + specialRuleBias(a, task, rules);
+            const scoreB = ratioPreference(state[b.id], conditions, wantKind) + specialRuleBias(b, task, rules);
+            const ratioDiff = scoreB - scoreA;
             if (ratioDiff !== 0) return ratioDiff;
             const distA = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[a.id], conditions, day.date), shiftIdx, cycleLen);
             const distB = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[b.id], conditions, day.date), shiftIdx, cycleLen);
             return distA - distB;
           });
         } else {
-          restOk.sort((a, b) => ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind));
+          restOk.sort((a, b) => {
+            const scoreA = ratioPreference(state[a.id], conditions, wantKind) + specialRuleBias(a, task, rules);
+            const scoreB = ratioPreference(state[b.id], conditions, wantKind) + specialRuleBias(b, task, rules);
+            return scoreB - scoreA;
+          });
         }
         const chosen = restOk[0];
 
@@ -656,7 +713,7 @@
   }
 
   return {
-    dateKey, addDays, isAvailable, classifyCode,
+    dateKey, addDays, isAvailable, classifyCode, classifyDestination,
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,

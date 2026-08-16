@@ -243,6 +243,28 @@
   const STATION = "MAK";
   const E = window.DriverAssignmentEngine;
 
+  // Per-driver overrides, requested for this station specifically. Gating on STATION here (not
+  // splitting into a separate file) is what keeps this out of the Makkah page: mad.html and
+  // mak.html are otherwise identical (generated from each other), so STATION === "MAD" is what
+  // actually scopes this rule to Madinah instead of a second copy-paste divergence to maintain.
+  const SPECIAL_RULES = STATION === "MAD" ? [
+    {
+      // Rayan Saud Saeed: never on a sweep run; steered toward KAIA trips over MAK trips when he
+      // does get a trip; and if a MAK trip is what he ends up with, prefer one where the cell is
+      // marked Passenger (one leg Main, one leg Passenger) over an all-Main MAK trip. These are
+      // soft nudges on top of the normal rest-time/ratio rules -- they never leave a task
+      // unfilled just because he was the only remaining candidate, except the sweep exclusion,
+      // which is a hard rule (he is simply never a candidate for a sweep task).
+      match: (driver) => {
+        const n = (driver.name || "").toUpperCase();
+        return n.includes("RAYAN") && n.includes("SAUD") && n.includes("SAEED");
+      },
+      excludeKinds: ["sweep"],
+      tripDestinationBias: { KAIA: 2, MAK: -0.6 },
+      passengerLegBonus: { MAK: 1.4 },
+    },
+  ] : [];
+
   const startDateInput = document.getElementById("startDate");
   const endDateInput = document.getElementById("endDate");
   const conditionsView = document.getElementById("conditionsView");
@@ -560,7 +582,7 @@
       // the same object. This run's result is NOT saved anywhere automatically; it only becomes
       // this station's granted memory for a future run if the supervisor explicitly clicks
       // "Grant" below, after reviewing the result.
-      const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState);
+      const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState, SPECIAL_RULES);
       plan = result;
       rotationState = result.rotationState;
 
