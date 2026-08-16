@@ -395,6 +395,68 @@
     return { perDay, rotationState: state };
   }
 
+  // Per-driver, per-week breakdown of shift + trip/reserve/sweep counts for a generated run --
+  // the reference the supervisor asked for so a following month's Generate can be run with an
+  // eye on fairness (whoever got more trips this run can deliberately get more reserve next
+  // time). Weeks are plain 7-day blocks starting from the first day actually processed, labeled
+  // with real dates rather than trying to replicate calendar week boundaries.
+  function buildMonthlySummary(plan, conditions, rotationState) {
+    const days = plan.perDay;
+    if (!days.length) return { weeks: [], driverSummaries: [] };
+
+    const weeks = [];
+    for (let i = 0; i < days.length; i += 7) {
+      const chunk = days.slice(i, i + 7);
+      weeks.push({ index: weeks.length, startDateKey: chunk[0].dateKey, endDateKey: chunk[chunk.length - 1].dateKey, days: chunk });
+    }
+
+    const byDriver = {};
+    function ensure(driver) {
+      if (!byDriver[driver.id]) {
+        byDriver[driver.id] = {
+          driver,
+          weeks: weeks.map(() => ({ shiftIndexes: new Set(), tripCount: 0, reserveCount: 0, sweepCount: 0 })),
+        };
+      }
+      return byDriver[driver.id];
+    }
+
+    weeks.forEach((week, wi) => {
+      week.days.forEach((day) => {
+        day.assignments.forEach(({ task, driver }) => {
+          const wk = ensure(driver).weeks[wi];
+          if (task.kind === "reserve") wk.reserveCount++;
+          else if (task.kind === "sweep") wk.sweepCount++;
+          else wk.tripCount++;
+          const st = rotationState[driver.id];
+          const shiftIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+          if (shiftIdx != null) wk.shiftIndexes.add(shiftIdx);
+        });
+      });
+    });
+
+    const driverSummaries = Object.values(byDriver)
+      .map((rec) => ({
+        driverId: rec.driver.id,
+        name: rec.driver.name,
+        totalTrips: rec.weeks.reduce((s, w) => s + w.tripCount, 0),
+        totalReserve: rec.weeks.reduce((s, w) => s + w.reserveCount, 0),
+        totalSweep: rec.weeks.reduce((s, w) => s + w.sweepCount, 0),
+        weeks: rec.weeks.map((wk) => ({
+          shiftNames: [...wk.shiftIndexes].map((i) => conditions.shifts[i].name),
+          tripCount: wk.tripCount,
+          reserveCount: wk.reserveCount,
+          sweepCount: wk.sweepCount,
+        })),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+      weeks: weeks.map((w) => ({ index: w.index, startDateKey: w.startDateKey, endDateKey: w.endDateKey })),
+      driverSummaries,
+    };
+  }
+
   // Converts a plan into plain {row, col, value} patch lists, grouped by sheet index, ready for
   // xlsx_surgical_patch.js's applyCellPatches() -- deliberately NOT an ExcelJS workbook mutation.
   // Earlier versions of this engine wrote assignments directly into a live ExcelJS workbook and
@@ -421,5 +483,6 @@
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
+    buildMonthlySummary,
   };
 });

@@ -114,6 +114,12 @@
     background: none; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 16px;
     font-weight: 700; font-size: 13px; cursor: pointer;
   }
+
+  .table-scroll { overflow-x: auto; }
+  #monthlySummaryTable { white-space: nowrap; }
+  #monthlySummaryTable th, #monthlySummaryTable td { font-size: 11px; padding: 5px 7px; }
+  #monthlySummaryTable td.shift-name { color: #555; font-size: 10px; }
+  #monthlySummaryTable td.totals { font-weight: 700; background: #f7f8fa; }
 </style>
 </head>
 <body>
@@ -185,6 +191,15 @@
     <table class="summary-table" id="summaryTable"></table>
     <div class="note">"Unassigned tasks" = the rest-time rule or the shift window ruled out every available driver that day (a hard limit, never bent). "Unassigned drivers" = nobody in their locked shift had a matching task.</div>
   </div>
+
+  <div class="card" id="monthlySummaryCard" style="display:none;">
+    <h2>5. Monthly summary -- shift &amp; trip/reserve load per driver</h2>
+    <div class="note">Keep this as a reference for next month -- if someone got more trips this run, lean their reserve/trip mix the other way next time.</div>
+    <div class="table-scroll"><table class="summary-table" id="monthlySummaryTable"></table></div>
+    <div class="drop-actions" style="margin-top:14px;">
+      <button type="button" class="plain" id="monthlySummaryDownloadBtn">Download Monthly Summary as Excel</button>
+    </div>
+  </div>
 </main>
 
 <div id="confirmEditOverlay" class="driver-picker-overlay" style="display:none;">
@@ -228,6 +243,10 @@
   const statusLine = document.getElementById("statusLine");
   const summaryCard = document.getElementById("summaryCard");
   const summaryTable = document.getElementById("summaryTable");
+  const monthlySummaryCard = document.getElementById("monthlySummaryCard");
+  const monthlySummaryTable = document.getElementById("monthlySummaryTable");
+  const monthlySummaryDownloadBtn = document.getElementById("monthlySummaryDownloadBtn");
+  let lastMonthlySummary = null;
 
   // taskWorkbook/rosterWorkbook (ExcelJS) are read-only -- used only to understand the file's
   // structure (parseRoster/parseTaskProgram). The actual write path never touches them; it
@@ -466,6 +485,8 @@
       patchedTaskBuffer = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
 
       renderSummary(plan);
+      lastMonthlySummary = E.buildMonthlySummary(plan, conditions, rotationState);
+      renderMonthlySummary(lastMonthlySummary);
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
       setStatus(`Generated ${plan.perDay.length} day(s). Download both files below.`);
@@ -490,6 +511,75 @@
       ${rows}`;
     summaryCard.style.display = "block";
   }
+
+  function renderMonthlySummary(summary) {
+    if (!summary.weeks.length) { monthlySummaryCard.style.display = "none"; return; }
+    const weekHeaders = summary.weeks.map((w) => `<th colspan="3">Week ${w.index + 1} (${w.startDateKey} to ${w.endDateKey})</th>`).join("");
+    const weekSubHeaders = summary.weeks.map(() => `<th>Shift</th><th>Trips</th><th>Reserve</th>`).join("");
+    const rows = summary.driverSummaries.map((d) => {
+      const weekCells = d.weeks.map((w) => `
+        <td class="shift-name">${w.shiftNames.join(", ") || "--"}</td>
+        <td>${w.tripCount}</td>
+        <td>${w.reserveCount}</td>`).join("");
+      return `<tr><td>${d.name}</td><td>${d.driverId}</td>${weekCells}<td class="totals">${d.totalTrips}</td><td class="totals">${d.totalReserve}</td></tr>`;
+    }).join("");
+    monthlySummaryTable.innerHTML = `
+      <tr><th rowspan="2">Driver</th><th rowspan="2">ID</th>${weekHeaders}<th colspan="2">Total</th></tr>
+      <tr>${weekSubHeaders}<th>Trips</th><th>Reserve</th></tr>
+      ${rows}`;
+    monthlySummaryCard.style.display = "block";
+  }
+
+  // A fresh workbook built from scratch, not an edit of an uploaded file -- ExcelJS's own writer
+  // is only unsafe for files it has to *reconstruct* from an existing complex package (that's
+  // what corrupted the Task Program/Roster earlier); building a brand new simple workbook has no
+  // such legacy content to lose, so this is exactly what ExcelJS is fine for.
+  async function buildSummaryWorkbookBlob(summary) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Monthly Summary");
+    const headerRow1 = ["Driver", "ID"];
+    const headerRow2 = ["", ""];
+    summary.weeks.forEach((w) => {
+      headerRow1.push(`Week ${w.index + 1} (${w.startDateKey} to ${w.endDateKey})`, "", "");
+      headerRow2.push("Shift", "Trips", "Reserve");
+    });
+    headerRow1.push("Total", "");
+    headerRow2.push("Trips", "Reserve");
+    ws.addRow(headerRow1);
+    ws.addRow(headerRow2);
+    ws.mergeCells(1, 1, 2, 1);
+    ws.mergeCells(1, 2, 2, 2);
+    summary.weeks.forEach((w, i) => ws.mergeCells(1, 3 + i * 3, 1, 5 + i * 3));
+    const totalCol = 3 + summary.weeks.length * 3;
+    ws.mergeCells(1, totalCol, 1, totalCol + 1);
+    [1, 2].forEach((r) => ws.getRow(r).eachCell((cell) => {
+      cell.font = { bold: true, size: 10 };
+      cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF3EA" } };
+    }));
+    summary.driverSummaries.forEach((d) => {
+      const row = [d.name, d.driverId];
+      d.weeks.forEach((w) => row.push(w.shiftNames.join(", ") || "--", w.tripCount, w.reserveCount));
+      row.push(d.totalTrips, d.totalReserve);
+      ws.addRow(row);
+    });
+    ws.columns.forEach((col, i) => { col.width = i < 2 ? 26 : 12; });
+    const buf = await wb.xlsx.writeBuffer();
+    return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  monthlySummaryDownloadBtn.addEventListener("click", async () => {
+    if (!lastMonthlySummary) return;
+    const blob = await buildSummaryWorkbookBlob(lastMonthlySummary);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${STATION}_monthly_summary_${startDateInput.value}_to_${endDateInput.value}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 
   function downloadBuffer(buf, fileName) {
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
