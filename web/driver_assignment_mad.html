@@ -172,9 +172,11 @@
   startDateInput.addEventListener("change", updateGenerateEnabled);
 
   function wireDropzone(zoneEl, inputEl, browseLinkEl, onFile) {
+    // Only the "browse" link opens the file picker (matching order_b_scheduler.html's proven
+    // pattern) -- a second click handler on the whole zone used to also fire here, since the
+    // link is a descendant of the zone, double-invoking inputEl.click() for one click and
+    // breaking the native picker.
     browseLinkEl.addEventListener("click", () => inputEl.click());
-    zoneEl.addEventListener("click", (e) => { if (e.target === zoneEl || zoneEl.contains(e.target)) inputEl.click(); });
-    inputEl.addEventListener("click", (e) => e.stopPropagation());
     inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
     ["dragenter", "dragover"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.add("drag-over"); }));
     ["dragleave", "drop"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.remove("drag-over"); }));
