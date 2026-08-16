@@ -226,6 +226,69 @@
     });
   }
 
+  // Some Task Program files carry their actual trip-number/Main-Passenger data as floating
+  // shapes drawn over the grid (xl/drawings/drawingN.xml) rather than as plain cell values --
+  // confirmed directly against a real file: the "Tasks" column only has generic duty codes, but
+  // each row also has one or more small text-box shapes reading a real 5-digit trip number,
+  // filled bright yellow (srgbClr FFFF00) exactly when that leg is a Passenger assignment
+  // (anything else -- white, a theme background color, or no fill -- means Main). This is
+  // something ExcelJS's reader doesn't expose at all (it only understands plain images in a
+  // drawing part), which is why this needs to go straight at the raw XML like the rest of this
+  // module. Returns each sheet's drawing part name, resolved the same way getSheetPartNames()
+  // resolves worksheet parts: via each worksheet's own _rels file, not by assuming drawingN.xml
+  // lines up with sheet N.
+  async function getDrawingPartNames(zip) {
+    const sheetParts = await getSheetPartNames(zip);
+    const results = [];
+    for (const partName of sheetParts) {
+      const lastSlash = partName.lastIndexOf("/");
+      const relsPath = `${partName.slice(0, lastSlash)}/_rels/${partName.slice(lastSlash + 1)}.rels`;
+      const relsFile = zip.file(relsPath);
+      if (!relsFile) { results.push(null); continue; }
+      const relsXml = await relsFile.async("string");
+      const m = /<Relationship\b[^>]*Type="[^"]*\/drawing"[^>]*Target="([^"]+)"/.exec(relsXml);
+      if (!m) { results.push(null); continue; }
+      // Target is relative to the worksheet part's own directory (e.g. "../drawings/drawing17.xml").
+      const base = partName.slice(0, lastSlash);
+      const parts = base.split("/").concat(m[1].split("/"));
+      const resolved = [];
+      parts.forEach((p) => { if (p === "..") resolved.pop(); else if (p !== ".") resolved.push(p); });
+      results.push(resolved.join("/"));
+    }
+    return results;
+  }
+
+  // Returns the set of 1-indexed rows on the given sheet that have at least one Passenger-marked
+  // (yellow-filled) trip-number shape drawn on them -- a row can carry more than one trip-number
+  // shape (a duty made of more than one leg); this only asks "does this row have a Passenger leg
+  // at all", which is what the trip-priority preference actually needs to know.
+  async function findPassengerMarkedRows(zip, sheetIndex) {
+    const drawingParts = await getDrawingPartNames(zip);
+    const partName = drawingParts[sheetIndex];
+    const rows = new Set();
+    if (!partName) return rows;
+    const drawingFile = zip.file(partName);
+    if (!drawingFile) return rows;
+    const xml = await drawingFile.async("string");
+
+    const anchorRe = /<xdr:(?:twoCellAnchor|oneCellAnchor)\b[^>]*>([\s\S]*?)<\/xdr:(?:twoCellAnchor|oneCellAnchor)>/g;
+    let m;
+    while ((m = anchorRe.exec(xml))) {
+      const block = m[1];
+      const rowMatch = /<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/.exec(block);
+      if (!rowMatch) continue;
+
+      const text = (block.match(/<a:t>([^<]*)<\/a:t>/g) || []).map((t) => t.slice(5, -6)).join("").trim();
+      if (!/^\d{5}$/.test(text)) continue; // only real trip-number shapes carry this meaning
+
+      const spPrMatch = /<xdr:spPr\b[^>]*>([\s\S]*?)<\/xdr:spPr>/.exec(block);
+      const fillMatch = spPrMatch && /<a:solidFill><a:srgbClr val="([0-9A-Fa-f]{6})"/.exec(spPrMatch[1]);
+      const isYellow = !!fillMatch && fillMatch[1].toUpperCase() === "FFFF00";
+      if (isYellow) rows.add(parseInt(rowMatch[1], 10) + 1); // xdr:row is 0-indexed; cell rows are 1-indexed
+    }
+    return rows;
+  }
+
   // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true }, ...] }
   // A `flag: true` entry is style-only -- it recolors the cell (to whichever candidate color
   // pickIdleFlagColor() finds unused in this specific file) without touching whatever value is
@@ -286,5 +349,6 @@
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
     patchCellInSheetXml, patchCellStyleInSheetXml, ensureFillStyle,
     pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES,
+    getDrawingPartNames, findPassengerMarkedRows,
   };
 });

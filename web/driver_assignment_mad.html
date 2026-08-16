@@ -511,6 +511,20 @@
     return { wb, buf };
   }
 
+  // A real Task Program file's actual trip-number/Main-Passenger marking lives as floating
+  // shapes drawn over the grid (confirmed directly against a real file), which ExcelJS's reader
+  // never exposes -- ExcelJS only understands plain images in a drawing part. This reads the raw
+  // zip directly (the same way xlsx_surgical_patch.js already has to, for the same reason) and
+  // stamps isPassengerLeg onto whichever parsed tasks land on a Passenger-marked row.
+  async function markPassengerLegs(taskDays, arrayBuffer) {
+    const zip = await JSZip.loadAsync(arrayBuffer.slice(0));
+    for (const day of taskDays) {
+      const passengerRows = await XlsxSurgicalPatch.findPassengerMarkedRows(zip, day.sheetIndex);
+      if (!passengerRows.size) continue;
+      day.tasks.forEach((task) => { if (passengerRows.has(task.row)) task.isPassengerLeg = true; });
+    }
+  }
+
   wireDropzone(taskDropzone, taskFileInput, taskBrowseLink, async (file) => {
     try {
       setStatus("Reading " + file.name + "...");
@@ -576,6 +590,7 @@
       const rosterData = E.parseRoster(rosterWorkbook);
       const taskDays = E.parseTaskProgram(taskWorkbook, startDate);
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file.");
+      await markPassengerLegs(taskDays, taskArrayBuffer);
 
       // rotationState carries each driver's shift-lock anchor, last duty end time, and recent
       // reserve/trip history forward -- assignWithConditions mutates it in place and hands back
