@@ -72,29 +72,69 @@
 
   .status-line { font-size: 12px; color: #666; margin-top: 10px; }
   .status-line.error { color: var(--red); font-weight: 700; }
+
+  .date-range-row { display: flex; gap: 18px; flex-wrap: wrap; }
+
+  /* Conditions panel: a fixed "last saved" summary by default, with an Edit button that gates
+     behind a confirm popup (matching the click-to-edit pattern used elsewhere in this project)
+     before switching to the editable form. */
+  .conditions-summary-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+  .conditions-summary-table th, .conditions-summary-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
+  .conditions-summary-table th { background: #f0f1f4; }
+  .conditions-summary-table td.unset { color: var(--red); font-style: italic; }
+  .conditions-rules { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .conditions-rule { background: #f7f8fa; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+  .conditions-rule .label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .conditions-rule .value { font-weight: 700; font-size: 14px; margin-top: 2px; }
+  .conditions-rule .value.unset { color: var(--red); font-style: italic; font-size: 12px; }
+
+  .conditions-form-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px 14px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .conditions-form-grid { grid-template-columns: 1fr 1fr; } }
+  .conditions-form-grid label.field { max-width: none; }
+  .conditions-form-grid input[type=time] { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; width: 100%; }
+  .conditions-rules-form { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
+  .conditions-rules-form label.field input[type=number] {
+    width: 90px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+
+  .driver-picker-overlay {
+    position: fixed; inset: 0; background: rgba(20,24,36,.45); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .driver-picker-modal {
+    background: #fff; border-radius: 10px; width: 100%; max-width: 440px; max-height: 80vh;
+    padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  }
+  .driver-picker-header { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 14px; }
+  .driver-picker-close { border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: #888; }
+  .confirm-edit-modal { max-width: 380px; }
+  .confirm-edit-modal p { font-size: 13px; line-height: 1.5; margin: 0; }
+  .confirm-edit-modal .actions { margin-top: 4px; display: flex; gap: 10px; }
+  .confirm-edit-modal button.plain {
+    background: none; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 16px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+  }
 </style>
 </head>
 <body>
 
 <header>
   <h1>Driver Task Assignment — Madinah Station</h1>
-  <div class="sub">Stage 1: drop the Task Program and Roster files, set a start date, and generate -- assigns available drivers to blank task slots and writes the results into both files.</div>
+  <div class="sub">Set the schedule dates, drop the Task Program and Roster, set your conditions, and generate -- assigns drivers by shift rotation, reserve/trip ratio and rest-time rules, and writes the results into both files.</div>
 </header>
 
 <main>
-  <div class="stage-banner">
-    <strong>Stage 1 of this engine.</strong> This does a straightforward available-driver-to-task assignment
-    (no shift rotation, ratio balancing, or rest-time rules yet -- that's Stage 2). Right now it proves the
-    core loop: read both real files with formatting intact, assign, write back, download unchanged except for
-    the driver names/task codes.
-  </div>
-
   <div class="card">
-    <h2>1. Schedule start date</h2>
-    <label class="field">First day this Task Program covers
-      <input type="date" id="startDate" />
-    </label>
-    <div class="note">Each tab in the Task Program file is treated as one consecutive day starting from this date, in the order the tabs appear in the workbook.</div>
+    <h2>1. Schedule dates</h2>
+    <div class="date-range-row">
+      <label class="field">First day this Task Program covers
+        <input type="date" id="startDate" />
+      </label>
+      <label class="field">Last day
+        <input type="date" id="endDate" />
+      </label>
+    </div>
+    <div class="note">Each tab in the Task Program file is treated as one consecutive day starting from the first date, in the order the tabs appear in the workbook -- the last date is just used to confirm the range before you drop files.</div>
   </div>
 
   <div class="card">
@@ -125,6 +165,15 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Conditions</h2>
+    <div class="note">These have to be set before you can generate. They're remembered on this device -- come back and Edit any of them any time.</div>
+    <div id="conditionsView"></div>
+  </div>
+
+  <div class="card">
     <div class="generate-row">
       <button type="button" class="primary" id="generateBtn" disabled>Generate</button>
       <span class="status-line" id="statusLine"></span>
@@ -132,11 +181,25 @@
   </div>
 
   <div class="card" id="summaryCard" style="display:none;">
-    <h2>3. Result</h2>
+    <h2>4. Result</h2>
     <table class="summary-table" id="summaryTable"></table>
-    <div class="note">"Unassigned tasks" = more task slots than available drivers that day. "Unassigned drivers" = more available drivers than task slots (nobody forced onto Reserve yet -- Stage 2).</div>
+    <div class="note">"Unassigned tasks" = the rest-time rule or the shift window ruled out every available driver that day (a hard limit, never bent). "Unassigned drivers" = nobody in their locked shift had a matching task.</div>
   </div>
 </main>
+
+<div id="confirmEditOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal confirm-edit-modal">
+    <div class="driver-picker-header">
+      <span>Confirm edit</span>
+      <button type="button" id="confirmEditClose" class="driver-picker-close">&times;</button>
+    </div>
+    <p id="confirmEditMessage"></p>
+    <div class="actions">
+      <button class="primary" id="confirmEditYes">Yes, edit it</button>
+      <button type="button" class="plain" id="confirmEditNo">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function () {
@@ -144,6 +207,13 @@
   const E = window.DriverAssignmentEngine;
 
   const startDateInput = document.getElementById("startDate");
+  const endDateInput = document.getElementById("endDate");
+  const conditionsView = document.getElementById("conditionsView");
+  const confirmEditOverlay = document.getElementById("confirmEditOverlay");
+  const confirmEditMessage = document.getElementById("confirmEditMessage");
+  const confirmEditYes = document.getElementById("confirmEditYes");
+  const confirmEditNo = document.getElementById("confirmEditNo");
+  const confirmEditClose = document.getElementById("confirmEditClose");
   const taskDropzone = document.getElementById("taskDropzone");
   const taskFileInput = document.getElementById("taskFileInput");
   const taskBrowseLink = document.getElementById("taskBrowseLink");
@@ -175,10 +245,139 @@
     statusLine.className = "status-line" + (isError ? " error" : "");
   }
 
+  // --- Conditions: shifts/ratio/rest-time/shift-lock, persisted per station in this browser --
+  // Remembered here (not just for one run) is what lets a later Generate for the second half of
+  // a month continue every driver's rotation/rest-time/ratio history from where the first half
+  // left off, instead of restarting cold -- see rotationState below.
+  const CONDITIONS_KEY = "driverAssignmentConditions_" + STATION;
+  const ROTATION_KEY = "driverAssignmentRotationState_" + STATION;
+
+  function loadConditions() {
+    try {
+      const raw = localStorage.getItem(CONDITIONS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.shifts) && parsed.shifts.length === E.SHIFT_NAMES.length) return parsed;
+      }
+    } catch (err) { /* ignore, fall through to defaults */ }
+    return E.defaultConditions();
+  }
+  function saveConditions(c) {
+    try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(c)); } catch (err) { /* storage disabled -- won't persist */ }
+  }
+  function loadRotationState() {
+    try {
+      const raw = localStorage.getItem(ROTATION_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (err) { /* ignore */ }
+    return {};
+  }
+  function saveRotationState(state) {
+    try { localStorage.setItem(ROTATION_KEY, JSON.stringify(state)); } catch (err) { /* storage disabled -- won't persist */ }
+  }
+
+  let conditions = loadConditions();
+  let rotationState = loadRotationState();
+
+  // Click-to-edit-with-confirm, same pattern as order_b_scheduler.html: a stray click can't
+  // silently change conditions that a whole generated schedule depends on.
+  let _confirmEditResolve = null;
+  function confirmEdit(message) {
+    confirmEditMessage.textContent = message;
+    confirmEditOverlay.style.display = "flex";
+    return new Promise((resolve) => { _confirmEditResolve = resolve; });
+  }
+  function closeConfirmEdit(result) {
+    confirmEditOverlay.style.display = "none";
+    if (_confirmEditResolve) { const r = _confirmEditResolve; _confirmEditResolve = null; r(result); }
+  }
+  confirmEditYes.addEventListener("click", () => closeConfirmEdit(true));
+  confirmEditNo.addEventListener("click", () => closeConfirmEdit(false));
+  confirmEditClose.addEventListener("click", () => closeConfirmEdit(false));
+  confirmEditOverlay.addEventListener("click", (e) => { if (e.target === confirmEditOverlay) closeConfirmEdit(false); });
+
+  function fmtRatio(c) { return `${c.ratioReserveDays} reserve : ${c.ratioTripDays} trip`; }
+
+  function renderConditionsSummary() {
+    const shiftRows = conditions.shifts.map((s) => `
+      <tr>
+        <td>${s.name}</td>
+        <td class="${s.start ? "" : "unset"}">${s.start || "not set"}</td>
+        <td class="${s.end ? "" : "unset"}">${s.end || "not set"}</td>
+      </tr>`).join("");
+    conditionsView.innerHTML = `
+      <table class="conditions-summary-table">
+        <tr><th>Shift</th><th>Start</th><th>End</th></tr>
+        ${shiftRows}
+      </table>
+      <div class="conditions-rules">
+        <div class="conditions-rule"><div class="label">Ratio (soft)</div><div class="value">${fmtRatio(conditions)}</div></div>
+        <div class="conditions-rule"><div class="label">Rest between shifts (hard)</div><div class="value">${conditions.restHours}h</div></div>
+        <div class="conditions-rule"><div class="label">Weeks per shift before rotating</div><div class="value">${conditions.shiftLockWeeks}</div></div>
+      </div>
+      <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
+      ${E.conditionsAreComplete(conditions) ? "" : `<div class="note" style="color:var(--red);">Every shift needs a start and end time before you can generate.</div>`}
+    `;
+    document.getElementById("conditionsEditBtn").addEventListener("click", onEditConditionsClick);
+  }
+
+  function renderConditionsForm() {
+    const shiftRows = conditions.shifts.map((s, i) => `
+      <label class="field">${s.name}
+        <input type="time" data-shift-start="${i}" value="${s.start}" />
+      </label>
+      <label class="field">&nbsp;
+        <input type="time" data-shift-end="${i}" value="${s.end}" />
+      </label>`).join("");
+    conditionsView.innerHTML = `
+      <div class="conditions-form-grid">${shiftRows}</div>
+      <div class="conditions-rules-form">
+        <label class="field">Ratio -- reserve days <input type="number" min="0" id="cfRatioReserve" value="${conditions.ratioReserveDays}" /></label>
+        <label class="field">Ratio -- trip days <input type="number" min="0" id="cfRatioTrip" value="${conditions.ratioTripDays}" /></label>
+        <label class="field">Rest between shifts (hours) <input type="number" min="0" id="cfRestHours" value="${conditions.restHours}" /></label>
+        <label class="field">Weeks per shift before rotating <input type="number" min="1" step="1" id="cfLockWeeks" value="${conditions.shiftLockWeeks}" /></label>
+      </div>
+      <div class="actions" style="display:flex; gap:10px;">
+        <button type="button" class="primary" id="conditionsSaveBtn">Save conditions</button>
+        <button type="button" class="plain" id="conditionsCancelBtn">Cancel</button>
+      </div>
+    `;
+    document.getElementById("conditionsSaveBtn").addEventListener("click", onSaveConditionsClick);
+    document.getElementById("conditionsCancelBtn").addEventListener("click", renderConditionsSummary);
+  }
+
+  async function onEditConditionsClick() {
+    const ok = await confirmEdit("Edit the scheduling conditions? This changes how future Generate runs assign drivers for this station.");
+    if (ok) renderConditionsForm();
+  }
+
+  function onSaveConditionsClick() {
+    const shifts = conditions.shifts.map((s, i) => ({
+      name: s.name,
+      start: document.querySelector(`[data-shift-start="${i}"]`).value,
+      end: document.querySelector(`[data-shift-end="${i}"]`).value,
+    }));
+    const next = {
+      shifts,
+      ratioReserveDays: parseInt(document.getElementById("cfRatioReserve").value, 10) || 0,
+      ratioTripDays: parseInt(document.getElementById("cfRatioTrip").value, 10) || 0,
+      restHours: parseFloat(document.getElementById("cfRestHours").value) || 0,
+      shiftLockWeeks: parseInt(document.getElementById("cfLockWeeks").value, 10) || 1,
+    };
+    conditions = next;
+    saveConditions(conditions);
+    renderConditionsSummary();
+    updateGenerateEnabled();
+  }
+
+  renderConditionsSummary();
+
   function updateGenerateEnabled() {
-    generateBtn.disabled = !(taskWorkbook && rosterWorkbook && startDateInput.value);
+    const rangeOk = startDateInput.value && endDateInput.value && endDateInput.value >= startDateInput.value;
+    generateBtn.disabled = !(taskWorkbook && rosterWorkbook && rangeOk && E.conditionsAreComplete(conditions));
   }
   startDateInput.addEventListener("change", updateGenerateEnabled);
+  endDateInput.addEventListener("change", updateGenerateEnabled);
 
   function wireDropzone(zoneEl, inputEl, browseLinkEl, onFile) {
     // Only the "browse" link opens the file picker (matching order_b_scheduler.html's proven
@@ -247,7 +446,15 @@
       const taskDays = E.parseTaskProgram(taskWorkbook, startDate);
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file.");
 
-      plan = E.assignSimple(rosterData, taskDays);
+      // rotationState carries each driver's shift-lock anchor, last duty end time, and recent
+      // reserve/trip history forward -- assignWithConditions mutates it in place and hands back
+      // the same object, so persisting it here is what lets a later run (e.g. the second half of
+      // a month) continue every driver's rotation from exactly where this run left off.
+      const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState);
+      plan = result;
+      rotationState = result.rotationState;
+      saveRotationState(rotationState);
+
       const { rosterPatches, taskPatches } = E.buildPatches(plan);
 
       // Surgical edit: only the exact cells being changed get touched, in the ORIGINAL file's

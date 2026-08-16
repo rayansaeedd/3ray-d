@@ -156,6 +156,13 @@
     return { sheetName: ws.name, headerRow, staffCol, dateKeys: dateCols.map((d) => d.key), drivers };
   }
 
+  // Time-of-day cells (Start/End) load as native Date objects anchored to an arbitrary epoch
+  // (Excel's own "time-only" serial-date convention) -- only the hour/minute portion means
+  // anything, and it's UTC because that's how ExcelJS parses the underlying serial number.
+  function timeCellToMinutes(v) {
+    return v instanceof Date ? v.getUTCHours() * 60 + v.getUTCMinutes() : null;
+  }
+
   // --- Task Program parsing -----------------------------------------------------------------
   // One tab per day. The file's own date cells are inconsistent test placeholders (confirmed
   // with the supervisor) -- the authoritative date for each tab is startDate + its position in
@@ -168,6 +175,8 @@
       if (!tasksCell) return; // sheet doesn't look like a task-program day -- skip it
       const nameCell = findHeaderCell(ws, "NAME", 15);
       if (!nameCell) throw new Error(`Sheet "${ws.name}" has a "Tasks" column but no "NAME" column next to it.`);
+      const startCell = findHeaderCell(ws, "Start", 15);
+      const endCell = findHeaderCell(ws, "End", 15);
 
       const date = addDays(startDate, idx);
       const tasks = [];
@@ -175,7 +184,9 @@
         const raw = displayValue(ws.getRow(r).getCell(tasksCell.col));
         const code = typeof raw === "string" ? raw.trim() : null;
         if (code && /^\d{3,4}\/\d{1,2}[A-Za-z]{1,3}$/.test(code)) {
-          tasks.push({ row: r, code, kind: classifyCode(code) });
+          const startMin = startCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(startCell.col))) : null;
+          const endMin = endCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(endCell.col))) : null;
+          tasks.push({ row: r, code, kind: classifyCode(code), startMin, endMin });
         }
       }
       days.push({
@@ -215,6 +226,175 @@
     return { perDay };
   }
 
+  // --- Stage 2: shift-lock rotation, soft ratio balancing, hard rest-time -------------------
+  // Everything below builds on the exact same parse/plan/patch shape as Stage 1 -- assignWithConditions()
+  // returns the identical {perDay: [{assignments, unassignedTasks, unassignedDrivers, ...}]} shape
+  // assignSimple() does, just with a smarter selection than "shuffle and take the first N".
+
+  const SHIFT_NAMES = ["Early Morning", "Late Morning", "Early Afternoon", "Late Afternoon", "Night"];
+
+  function defaultConditions() {
+    return {
+      // Blank on purpose -- the supervisor has to set every shift's window before Generate is
+      // allowed to run, per how this was specified: "before we hit generate, we have to set
+      // conditions."
+      shifts: SHIFT_NAMES.map((name) => ({ name, start: "", end: "" })),
+      ratioReserveDays: 4,
+      ratioTripDays: 2,
+      restHours: 12,
+      shiftLockWeeks: 2,
+    };
+  }
+
+  function parseHHMM(str) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(str || "").trim());
+    if (!m) return null;
+    const h = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
+  }
+
+  function conditionsAreComplete(conditions) {
+    if (!conditions) return false;
+    const shiftsOk = conditions.shifts.length === SHIFT_NAMES.length
+      && conditions.shifts.every((s) => parseHHMM(s.start) != null && parseHHMM(s.end) != null);
+    return shiftsOk
+      && Number.isFinite(conditions.ratioReserveDays) && conditions.ratioReserveDays >= 0
+      && Number.isFinite(conditions.ratioTripDays) && conditions.ratioTripDays >= 0
+      && (conditions.ratioReserveDays + conditions.ratioTripDays) > 0
+      && Number.isFinite(conditions.restHours) && conditions.restHours >= 0
+      && Number.isInteger(conditions.shiftLockWeeks) && conditions.shiftLockWeeks >= 1;
+  }
+
+  // Handles a shift window that crosses midnight (e.g. Night 19:00-03:30) the same way a plain
+  // one does (e.g. Early Morning 03:30-08:00) -- just two different comparisons depending on
+  // which side of midnight the window falls on.
+  function minutesInWindow(minutes, startMin, endMin) {
+    if (startMin === endMin) return true;
+    if (startMin < endMin) return minutes >= startMin && minutes < endMin;
+    return minutes >= startMin || minutes < endMin;
+  }
+
+  function classifyShiftForMinutes(conditions, minutes) {
+    if (minutes == null) return null;
+    for (let i = 0; i < conditions.shifts.length; i++) {
+      const s = conditions.shifts[i];
+      const startMin = parseHHMM(s.start), endMin = parseHHMM(s.end);
+      if (startMin != null && endMin != null && minutesInWindow(minutes, startMin, endMin)) return i;
+    }
+    return null;
+  }
+
+  // A driver's locked shift for a given date is computed purely from an anchor point (the date
+  // and shift index they were locked into at some point) plus how many whole shiftLockWeeks
+  // blocks have elapsed since then, cycling through the fixed Early Morning -> Late Morning ->
+  // Early Afternoon -> Late Afternoon -> Night -> repeat order. Computing it this way (rather
+  // than storing "current shift" directly) is what lets a later run just keep advancing from
+  // wherever a previous run left off, without needing to replay every day in between.
+  function computeShiftIndexForDriver(driverState, conditions, date) {
+    if (!driverState || !driverState.shiftAnchorDate) return null;
+    const anchor = new Date(driverState.shiftAnchorDate + "T00:00:00");
+    const target = new Date(dateKey(date) + "T00:00:00");
+    const daysBetween = Math.round((target - anchor) / 86400000);
+    const weeksElapsed = Math.floor(daysBetween / 7);
+    const blocksElapsed = Math.floor(weeksElapsed / conditions.shiftLockWeeks);
+    const n = conditions.shifts.length;
+    return ((driverState.shiftAnchorIndex + blocksElapsed) % n + n) % n;
+  }
+
+  function minutesBetween(dateKeyA, minA, dateKeyB, minB) {
+    const dA = new Date(dateKeyA + "T00:00:00");
+    const dB = new Date(dateKeyB + "T00:00:00");
+    return Math.round((dB - dA) / 60000) - minA + minB;
+  }
+
+  // How much a driver is "owed" of a given kind (reserve vs trip) relative to the configured
+  // ratio, based on their recent history -- a positive number means they've been getting less
+  // of that kind than the target ratio calls for, so they're preferred for it. This is
+  // explicitly the "soft rule" version: it's a preference used to sort candidates, never a hard
+  // filter, so it can't itself cause a task to go unfilled the way the rest-time check can.
+  function ratioPreference(driverState, conditions, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    if (!kinds.length) return 0;
+    const reserveCount = kinds.filter((k) => k === "reserve").length;
+    const tripCount = kinds.length - reserveCount;
+    const targetTotal = conditions.ratioReserveDays + conditions.ratioTripDays;
+    const targetFrac = wantKind === "reserve" ? conditions.ratioReserveDays / targetTotal : conditions.ratioTripDays / targetTotal;
+    const actualFrac = (wantKind === "reserve" ? reserveCount : tripCount) / kinds.length;
+    return targetFrac - actualFrac;
+  }
+
+  // rotationState: { [driverId]: { shiftAnchorDate, shiftAnchorIndex, lastDutyEndDateKey,
+  // lastDutyEndMin, recentKinds: [] } } -- passed in and mutated in place so the caller can
+  // persist it (e.g. to localStorage per station) and hand it back in on the next run to
+  // continue every driver's rotation/rest-time/ratio history instead of restarting cold.
+  function assignWithConditions(rosterData, taskDays, conditions, rotationState) {
+    const state = rotationState || {};
+    const cycleLen = conditions.shifts.length;
+    const perDay = taskDays.map((day) => {
+      const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
+
+      // A driver seen for the first time (no rotation state yet, in this run or a previous one)
+      // gets spread across the 5 shifts by their position in today's available list, rather than
+      // everyone defaulting to the same shift.
+      available.forEach((d, i) => {
+        if (!state[d.id]) {
+          state[d.id] = {
+            shiftAnchorDate: day.dateKey, shiftAnchorIndex: i % cycleLen,
+            lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [],
+          };
+        }
+      });
+
+      const byShift = {};
+      available.forEach((d) => {
+        const idx = computeShiftIndexForDriver(state[d.id], conditions, day.date);
+        (byShift[idx] = byShift[idx] || []).push(d);
+      });
+
+      const usedDriverIds = new Set();
+      const assignments = [];
+      const unassignedTasks = [];
+      const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
+
+      day.tasks.forEach((task) => {
+        const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
+        const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
+
+        // Hard rule: never violated, even if it leaves this task unfilled -- see the rest-time
+        // condition this mirrors.
+        const restOk = inShift.filter((d) => {
+          const st = state[d.id];
+          if (st.lastDutyEndMin == null) return true;
+          const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
+          return gap >= conditions.restHours * 60;
+        });
+        if (!restOk.length) { unassignedTasks.push(task); return; }
+
+        const wantKind = task.kind === "reserve" ? "reserve" : "trip";
+        restOk.sort((a, b) => ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind));
+        const chosen = restOk[0];
+
+        usedDriverIds.add(chosen.id);
+        assignments.push({ task, driver: chosen });
+
+        const st = state[chosen.id];
+        st.lastDutyEndDateKey = day.dateKey;
+        st.lastDutyEndMin = task.endMin != null ? task.endMin : task.startMin;
+        st.recentKinds.push(wantKind);
+        if (st.recentKinds.length > capLen) st.recentKinds.shift();
+      });
+
+      return {
+        date: day.date, dateKey: day.dateKey, sheetIndex: day.sheetIndex, nameCol: day.nameCol,
+        assignments,
+        unassignedTasks,
+        unassignedDrivers: available.filter((d) => !usedDriverIds.has(d.id)),
+      };
+    });
+    return { perDay, rotationState: state };
+  }
+
   // Converts a plan into plain {row, col, value} patch lists, grouped by sheet index, ready for
   // xlsx_surgical_patch.js's applyCellPatches() -- deliberately NOT an ExcelJS workbook mutation.
   // Earlier versions of this engine wrote assignments directly into a live ExcelJS workbook and
@@ -239,5 +419,7 @@
   return {
     dateKey, addDays, isAvailable, classifyCode,
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
+    SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
+    classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
   };
 });
