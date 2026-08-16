@@ -324,6 +324,7 @@
         <td class="${s.start ? "" : "unset"}">${s.start || "not set"}</td>
         <td class="${s.end ? "" : "unset"}">${s.end || "not set"}</td>
       </tr>`).join("");
+    const trackedDriverCount = Object.keys(rotationState).length;
     conditionsView.innerHTML = `
       <table class="conditions-summary-table">
         <tr><th>Shift</th><th>Start</th><th>End</th></tr>
@@ -334,10 +335,25 @@
         <div class="conditions-rule"><div class="label">Rest between shifts (hard)</div><div class="value">${conditions.restHours}h</div></div>
         <div class="conditions-rule"><div class="label">Weeks per shift before rotating</div><div class="value">${conditions.shiftLockWeeks}</div></div>
       </div>
-      <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
+      <div class="actions" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
+        ${trackedDriverCount ? `<button type="button" class="plain" id="resetRotationBtn">Reset rotation history (${trackedDriverCount} driver${trackedDriverCount === 1 ? "" : "s"} tracked)</button>` : ""}
+      </div>
       ${E.conditionsAreComplete(conditions) ? "" : `<div class="note" style="color:var(--red);">Every shift needs a start and end time before you can generate.</div>`}
+      ${trackedDriverCount ? `<div class="note">Rest-time, shift-lock and reserve/trip ratio history from earlier Generate runs on this station is remembered here so a later run can continue it. If you're starting a fresh month/schedule or just testing, reset it first -- otherwise leftover history from a previous run can block drivers who should be free, or throw off the ratio balance.</div>` : ""}
     `;
     document.getElementById("conditionsEditBtn").addEventListener("click", onEditConditionsClick);
+    if (trackedDriverCount) document.getElementById("resetRotationBtn").addEventListener("click", onResetRotationClick);
+  }
+
+  async function onResetRotationClick() {
+    const trackedDriverCount = Object.keys(rotationState).length;
+    const ok = await confirmEdit(`Reset rotation history for ${trackedDriverCount} driver(s) on this station? This clears everyone's remembered shift-lock, rest-time and reserve/trip ratio history -- the next Generate will treat every driver as if this is their first run.`);
+    if (!ok) return;
+    rotationState = {};
+    saveRotationState(rotationState);
+    renderConditionsSummary();
+    setStatus("Rotation history reset. The next Generate will start every driver fresh.");
   }
 
   function renderConditionsForm() {
@@ -473,6 +489,7 @@
       plan = result;
       rotationState = result.rotationState;
       saveRotationState(rotationState);
+      renderConditionsSummary();
 
       const { rosterPatches, taskPatches } = E.buildPatches(plan);
 
