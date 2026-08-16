@@ -404,6 +404,30 @@
     return bias;
   }
 
+  // When several reserve tasks share the exact same start time, filling all of them stacks
+  // redundant standby coverage at one moment while a distinct, later reserve slot can go
+  // completely uncovered with no driver at all -- reported directly against a real day: two
+  // drivers both sitting reserve at 14:00 while several late-shift reserve slots showed no name
+  // at all. Reordering so the FIRST reserve task at each distinct start time is tried before any
+  // repeat of an already-covered time is what makes the day's limited driver pool spread across
+  // every distinct reserve time first, rather than one time absorbing several drivers while
+  // another gets none -- a driver freed up from a redundant duplicate becomes available for
+  // whichever later time still has nobody. Only reordering; every task is still attempted.
+  function spreadReserveTasks(reserveTasks) {
+    const seenStartMin = new Set();
+    const firstAtEachTime = [];
+    const repeatsOfATime = [];
+    reserveTasks.forEach((t) => {
+      if (!seenStartMin.has(t.startMin)) {
+        seenStartMin.add(t.startMin);
+        firstAtEachTime.push(t);
+      } else {
+        repeatsOfATime.push(t);
+      }
+    });
+    return firstAtEachTime.concat(repeatsOfATime);
+  }
+
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
     const state = rotationState || {};
     const rules = specialRules || [];
@@ -448,7 +472,7 @@
       // non-reserve task first, reserve tasks last, is what makes a scarce driver pool exhaust
       // itself on reserve tasks rather than on trips. Only the processing order changes here --
       // day.tasks itself (and its row/col patch targets) is untouched.
-      const orderedTasks = day.tasks.filter((t) => t.kind !== "reserve").concat(day.tasks.filter((t) => t.kind === "reserve"));
+      const orderedTasks = day.tasks.filter((t) => t.kind !== "reserve").concat(spreadReserveTasks(day.tasks.filter((t) => t.kind === "reserve")));
 
       orderedTasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
@@ -719,6 +743,6 @@
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
-    buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell,
+    buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,
   };
 });
