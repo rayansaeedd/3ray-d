@@ -34,6 +34,7 @@
 
   label.field { font-size: 12px; color: #555; font-weight: 700; display: flex; flex-direction: column; gap: 4px; max-width: 220px; }
   input[type=date] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: #fff; min-width: 260px; }
 
   .drop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 720px) { .drop-grid { grid-template-columns: 1fr; } }
@@ -126,7 +127,7 @@
 
 <header>
   <h1>Driver Task Assignment — Makkah Station</h1>
-  <div class="sub">Set the schedule dates, drop the Task Program and Roster, set your conditions, and generate -- assigns drivers by shift rotation, reserve/trip ratio and rest-time rules, and writes the results into both files.</div>
+  <div class="sub">Set the schedule dates, drop the Task Program and Roster, optionally continue from a previous month's granted memory, set your conditions, and generate -- assigns drivers by shift rotation, reserve/trip ratio and rest-time rules, and writes the results into both files.</div>
 </header>
 
 <main>
@@ -174,7 +175,24 @@
   </div>
 
   <div class="card">
-    <h2>3. Conditions</h2>
+    <h2>3. Continue from previous memory (optional)</h2>
+    <div class="note">Only matters if you want this run to continue a driver's shift rotation, rest-time and reserve/trip balance from an earlier granted month. Skip this to start every driver fresh -- nothing carries over unless you explicitly load it here.</div>
+    <div class="date-range-row" style="margin-top:12px;">
+      <label class="field" style="max-width:340px;">Continue from a granted month
+        <select id="memorySlotSelect"><option value="">Start fresh (no memory)</option></select>
+      </label>
+    </div>
+    <div class="dropzone" id="memoryDropzone" style="margin-top:14px; max-width:460px;">
+      <div class="icon">&#8595;</div>
+      <div><strong>Or upload a memory file</strong></div>
+      <div class="hint">On a different laptop/browser? Drop the memory .xlsx you downloaded when you granted a previous month, or <span class="browse-link" id="memoryBrowseLink">browse</span>.</div>
+      <input type="file" id="memoryFileInput" accept=".xlsx" />
+    </div>
+    <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no memory loaded.</div>
+  </div>
+
+  <div class="card">
+    <h2>4. Conditions</h2>
     <div class="note">These have to be set before you can generate. They're remembered on this device -- come back and Edit any of them any time.</div>
     <div id="conditionsView"></div>
   </div>
@@ -187,13 +205,17 @@
   </div>
 
   <div class="card" id="summaryCard" style="display:none;">
-    <h2>4. Result</h2>
+    <h2>5. Result</h2>
     <table class="summary-table" id="summaryTable"></table>
     <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit -- never bent) ruled out every available driver that day, or there were simply more tasks than available drivers. Shift-lock is a soft preference: a driver outside their locked shift still gets picked over leaving a task unfilled. "Unassigned drivers" = every task that day was already filled and this driver was left over -- in the downloaded roster file, that driver's day cell is recolored (picking a color not already used anywhere in your roster's own palette, so it never collides with a color your file already uses for something else) so it stands out from an ordinary blank/available cell.</div>
+    <div class="drop-actions" id="grantRow" style="display:none; margin-top:14px;">
+      <button type="button" class="primary" id="grantBtn">Grant this as <span id="grantMonthLabel"></span>'s final schedule</button>
+    </div>
+    <div class="note" id="grantNote" style="display:none;">Saves every driver's current shift, rest-time and reserve/trip history so a future run can continue from here, and downloads a backup copy to your computer. Only do this once you're happy with the result -- it's meant for the schedule you're actually going to use, not a test run.</div>
   </div>
 
   <div class="card" id="monthlySummaryCard" style="display:none;">
-    <h2>5. Monthly summary -- shift &amp; trip/reserve load per driver</h2>
+    <h2>6. Monthly summary -- shift &amp; trip/reserve load per driver</h2>
     <div class="note">Keep this as a reference for next month -- if someone got more trips this run, lean their reserve/trip mix the other way next time.</div>
     <div class="table-scroll"><table class="summary-table" id="monthlySummaryTable"></table></div>
     <div class="drop-actions" style="margin-top:14px;">
@@ -239,10 +261,19 @@
   const rosterBrowseLink = document.getElementById("rosterBrowseLink");
   const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
   const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
+  const memorySlotSelect = document.getElementById("memorySlotSelect");
+  const memoryDropzone = document.getElementById("memoryDropzone");
+  const memoryFileInput = document.getElementById("memoryFileInput");
+  const memoryBrowseLink = document.getElementById("memoryBrowseLink");
+  const memoryStatusLabel = document.getElementById("memoryStatusLabel");
   const generateBtn = document.getElementById("generateBtn");
   const statusLine = document.getElementById("statusLine");
   const summaryCard = document.getElementById("summaryCard");
   const summaryTable = document.getElementById("summaryTable");
+  const grantRow = document.getElementById("grantRow");
+  const grantBtn = document.getElementById("grantBtn");
+  const grantMonthLabelEl = document.getElementById("grantMonthLabel");
+  const grantNote = document.getElementById("grantNote");
   const monthlySummaryCard = document.getElementById("monthlySummaryCard");
   const monthlySummaryTable = document.getElementById("monthlySummaryTable");
   const monthlySummaryDownloadBtn = document.getElementById("monthlySummaryDownloadBtn");
@@ -265,11 +296,10 @@
   }
 
   // --- Conditions: shifts/ratio/rest-time/shift-lock, persisted per station in this browser --
-  // Remembered here (not just for one run) is what lets a later Generate for the second half of
-  // a month continue every driver's rotation/rest-time/ratio history from where the first half
-  // left off, instead of restarting cold -- see rotationState below.
+  // Purely policy settings (shift windows, ratio target, rest hours) -- safe to remember
+  // automatically since they don't drift or get contaminated by testing the way per-driver
+  // rotation history can (see the memory section below).
   const CONDITIONS_KEY = "driverAssignmentConditions_" + STATION;
-  const ROTATION_KEY = "driverAssignmentRotationState_" + STATION;
 
   function loadConditions() {
     try {
@@ -284,19 +314,59 @@
   function saveConditions(c) {
     try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(c)); } catch (err) { /* storage disabled -- won't persist */ }
   }
-  function loadRotationState() {
+
+  let conditions = loadConditions();
+
+  // --- Rotation memory: explicit, granted-on-purpose, never auto-loaded ----------------------
+  // Each driver's shift-lock anchor, last duty end time, and recent reserve/trip history used to
+  // be saved automatically after every Generate click and reloaded automatically on every visit.
+  // That turned out to be genuinely dangerous: testing a different file, or just experimenting,
+  // silently carried old state into a real run -- a driver's memorized "last duty end" landing
+  // AFTER the new run's start date makes the rest-time gap compute negative, instantly failing
+  // that driver out of every task for the rest of the run, for nearly the whole roster at once.
+  // Now nothing is ever loaded unless explicitly chosen here: pick a previously granted month
+  // from the dropdown, or upload a memory file (e.g. on a different laptop). rotationState always
+  // starts empty otherwise. Saving only happens via the explicit "Grant" button after a run, in
+  // the Result card below -- never as a side effect of Generate itself.
+  const MEMORY_SLOTS_KEY = "driverAssignmentGrantedSlots_" + STATION;
+  let memorySlots = loadMemorySlots();
+  let rotationState = {};
+
+  function loadMemorySlots() {
     try {
-      const raw = localStorage.getItem(ROTATION_KEY);
+      const raw = localStorage.getItem(MEMORY_SLOTS_KEY);
       if (raw) return JSON.parse(raw);
     } catch (err) { /* ignore */ }
     return {};
   }
-  function saveRotationState(state) {
-    try { localStorage.setItem(ROTATION_KEY, JSON.stringify(state)); } catch (err) { /* storage disabled -- won't persist */ }
+  function saveMemorySlots(slots) {
+    try { localStorage.setItem(MEMORY_SLOTS_KEY, JSON.stringify(slots)); } catch (err) { /* storage disabled -- won't persist */ }
   }
+  function setMemoryStatus(text) { memoryStatusLabel.textContent = text; }
+  function renderMemorySlotOptions() {
+    const entries = Object.keys(memorySlots)
+      .map((k) => ({ key: k, ...memorySlots[k] }))
+      .sort((a, b) => (b.grantedAt || "").localeCompare(a.grantedAt || ""));
+    const current = memorySlotSelect.value;
+    memorySlotSelect.innerHTML = `<option value="">Start fresh (no memory)</option>` +
+      entries.map((e) => `<option value="${e.key}">${e.monthLabel} (granted ${new Date(e.grantedAt).toLocaleDateString()})</option>`).join("");
+    if (entries.some((e) => e.key === current)) memorySlotSelect.value = current;
+  }
+  renderMemorySlotOptions();
+  setMemoryStatus("Starting fresh -- no memory loaded.");
 
-  let conditions = loadConditions();
-  let rotationState = loadRotationState();
+  memorySlotSelect.addEventListener("change", () => {
+    const key = memorySlotSelect.value;
+    memoryFileInput.value = ""; // an explicit dropdown pick supersedes whatever file was loaded
+    if (!key) {
+      rotationState = {};
+      setMemoryStatus("Starting fresh -- no memory loaded.");
+      return;
+    }
+    const slot = memorySlots[key];
+    rotationState = JSON.parse(JSON.stringify(slot.rotationState));
+    setMemoryStatus(`Continuing from granted memory: ${slot.monthLabel} (${Object.keys(rotationState).length} driver${Object.keys(rotationState).length === 1 ? "" : "s"}).`);
+  });
 
   // Click-to-edit-with-confirm, same pattern as order_b_scheduler.html: a stray click can't
   // silently change conditions that a whole generated schedule depends on.
@@ -324,7 +394,6 @@
         <td class="${s.start ? "" : "unset"}">${s.start || "not set"}</td>
         <td class="${s.end ? "" : "unset"}">${s.end || "not set"}</td>
       </tr>`).join("");
-    const trackedDriverCount = Object.keys(rotationState).length;
     conditionsView.innerHTML = `
       <table class="conditions-summary-table">
         <tr><th>Shift</th><th>Start</th><th>End</th></tr>
@@ -335,25 +404,10 @@
         <div class="conditions-rule"><div class="label">Rest between shifts (hard)</div><div class="value">${conditions.restHours}h</div></div>
         <div class="conditions-rule"><div class="label">Weeks per shift before rotating</div><div class="value">${conditions.shiftLockWeeks}</div></div>
       </div>
-      <div class="actions" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
-        ${trackedDriverCount ? `<button type="button" class="plain" id="resetRotationBtn">Reset rotation history (${trackedDriverCount} driver${trackedDriverCount === 1 ? "" : "s"} tracked)</button>` : ""}
-      </div>
+      <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
       ${E.conditionsAreComplete(conditions) ? "" : `<div class="note" style="color:var(--red);">Every shift needs a start and end time before you can generate.</div>`}
-      ${trackedDriverCount ? `<div class="note">Rest-time, shift-lock and reserve/trip ratio history from earlier Generate runs on this station is remembered here so a later run can continue it. If you're starting a fresh month/schedule or just testing, reset it first -- otherwise leftover history from a previous run can block drivers who should be free, or throw off the ratio balance.</div>` : ""}
     `;
     document.getElementById("conditionsEditBtn").addEventListener("click", onEditConditionsClick);
-    if (trackedDriverCount) document.getElementById("resetRotationBtn").addEventListener("click", onResetRotationClick);
-  }
-
-  async function onResetRotationClick() {
-    const trackedDriverCount = Object.keys(rotationState).length;
-    const ok = await confirmEdit(`Reset rotation history for ${trackedDriverCount} driver(s) on this station? This clears everyone's remembered shift-lock, rest-time and reserve/trip ratio history -- the next Generate will treat every driver as if this is their first run.`);
-    if (!ok) return;
-    rotationState = {};
-    saveRotationState(rotationState);
-    renderConditionsSummary();
-    setStatus("Rotation history reset. The next Generate will start every driver fresh.");
   }
 
   function renderConditionsForm() {
@@ -471,6 +525,26 @@
     }
   });
 
+  wireDropzone(memoryDropzone, memoryFileInput, memoryBrowseLink, async (file) => {
+    try {
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      const parsed = E.parseMemoryWorkbook(loaded.wb);
+      if (parsed.station && parsed.station !== STATION) {
+        const proceed = await confirmEdit(`This memory file says it was granted for station "${parsed.station}", not "${STATION}". Load it anyway?`);
+        if (!proceed) { setStatus(""); return; }
+      }
+      rotationState = parsed.rotationState;
+      memorySlotSelect.value = ""; // an explicit file upload supersedes whatever the dropdown had picked
+      const count = Object.keys(rotationState).length;
+      setMemoryStatus(`Loaded memory file: ${parsed.station || "unknown station"}, granted for ${parsed.monthLabel || "an unknown month"} (${count} driver${count === 1 ? "" : "s"}).`);
+      setStatus("");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this memory file: " + err.message, true);
+    }
+  });
+
   generateBtn.addEventListener("click", async () => {
     try {
       generateBtn.disabled = true;
@@ -483,13 +557,12 @@
 
       // rotationState carries each driver's shift-lock anchor, last duty end time, and recent
       // reserve/trip history forward -- assignWithConditions mutates it in place and hands back
-      // the same object, so persisting it here is what lets a later run (e.g. the second half of
-      // a month) continue every driver's rotation from exactly where this run left off.
+      // the same object. This run's result is NOT saved anywhere automatically; it only becomes
+      // this station's granted memory for a future run if the supervisor explicitly clicks
+      // "Grant" below, after reviewing the result.
       const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState);
       plan = result;
       rotationState = result.rotationState;
-      saveRotationState(rotationState);
-      renderConditionsSummary();
 
       const { rosterPatches, taskPatches } = E.buildPatches(plan);
 
@@ -506,6 +579,11 @@
       renderMonthlySummary(lastMonthlySummary);
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
+
+      grantMonthLabelEl.textContent = E.monthLabelFromDateKey(startDateInput.value);
+      grantRow.style.display = "flex";
+      grantNote.style.display = "block";
+
       setStatus(`Generated ${plan.perDay.length} day(s). Download both files below.`);
     } catch (err) {
       console.error(err);
@@ -514,6 +592,63 @@
       generateBtn.disabled = false;
     }
   });
+
+  grantBtn.addEventListener("click", async () => {
+    const monthKey = E.monthKeyFromDateKey(startDateInput.value);
+    const monthLabel = E.monthLabelFromDateKey(startDateInput.value);
+    const replacing = !!memorySlots[monthKey];
+    const ok = await confirmEdit(
+      `Grant this as ${monthLabel}'s final schedule for ${STATION}? This saves every driver's current shift, rest-time and reserve/trip history here so a future run can continue from it${replacing ? ` -- this replaces the memory already granted for ${monthLabel}` : ""}, and downloads a backup copy to your computer.`
+    );
+    if (!ok) return;
+
+    const grantedAt = new Date().toISOString();
+    memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(rotationState)) };
+    saveMemorySlots(memorySlots);
+    renderMemorySlotOptions();
+    memorySlotSelect.value = monthKey;
+    setMemoryStatus(`Continuing from granted memory: ${monthLabel} (${Object.keys(rotationState).length} driver(s)).`);
+
+    const rows = E.buildMemoryRows(E.parseRoster(rosterWorkbook), rotationState);
+    const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${STATION}_memory_${monthKey}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setStatus(`Granted ${monthLabel} for ${STATION} and downloaded a backup memory file. Keep that file safe -- it's what lets a different laptop continue from here.`);
+  });
+
+  // A fresh workbook built from scratch, same reasoning as buildSummaryWorkbookBlob below: no
+  // existing complex file to lose anything from, so ExcelJS's own writer is perfectly safe here.
+  async function buildMemoryWorkbookBlob(rows, station, monthLabel, grantedAt) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Rotation Memory");
+    ws.addRow(["Driver Assignment Engine -- Rotation Memory"]);
+    ws.addRow(["Station", station]);
+    ws.addRow(["Granted for", monthLabel]);
+    ws.addRow(["Granted at", grantedAt]);
+    ws.addRow([]);
+    ws.addRow(["Driver ID", "Driver Name", "Shift Anchor Date", "Shift Anchor Index", "Shift Name", "Last Duty End Date", "Last Duty End Time", "Recent Kinds"]);
+    rows.forEach((r) => {
+      ws.addRow([
+        r.driverId, r.driverName, r.shiftAnchorDate, r.shiftAnchorIndex,
+        r.shiftAnchorIndex != null ? E.SHIFT_NAMES[r.shiftAnchorIndex] : "",
+        r.lastDutyEndDateKey, r.lastDutyEndTime, r.recentKinds,
+      ]);
+    });
+    ws.getRow(1).font = { bold: true, size: 13 };
+    const headerRowIdx = 6;
+    ws.getRow(headerRowIdx).font = { bold: true };
+    ws.getRow(headerRowIdx).eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF3EA" } }; });
+    ws.columns.forEach((col, i) => { col.width = i === 1 ? 28 : 16; });
+    const buf = await wb.xlsx.writeBuffer();
+    return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
 
   function renderSummary(plan) {
     const rows = plan.perDay.map((d) => `

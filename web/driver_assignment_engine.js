@@ -516,6 +516,104 @@
     };
   }
 
+  // --- Rotation memory: portable, explicit save/restore of rotationState --------------------
+  // Automatically persisting rotationState in the browser (what an earlier version of this tool
+  // did) turned out to be dangerous: it silently carried leftover state from testing/experiments
+  // into real runs, with no visibility into what was even stored -- confirmed to cause massive,
+  // hard-to-diagnose unassigned-task counts (a driver's memorized "last duty end" landing AFTER
+  // the new run's start date makes the rest-time gap compute negative, instantly failing that
+  // driver out of every task, for almost the entire roster at once).
+  // The fix is making memory an explicit, portable file a supervisor grants on purpose (see the
+  // "Grant" flow in the HTML) instead of something that accumulates invisibly. These two
+  // functions are the pure data half of that: turning rotationState into plain rows a caller can
+  // write into a worksheet, and reading those rows back out of an uploaded workbook.
+
+  function minutesToHHMM(min) {
+    const h = Math.floor(min / 60), m = min % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  function monthKeyFromDateKey(dk) {
+    return dk.slice(0, 7);
+  }
+
+  function monthLabelFromDateKey(dk) {
+    const d = new Date(dk + "T00:00:00");
+    return d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  }
+
+  function buildMemoryRows(rosterData, rotationState) {
+    const nameById = {};
+    rosterData.drivers.forEach((d) => { nameById[d.id] = d.name; });
+    return Object.keys(rotationState).map((id) => {
+      const st = rotationState[id];
+      return {
+        driverId: id,
+        driverName: nameById[id] || "",
+        shiftAnchorDate: st.shiftAnchorDate || null,
+        shiftAnchorIndex: st.shiftAnchorIndex != null ? st.shiftAnchorIndex : null,
+        lastDutyEndDateKey: st.lastDutyEndDateKey || null,
+        lastDutyEndTime: st.lastDutyEndMin != null ? minutesToHHMM(st.lastDutyEndMin) : null,
+        recentKinds: (st.recentKinds || []).join(","),
+      };
+    });
+  }
+
+  // Reads a memory workbook back into { station, monthLabel, grantedAt, rotationState } --
+  // by label, not by fixed row/column numbers, the same way parseRoster/parseTaskProgram locate
+  // their own headers, so this isn't brittle against exactly how a caller laid out the metadata
+  // rows above the table.
+  function parseMemoryWorkbook(workbook) {
+    const ws = workbook.worksheets[0];
+    if (!ws) throw new Error("This memory file has no worksheet.");
+
+    const idHeaderCell = findHeaderCell(ws, "Driver ID", 20);
+    if (!idHeaderCell) throw new Error("This doesn't look like a rotation memory file -- no \"Driver ID\" column found. Was it downloaded from this tool's Grant button?");
+    const anchorDateCell = findHeaderCell(ws, "Shift Anchor Date", 20);
+    const anchorIdxCell = findHeaderCell(ws, "Shift Anchor Index", 20);
+    const lastEndDateCell = findHeaderCell(ws, "Last Duty End Date", 20);
+    const lastEndTimeCell = findHeaderCell(ws, "Last Duty End Time", 20);
+    const recentKindsCell = findHeaderCell(ws, "Recent Kinds", 20);
+    if (!anchorDateCell || !anchorIdxCell || !lastEndDateCell || !lastEndTimeCell || !recentKindsCell) {
+      throw new Error("This memory file is missing one or more expected columns -- was it downloaded from this tool's Grant button?");
+    }
+
+    const readAdjacent = (cell) => {
+      if (!cell) return null;
+      const v = displayValue(ws.getRow(cell.row).getCell(cell.col + 1));
+      if (v == null || v === "") return null;
+      return v instanceof Date ? v.toISOString() : String(v).trim();
+    };
+    const station = readAdjacent(findHeaderCell(ws, "Station", 10));
+    const monthLabel = readAdjacent(findHeaderCell(ws, "Granted for", 10));
+    const grantedAt = readAdjacent(findHeaderCell(ws, "Granted at", 10));
+
+    const headerRow = idHeaderCell.row;
+    const idCol = idHeaderCell.col;
+    const rotationState = {};
+    for (let r = headerRow + 1; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const idVal = displayValue(row.getCell(idCol));
+      if (idVal == null || String(idVal).trim() === "") continue;
+      const id = String(idVal).trim();
+      const anchorDateVal = displayValue(row.getCell(anchorDateCell.col));
+      const anchorIdxVal = displayValue(row.getCell(anchorIdxCell.col));
+      const lastEndDateVal = displayValue(row.getCell(lastEndDateCell.col));
+      const lastEndTimeVal = displayValue(row.getCell(lastEndTimeCell.col));
+      const recentKindsVal = displayValue(row.getCell(recentKindsCell.col));
+      rotationState[id] = {
+        shiftAnchorDate: anchorDateVal != null && anchorDateVal !== "" ? String(anchorDateVal).trim() : null,
+        shiftAnchorIndex: anchorIdxVal != null && anchorIdxVal !== "" ? parseInt(anchorIdxVal, 10) : null,
+        lastDutyEndDateKey: lastEndDateVal != null && lastEndDateVal !== "" ? String(lastEndDateVal).trim() : null,
+        lastDutyEndMin: lastEndTimeVal != null && lastEndTimeVal !== "" ? parseHHMM(String(lastEndTimeVal).trim()) : null,
+        recentKinds: recentKindsVal != null && recentKindsVal !== "" ? String(recentKindsVal).split(",").map((s) => s.trim()).filter(Boolean) : [],
+      };
+    }
+    if (!Object.keys(rotationState).length) throw new Error("This memory file has no driver rows in it.");
+
+    return { station, monthLabel, grantedAt, rotationState };
+  }
+
   // Converts a plan into plain {row, col, value} patch lists, grouped by sheet index, ready for
   // xlsx_surgical_patch.js's applyCellPatches() -- deliberately NOT an ExcelJS workbook mutation.
   // Earlier versions of this engine wrote assignments directly into a live ExcelJS workbook and
@@ -551,5 +649,7 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     buildMonthlySummary,
+    minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
+    buildMemoryRows, parseMemoryWorkbook,
   };
 });
