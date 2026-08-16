@@ -126,8 +126,11 @@
       if (!/^\d{5,8}$/.test(idDigits)) continue;
 
       // Locate the ID inside the STAFF text itself (rather than just splitting on the first
-      // dash) so a "T- " trainee prefix doesn't get swallowed into the name.
+      // dash) so a "T- " trainee prefix doesn't get swallowed into the name -- and keep whatever
+      // that prefix literally was (namePrefix), so a written-back task assignment can reproduce
+      // it exactly rather than assuming every file spells it "T- ".
       const idPosInStaff = staffVal.indexOf(idDigits);
+      const namePrefix = idPosInStaff >= 0 ? staffVal.slice(0, idPosInStaff) : "";
       const name = idPosInStaff >= 0
         ? staffVal.slice(idPosInStaff + idDigits.length).replace(/^[\s-]+/, "").trim()
         : staffVal.slice(staffVal.indexOf("-") + 1).trim();
@@ -144,6 +147,7 @@
       drivers.push({
         id: idDigits,
         name,
+        namePrefix,
         phone: phoneVal != null ? String(phoneVal).trim() : "",
         category: categoryVal != null ? String(categoryVal).trim() : "",
         row: r,
@@ -627,13 +631,21 @@
   // who was available that day but genuinely had no task left to assign them (every task that
   // day was already filled) so a supervisor can see it at a glance rather than the cell just
   // looking like an ordinary blank/available day.
+  // Matches the Task Program's own NAME-column convention when a VLOOKUP resolves successfully
+  // (confirmed directly against a real file's resolved output): "<prefix, e.g. 'T- '><ID>-<NAME>"
+  // followed immediately by the phone number, no separator -- whatever format the roster's own
+  // Phone column happens to have it in.
+  function formatDriverForTaskCell(driver) {
+    return `${driver.namePrefix || ""}${driver.id}-${driver.name}${driver.phone || ""}`;
+  }
+
   function buildPatches(plan) {
     const rosterPatches = { 0: [] };
     const taskPatches = {};
     plan.perDay.forEach((day) => {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       day.assignments.forEach(({ task, driver }) => {
-        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: driver.name });
+        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
         rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code });
       });
       (day.unassignedDrivers || []).forEach((driver) => {
@@ -650,6 +662,6 @@
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
-    buildMemoryRows, parseMemoryWorkbook,
+    buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell,
   };
 });
