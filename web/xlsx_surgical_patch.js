@@ -71,7 +71,7 @@
   // every cell this engine actually targets in practice already exists (even blank ones) because
   // real spreadsheets apply borders/fills to whole ranges, which forces the cell element to
   // exist even when empty.
-  function insertCellIntoRow(xml, address, value) {
+  function insertCellIntoRow(xml, address, value, styleAttr) {
     const addrMatch = /^([A-Z]+)(\d+)$/.exec(address);
     const colLetters = addrMatch[1];
     const rowNum = addrMatch[2];
@@ -91,7 +91,7 @@
     while ((cm = cellRe.exec(rowInner))) {
       if (colLetterToNumber(cm[1]) > targetCol) { insertPos = cm.index; break; }
     }
-    const newCellXml = buildCellXml(address, "", value);
+    const newCellXml = buildCellXml(address, styleAttr || "", value);
     const newRowInner = rowInner.slice(0, insertPos) + newCellXml + rowInner.slice(insertPos);
     const newRow = `<row r="${rowNum}"${rowAttrs}>${newRowInner}</row>`;
     return xml.slice(0, rowMatch.index) + newRow + xml.slice(rowMatch.index + rowMatch[0].length);
@@ -107,6 +107,73 @@
     const styleMatch = m[1].match(/\ss="(\d+)"/);
     const styleAttr = styleMatch ? ` s="${styleMatch[1]}"` : "";
     const newCellXml = buildCellXml(address, styleAttr, value);
+    return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
+  }
+
+  // Fill color used to flag a driver who was available on a given day but had no task left to
+  // give them once every task that day was filled -- chosen to be visually distinct from every
+  // fill color already present in the real roster's palette (checked directly against its
+  // xl/styles.xml: reds, oranges, yellows, greens and purples are already in use for other
+  // statuses, this bright magenta is not).
+  const IDLE_FLAG_ARGB = "FFFF00FF";
+
+  // Finds (or, the first time it's needed, appends) a solid-fill cellXf style in xl/styles.xml
+  // for the given ARGB color, reusing the real roster's standard day-cell border (borderId="1")
+  // and font (fontId="7", matching the existing blank/available-cell style) so a flagged cell
+  // still looks like part of the same grid instead of visually breaking the sheet. Idempotent:
+  // calling it again (even across separate applyCellPatches runs against a file this already
+  // patched) finds the existing fill/xf instead of appending a duplicate.
+  async function ensureFillStyle(zip, argbColor) {
+    const partName = "xl/styles.xml";
+    const stylesFile = zip.file(partName);
+    if (!stylesFile) throw new Error("This workbook has no xl/styles.xml part.");
+    let xml = await stylesFile.async("string");
+
+    const fillsRe = /<fills count="(\d+)">([\s\S]*?)<\/fills>/;
+    const fillsMatch = fillsRe.exec(xml);
+    if (!fillsMatch) throw new Error("xl/styles.xml has no <fills> block.");
+    const fillsCount = parseInt(fillsMatch[1], 10);
+    const fillEntries = fillsMatch[2].match(/<fill>[\s\S]*?<\/fill>/g) || [];
+
+    let fillIndex = fillEntries.findIndex((f) => f.includes(`rgb="${argbColor}"`));
+    if (fillIndex === -1) {
+      const newFill = `<fill><patternFill patternType="solid"><fgColor rgb="${argbColor}"/><bgColor indexed="64"/></patternFill></fill>`;
+      const newFillsBlock = `<fills count="${fillsCount + 1}">${fillsMatch[2]}${newFill}</fills>`;
+      xml = xml.slice(0, fillsMatch.index) + newFillsBlock + xml.slice(fillsMatch.index + fillsMatch[0].length);
+      fillIndex = fillsCount;
+    }
+
+    const cellXfsRe = /<cellXfs count="(\d+)">([\s\S]*?)<\/cellXfs>/;
+    const cellXfsMatch = cellXfsRe.exec(xml);
+    if (!cellXfsMatch) throw new Error("xl/styles.xml has no <cellXfs> block.");
+    const cellXfsCount = parseInt(cellXfsMatch[1], 10);
+    const xfEntries = cellXfsMatch[2].match(/<xf\b[^>]*?\/>|<xf\b[^>]*?>[\s\S]*?<\/xf>/g) || [];
+
+    let xfIndex = xfEntries.findIndex((x) => {
+      const fillIdMatch = /\sfillId="(\d+)"/.exec(x);
+      const borderIdMatch = /\sborderId="(\d+)"/.exec(x);
+      return fillIdMatch && parseInt(fillIdMatch[1], 10) === fillIndex && borderIdMatch && borderIdMatch[1] === "1";
+    });
+    if (xfIndex === -1) {
+      const newXf = `<xf numFmtId="0" fontId="7" fillId="${fillIndex}" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>`;
+      const newCellXfsBlock = `<cellXfs count="${cellXfsCount + 1}">${cellXfsMatch[2]}${newXf}</cellXfs>`;
+      xml = xml.slice(0, cellXfsMatch.index) + newCellXfsBlock + xml.slice(cellXfsMatch.index + cellXfsMatch[0].length);
+      xfIndex = cellXfsCount;
+    }
+
+    zip.file(partName, xml);
+    return xfIndex;
+  }
+
+  // Replaces (or inserts) just the style index of a cell, leaving its existing content (value,
+  // formula, type attribute, everything) completely untouched -- used to flag an idle driver's
+  // day cell without altering what's actually written there.
+  function patchCellStyleInSheetXml(xml, address, styleIndex) {
+    const re = new RegExp(`<c r="${address}"([^>]*?)(/>|>[\\s\\S]*?</c>)`);
+    const m = re.exec(xml);
+    if (!m) return insertCellIntoRow(xml, address, null, ` s="${styleIndex}"`);
+    const attrs = /\ss="\d+"/.test(m[1]) ? m[1].replace(/\ss="\d+"/, ` s="${styleIndex}"`) : `${m[1]} s="${styleIndex}"`;
+    const newCellXml = `<c r="${address}"${attrs}${m[2]}`;
     return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
   }
 
@@ -141,9 +208,12 @@
     });
   }
 
-  // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value }, ...] }
+  // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true }, ...] }
+  // A `flag: true` entry is style-only -- it recolors the cell to IDLE_FLAG_ARGB without touching
+  // whatever value is already there (used to mark an available-but-unused driver's day cell).
   // Returns a new ArrayBuffer for the patched .xlsx -- every part not named in patchesBySheetIndex
-  // is carried through by JSZip unchanged.
+  // (plus xl/styles.xml, only if a flag patch is actually present) is carried through by JSZip
+  // unchanged.
   async function applyCellPatches(originalArrayBuffer, patchesBySheetIndex) {
     const zip = await JSZip.loadAsync(originalArrayBuffer);
     // Real .xlsx files (including every one this engine has been tested against) don't carry
@@ -156,13 +226,25 @@
     const originalNames = new Set(Object.keys(zip.files));
     const sheetParts = await getSheetPartNames(zip);
 
+    let flagStyleIndex = null;
+    async function getFlagStyleIndex() {
+      if (flagStyleIndex == null) flagStyleIndex = await ensureFillStyle(zip, IDLE_FLAG_ARGB);
+      return flagStyleIndex;
+    }
+
     for (const sheetIndexStr of Object.keys(patchesBySheetIndex)) {
       const sheetIndex = parseInt(sheetIndexStr, 10);
       const partName = sheetParts[sheetIndex];
       if (!partName) throw new Error(`No worksheet part found for sheet index ${sheetIndex}.`);
       let xml = await zip.file(partName).async("string");
-      for (const { row, col, value } of patchesBySheetIndex[sheetIndex]) {
-        xml = patchCellInSheetXml(xml, cellAddress(row, col), value);
+      for (const patch of patchesBySheetIndex[sheetIndex]) {
+        const address = cellAddress(patch.row, patch.col);
+        if (patch.flag) {
+          const styleIndex = await getFlagStyleIndex();
+          xml = patchCellStyleInSheetXml(xml, address, styleIndex);
+        } else {
+          xml = patchCellInSheetXml(xml, address, patch.value);
+        }
       }
       zip.file(partName, xml);
     }
@@ -178,5 +260,8 @@
     return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
-  return { cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames, patchCellInSheetXml };
+  return {
+    cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
+    patchCellInSheetXml, patchCellStyleInSheetXml, ensureFillStyle, IDLE_FLAG_ARGB,
+  };
 });

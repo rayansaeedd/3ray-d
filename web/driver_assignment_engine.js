@@ -302,6 +302,14 @@
     return ((driverState.shiftAnchorIndex + blocksElapsed) % n + n) % n;
   }
 
+  // Circular distance between two shift indexes around the fixed 5-shift rotation order, used
+  // only to rank fallback candidates (never a hard filter).
+  function shiftDistance(a, b, cycleLen) {
+    if (a == null) return cycleLen;
+    const diff = Math.abs(a - b);
+    return Math.min(diff, cycleLen - diff);
+  }
+
   function minutesBetween(dateKeyA, minA, dateKeyB, minB) {
     const dA = new Date(dateKeyA + "T00:00:00");
     const dB = new Date(dateKeyB + "T00:00:00");
@@ -357,22 +365,50 @@
       const unassignedTasks = [];
       const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
 
+      const restFilter = (list, task) => list.filter((d) => {
+        const st = state[d.id];
+        if (st.lastDutyEndMin == null) return true;
+        const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
+        return gap >= conditions.restHours * 60;
+      });
+
       day.tasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
 
         // Hard rule: never violated, even if it leaves this task unfilled -- see the rest-time
         // condition this mirrors.
-        const restOk = inShift.filter((d) => {
-          const st = state[d.id];
-          if (st.lastDutyEndMin == null) return true;
-          const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
-          return gap >= conditions.restHours * 60;
-        });
+        let restOk = restFilter(inShift, task);
+
+        // Soft shift-bucket matching must never be the reason a task goes unfilled while an
+        // available driver exists -- a task whose start time falls outside every configured
+        // shift window (e.g. a task starting before the earliest shift's window opens) would
+        // otherwise be permanently unassignable no matter how many drivers are free that day.
+        // Falling back to every remaining available driver (still hard-filtered by rest-time)
+        // keeps the rest-time rule absolute while making the shift match itself a preference.
+        let usedFallback = false;
+        if (!restOk.length) {
+          const stillAvailable = available.filter((d) => !usedDriverIds.has(d.id));
+          restOk = restFilter(stillAvailable, task);
+          usedFallback = true;
+        }
         if (!restOk.length) { unassignedTasks.push(task); return; }
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
-        restOk.sort((a, b) => ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind));
+        if (usedFallback) {
+          // Among the fallback candidates, still prefer whoever's own locked shift is closest to
+          // this task's start time, so the relaxation degrades gracefully rather than picking
+          // arbitrarily.
+          restOk.sort((a, b) => {
+            const ratioDiff = ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind);
+            if (ratioDiff !== 0) return ratioDiff;
+            const distA = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[a.id], conditions, day.date), shiftIdx, cycleLen);
+            const distB = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[b.id], conditions, day.date), shiftIdx, cycleLen);
+            return distA - distB;
+          });
+        } else {
+          restOk.sort((a, b) => ratioPreference(state[b.id], conditions, wantKind) - ratioPreference(state[a.id], conditions, wantKind));
+        }
         const chosen = restOk[0];
 
         usedDriverIds.add(chosen.id);
@@ -465,6 +501,11 @@
   // ~460KB drawing part rebuilt as a ~1KB stub that made the file unopenable in real Excel).
   // Producing plain patch data here, with no ExcelJS involvement in the write path at all, is
   // what lets the surgical patcher touch only the exact cells being changed and nothing else.
+  // "flag": true patch entries are style-only (no value change) -- xlsx_surgical_patch.js applies
+  // a distinct fill color to those cells and leaves their content exactly as-is, marking a driver
+  // who was available that day but genuinely had no task left to assign them (every task that
+  // day was already filled) so a supervisor can see it at a glance rather than the cell just
+  // looking like an ordinary blank/available day.
   function buildPatches(plan) {
     const rosterPatches = { 0: [] };
     const taskPatches = {};
@@ -473,6 +514,9 @@
       day.assignments.forEach(({ task, driver }) => {
         taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: driver.name });
         rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code });
+      });
+      (day.unassignedDrivers || []).forEach((driver) => {
+        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], flag: true });
       });
     });
     return { rosterPatches, taskPatches };
