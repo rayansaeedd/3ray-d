@@ -543,7 +543,30 @@
         // Force alternation: drop anyone whose immediately previous assignment was this same
         // kind, unless that would empty the candidate list -- applied after the quota filter so
         // both narrow the same pool rather than compete.
-        const notRepeating = restOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+        let notRepeating = restOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+
+        // If literally everyone left in THIS shift's own locked-in bucket already did the same
+        // kind yesterday, there's nobody in it to alternate with today. Rather than give up on
+        // alternation, borrow from the immediately adjacent shift(s) in the fixed rotation order
+        // only (Early Morning <-> Late Morning, Early Afternoon <-> Late Afternoon, Late
+        // Afternoon <-> Night, never further) -- "so there's not a lot of gap between shift."
+        // Not attempted once the shift match has already been abandoned entirely (usedFallback),
+        // since that's already drawing from every shift.
+        if (!notRepeating.length && !usedFallback && shiftIdx != null) {
+          const adjacentPool = [shiftIdx - 1, shiftIdx + 1]
+            .filter((i) => i >= 0 && i < cycleLen)
+            .flatMap((i) => byShift[i] || [])
+            .filter((d) => !usedDriverIds.has(d.id));
+          let adjacentOk = restFilter(adjacentPool, task);
+          adjacentOk = adjacentOk.filter((d) => !isOverKindQuota(state[d.id], conditions, wantKind));
+          adjacentOk = adjacentOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+          if (adjacentOk.length) {
+            restOk = adjacentOk;
+            notRepeating = adjacentOk;
+            usedFallback = true; // reuse the shift-closeness tiebreak sort below for this borrowed pool
+          }
+        }
+
         if (notRepeating.length) restOk = notRepeating;
 
         if (usedFallback) {
