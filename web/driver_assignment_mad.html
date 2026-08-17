@@ -85,6 +85,7 @@
   .conditions-summary-table td.unset { color: var(--red); font-style: italic; }
   .conditions-rules { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
   .conditions-rule { background: #f7f8fa; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+  .shift-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; margin-right: 5px; }
   .conditions-rule .label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .conditions-rule .value { font-weight: 700; font-size: 14px; margin-top: 2px; }
   .conditions-rule .value.unset { color: var(--red); font-style: italic; font-size: 12px; }
@@ -254,6 +255,13 @@
   const STATION = "MAD";
   const E = window.DriverAssignmentEngine;
 
+  // Same 5 colors (in SHIFT_NAMES order) that a generated roster's day-cells get colored with --
+  // see SHIFT_FLAG_ARGB_CANDIDATES in xlsx_surgical_patch.js for the source of truth (these are
+  // that module's first-choice ARGB values with the alpha channel dropped, since a rare file
+  // whose own palette collides with a first choice falls back to a slightly different shade only
+  // in the actual downloaded file, not worth chasing here in the conditions UI).
+  const SHIFT_COLORS = ["#FFE699", "#C6E0B4", "#BDD7EE", "#D9D2E9", "#D9D9D9"];
+
   // Per-driver overrides, requested for this station specifically. Gating on STATION here (not
   // splitting into a separate file) is what keeps this out of the Makkah page: mad.html and
   // mak.html are otherwise identical (generated from each other), so STATION === "MAD" is what
@@ -421,9 +429,9 @@
   function fmtRatio(c) { return `${c.ratioReserveDays} reserve : ${c.ratioTripDays} trip`; }
 
   function renderConditionsSummary() {
-    const shiftRows = conditions.shifts.map((s) => `
+    const shiftRows = conditions.shifts.map((s, i) => `
       <tr>
-        <td>${s.name}</td>
+        <td><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${s.name}</td>
         <td class="${s.start ? "" : "unset"}">${s.start || "not set"}</td>
         <td class="${s.end ? "" : "unset"}">${s.end || "not set"}</td>
       </tr>`).join("");
@@ -445,7 +453,7 @@
 
   function renderConditionsForm() {
     const shiftRows = conditions.shifts.map((s, i) => `
-      <label class="field">${s.name}
+      <label class="field"><span><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${s.name}</span>
         <input type="time" data-shift-start="${i}" value="${s.start}" />
       </label>
       <label class="field">&nbsp;
