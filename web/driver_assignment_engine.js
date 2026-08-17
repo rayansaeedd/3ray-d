@@ -394,6 +394,19 @@
     return count >= target + RATIO_TOLERANCE_DAYS;
   }
 
+  // Staying within the ratio's total count isn't enough on its own -- a driver can still hit
+  // exactly 3 reserve / 3 trip while every reserve day comes first and every trip day comes
+  // last (RRRTTT). Explicit policy: "make it a mix, one day reserve one day trip... do not put
+  // it in a sequence." A driver whose most recent assignment was already this same kind is
+  // excluded from candidacy for another one of that kind, the same "unless it would empty the
+  // list" pattern as the quota check -- this is what actually forces alternation (RTRTRT)
+  // instead of just capping the total.
+  function isRepeatingLastKind(driverState, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    if (!kinds.length) return false;
+    return kinds[kinds.length - 1] === wantKind;
+  }
+
   // rotationState: { [driverId]: { shiftAnchorDate, shiftAnchorIndex, lastDutyEndDateKey,
   // lastDutyEndMin, recentKinds: [] } } -- passed in and mutated in place so the caller can
   // persist it (e.g. to localStorage per station) and hand it back in on the next run to
@@ -526,6 +539,12 @@
         // unless that would empty the candidate list entirely.
         const withinQuota = restOk.filter((d) => !isOverKindQuota(state[d.id], conditions, wantKind));
         if (withinQuota.length) restOk = withinQuota;
+
+        // Force alternation: drop anyone whose immediately previous assignment was this same
+        // kind, unless that would empty the candidate list -- applied after the quota filter so
+        // both narrow the same pool rather than compete.
+        const notRepeating = restOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+        if (notRepeating.length) restOk = notRepeating;
 
         if (usedFallback) {
           // Among the fallback candidates, still prefer whoever's own locked shift is closest to
@@ -801,6 +820,6 @@
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,
-    isOverKindQuota,
+    isOverKindQuota, isRepeatingLastKind,
   };
 });
