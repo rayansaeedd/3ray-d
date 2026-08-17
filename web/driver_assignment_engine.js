@@ -190,22 +190,70 @@
     return v instanceof Date ? v.getUTCHours() * 60 + v.getUTCMinutes() : null;
   }
 
+  // A tab's own date CELLS are inconsistent test placeholders (confirmed with the supervisor),
+  // not usable -- but every real Task Program tab this engine has been tested against names
+  // itself "<STATION> MMDD" (e.g. "MADINAH 0901" = September 1st), which is a reliable signal
+  // once read from the sheet's NAME rather than its cell content. Returns {month, day} (1-12,
+  // 1-31) or null if the name doesn't end in 4 digits that form a plausible month/day.
+  function parseDateFromSheetName(name) {
+    const m = /(\d{2})(\d{2})\s*$/.exec(String(name).trim());
+    if (!m) return null;
+    const month = parseInt(m[1], 10);
+    const day = parseInt(m[2], 10);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return { month, day };
+  }
+
+  // One date per day-sheet, in workbook order. If every day-sheet's name carries a real date
+  // (the common case), that's authoritative -- this is what lets a supervisor drop a Task
+  // Program covering a wider range than they want to run and pick out just the days between
+  // startDate/endDate, instead of the file's first tab always being forced to mean startDate
+  // itself. The year isn't in the sheet name, so it starts from startDate's year and rolls
+  // forward whenever a sheet's month/day would otherwise fall before the previous sheet's date
+  // (a range crossing into January). Falls back to the old "sheet N is startDate + N days"
+  // assumption, unchanged, for any file whose day-sheets don't all carry a parseable date.
+  function deriveSheetDates(daySheets, startDate) {
+    const parsed = daySheets.map((s) => parseDateFromSheetName(s.ws.name));
+    if (!parsed.length || parsed.some((p) => !p)) {
+      return daySheets.map((s) => addDays(startDate, s.idx));
+    }
+    let year = startDate.getFullYear();
+    let prev = null;
+    return parsed.map((p) => {
+      let d = new Date(year, p.month - 1, p.day);
+      if (prev && d < prev) { year += 1; d = new Date(year, p.month - 1, p.day); }
+      prev = d;
+      return d;
+    });
+  }
+
   // --- Task Program parsing -----------------------------------------------------------------
-  // One tab per day. The file's own date cells are inconsistent test placeholders (confirmed
-  // with the supervisor) -- the authoritative date for each tab is startDate + its position in
-  // the workbook, which is also why the supervisor sets the schedule's start date before
-  // dropping files, rather than this engine trying to read a date out of the sheet.
-  function parseTaskProgram(workbook, startDate) {
+  // One tab per day. endDate is optional (omit to process every day-sheet in the file, the old
+  // behavior); when given, only day-sheets whose derived date falls within
+  // [startDate, endDate] (inclusive) are returned -- see deriveSheetDates() above for how each
+  // sheet's actual date gets determined.
+  function parseTaskProgram(workbook, startDate, endDate) {
     const days = [];
-    workbook.worksheets.forEach((ws, idx) => {
-      const tasksCell = findHeaderCell(ws, "Tasks", 15);
-      if (!tasksCell) return; // sheet doesn't look like a task-program day -- skip it
+    const daySheets = workbook.worksheets
+      .map((ws, idx) => ({ ws, idx, tasksCell: findHeaderCell(ws, "Tasks", 15) }))
+      .filter((s) => s.tasksCell);
+    const sheetDates = deriveSheetDates(daySheets, startDate);
+    const rangeStart = endDate ? addDays(startDate, 0).getTime() : null;
+    const rangeEnd = endDate ? addDays(endDate, 0).getTime() : null;
+
+    daySheets.forEach((s, i) => {
+      const { ws, idx, tasksCell } = s;
       const nameCell = findHeaderCell(ws, "NAME", 15);
       if (!nameCell) throw new Error(`Sheet "${ws.name}" has a "Tasks" column but no "NAME" column next to it.`);
       const startCell = findHeaderCell(ws, "Start", 15);
       const endCell = findHeaderCell(ws, "End", 15);
 
-      const date = addDays(startDate, idx);
+      const date = sheetDates[i];
+      if (rangeStart != null) {
+        const t = addDays(date, 0).getTime();
+        if (t < rangeStart || t > rangeEnd) return;
+      }
+
       const tasks = [];
       for (let r = tasksCell.row + 1; r <= ws.rowCount; r++) {
         const taskCell = ws.getRow(r).getCell(tasksCell.col);

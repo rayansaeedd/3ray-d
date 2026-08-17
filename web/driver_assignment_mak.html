@@ -628,10 +628,15 @@
       invalidateGeneratedResult();
       const [y, m, d] = startDateInput.value.split("-").map((x) => parseInt(x, 10));
       const startDate = new Date(y, m - 1, d);
+      const [ey, em, ed] = endDateInput.value.split("-").map((x) => parseInt(x, 10));
+      const endDate = new Date(ey, em - 1, ed);
 
       const rosterData = E.parseRoster(rosterWorkbook);
-      const taskDays = E.parseTaskProgram(taskWorkbook, startDate);
-      if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file.");
+      // endDate lets a Task Program that covers a wider range than this run just have its
+      // matching sub-range (by each sheet's own real date, not sheet position) picked out --
+      // see parseTaskProgram's deriveSheetDates() for how each sheet's date is actually found.
+      const taskDays = E.parseTaskProgram(taskWorkbook, startDate, endDate);
+      if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file for this date range.");
       await markPassengerLegs(taskDays, taskArrayBuffer);
 
       // rotationState carries each driver's shift-lock anchor, last duty end time, and recent
