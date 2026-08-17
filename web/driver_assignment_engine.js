@@ -548,39 +548,35 @@
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
-        // Keep the ratio within tolerance: drop anyone already at their ceiling for this kind,
-        // unless that would empty the candidate list entirely.
-        const withinQuota = restOk.filter((d) => !isOverKindQuota(state[d.id], conditions, wantKind));
-        if (withinQuota.length) restOk = withinQuota;
+        // A candidate is "fairness compliant" for this task if picking them wouldn't push them
+        // over their ratio ceiling AND wouldn't repeat their immediately previous kind -- the two
+        // rules are applied together so the same adjacent-shift borrow below can rescue either
+        // one, instead of each rule needing its own separate widening logic.
+        const isFairnessCompliant = (d) => !isOverKindQuota(state[d.id], conditions, wantKind) && !isRepeatingLastKind(state[d.id], wantKind);
+        let fairOk = restOk.filter(isFairnessCompliant);
 
-        // Force alternation: drop anyone whose immediately previous assignment was this same
-        // kind, unless that would empty the candidate list -- applied after the quota filter so
-        // both narrow the same pool rather than compete.
-        let notRepeating = restOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
-
-        // If literally everyone left in THIS shift's own locked-in bucket already did the same
-        // kind yesterday, there's nobody in it to alternate with today. Rather than give up on
-        // alternation, borrow from the immediately adjacent shift(s) in the fixed rotation order
-        // only (Early Morning <-> Late Morning, Early Afternoon <-> Late Afternoon, Late
-        // Afternoon <-> Night, never further) -- "so there's not a lot of gap between shift."
-        // Not attempted once the shift match has already been abandoned entirely (usedFallback),
-        // since that's already drawing from every shift.
-        if (!notRepeating.length && !usedFallback && shiftIdx != null) {
+        // If literally everyone left in THIS shift's own locked-in bucket already breaks a
+        // fairness rule (over quota for this kind, or would repeat their last kind), there's
+        // nobody in it to pick fairly today. Rather than give up on fairness, borrow from the
+        // immediately adjacent shift(s) in the fixed rotation order only (Early Morning <-> Late
+        // Morning, Early Afternoon <-> Late Afternoon, Late Afternoon <-> Night, never further)
+        // -- "so there's not a lot of gap between shift." Not attempted once the shift match has
+        // already been abandoned entirely (usedFallback), since that's already drawing from
+        // every shift.
+        if (!fairOk.length && !usedFallback && shiftIdx != null) {
           const adjacentPool = [shiftIdx - 1, shiftIdx + 1]
             .filter((i) => i >= 0 && i < cycleLen)
             .flatMap((i) => byShift[i] || [])
             .filter((d) => !usedDriverIds.has(d.id));
-          let adjacentOk = restFilter(adjacentPool, task);
-          adjacentOk = adjacentOk.filter((d) => !isOverKindQuota(state[d.id], conditions, wantKind));
-          adjacentOk = adjacentOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
-          if (adjacentOk.length) {
-            restOk = adjacentOk;
-            notRepeating = adjacentOk;
+          const adjacentFairOk = restFilter(adjacentPool, task).filter(isFairnessCompliant);
+          if (adjacentFairOk.length) {
+            restOk = adjacentFairOk;
+            fairOk = adjacentFairOk;
             usedFallback = true; // reuse the shift-closeness tiebreak sort below for this borrowed pool
           }
         }
 
-        if (notRepeating.length) restOk = notRepeating;
+        if (fairOk.length) restOk = fairOk;
 
         if (usedFallback) {
           // Among the fallback candidates, still prefer whoever's own locked shift is closest to
