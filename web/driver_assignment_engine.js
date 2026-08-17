@@ -542,7 +542,7 @@
 
   // A driver's rotation-state update after being assigned one task -- extracted out of the
   // per-task loop in assignWithConditions so the exact same update can be replayed by
-  // rebuildRotationStateFromGrantedDays for a day's actual final (possibly hand-edited)
+  // rebuildRotationStateFromSavedDays for a day's actual final (possibly hand-edited)
   // assignments, without needing assignWithConditions itself to have proposed them.
   function recordAssignment(state, day, task, driver, conditions) {
     const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
@@ -686,31 +686,34 @@
     return { perDay, rotationState: state };
   }
 
-  // v2's day-by-day Grant workflow means a day's result can be hand-edited, granted, later
-  // un-granted and re-edited -- so rotation state can't just be assignWithConditions's mutated-
-  // in-place object, since that can't be "undone" when a day is un-granted. This instead
-  // re-derives state from scratch by replaying every currently-granted day, in date order,
+  // v2's day-by-day workflow means a day's result can be hand-edited, saved as a checkpoint,
+  // later un-saved (edited) and re-saved -- so rotation state can't just be assignWithConditions's
+  // mutated-in-place object, since that can't be "undone" when a day's save is undone. This
+  // instead re-derives state from scratch by replaying every currently-saved day, in date order,
   // applying each day's ACTUAL FINAL assignments (post any supervisor hand-edits, read straight
   // off each task's live `.driver` field) via the same recordAssignment used by a live Generate.
   // Independent of whatever assignWithConditions originally proposed for a day -- only what's
-  // granted now matters. `days` is the live taskDays-shaped array (each task carrying whatever
-  // `.driver` the supervisor's edits left it with, or null if still unassigned).
+  // saved now matters. `days` is the live taskDays-shaped array (each task carrying whatever
+  // `.driver` the supervisor's edits left it with, or null if still unassigned). Note this is
+  // distinct from Grant, a separate month-level action (see the v2 HTML) that finalizes whatever
+  // is saved at that point as the month's schedule and carries it forward as next month's memory
+  // -- this function only concerns itself with a single session's own day-to-day chain.
   //
   // Deliberately does NOT read the roster's own statusByDateKey to figure out who was "available"
   // that day, unlike a live Generate -- a live Generate itself writes each assignment's code back
   // into that exact same cell (see the "Roster grid" write-back in v2's own Generate handler), so
-  // by the time a LATER day's replay runs, an earlier granted day's cells are no longer blank; a
+  // by the time a LATER day's replay runs, an earlier saved day's cells are no longer blank; a
   // driver actually assigned that day would misleadingly look "unavailable" in a fresh scan and
   // get skipped for first-seen shift-anchor seeding. A first-seen driver here is instead anchored
   // to the shift matching the task they were actually observed doing that day -- real information
   // this replay has and a live Generate's blind, position-based spread doesn't need to guess at.
   // A driver who was available but genuinely got nothing that day isn't seeded here at all; they
   // get seeded fresh, correctly, by the live Generate call itself when THEIR day comes up.
-  function rebuildRotationStateFromGrantedDays(days, grantedDateKeys, conditions) {
+  function rebuildRotationStateFromSavedDays(days, savedDateKeys, conditions) {
     const state = {};
-    const grantedSet = new Set(grantedDateKeys);
+    const savedSet = new Set(savedDateKeys);
     const orderedDays = days
-      .filter((day) => grantedSet.has(day.dateKey))
+      .filter((day) => savedSet.has(day.dateKey))
       .slice()
       .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
 
@@ -953,7 +956,7 @@
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, shiftDistance, assignWithConditions,
-    recordAssignment, rebuildRotationStateFromGrantedDays,
+    recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,

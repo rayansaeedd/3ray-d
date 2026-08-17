@@ -117,7 +117,7 @@
 
   .day-status-pending { color: #888; }
   .day-status-generated { color: #a06a00; font-weight: 700; }
-  .day-status-granted { color: var(--ink); font-weight: 700; }
+  .day-status-saved { color: var(--ink); font-weight: 700; }
   .table-scroll { overflow-x: auto; }
 
   .roster-grid-table { white-space: nowrap; }
@@ -141,11 +141,11 @@
 
 <header>
   <h1>Driver Task Assignment v2 — Makkah Station</h1>
-  <div class="sub">Day-by-day generation: load both files, set your conditions, then Generate one day at a time and review it before Grant makes it final and lets the next day's Generate build on it.</div>
+  <div class="sub">Day-by-day generation: load both files, set your conditions, then Generate one day at a time, review it, and Save it as a checkpoint that the next day's Generate builds on. Once you're happy with the whole month, Grant it to finalize the schedule.</div>
 </header>
 
 <main>
-  <div class="stage-banner">v2, work in progress: this build proves out the day-by-day Generate/Grant mechanics. Editable grids, driver-search reassignment, Add Task and file export land in later steps -- v1 (the whole-month tool) is unaffected and still works the same way it always has.</div>
+  <div class="stage-banner">v2, work in progress: this build proves out the day-by-day Generate/Save/Grant mechanics. Editable grids, driver-search reassignment, Add Task and file export land in later steps -- v1 (the whole-month tool) is unaffected and still works the same way it always has.</div>
 
   <div class="card">
     <h2>1. Schedule dates</h2>
@@ -188,7 +188,7 @@
         </div>
       </div>
     </div>
-    <div class="note">Download exports the CURRENT state of this whole session -- granted and not-yet-granted days alike -- so you can always grab a working copy, not just once everything is granted. A hand-edited Start time changes what this session's own Generate sees but is not written into the exported file's Start column (that column expects a real Excel time value; this tool's file patcher only ever writes plain text into a cell, which is what Task/NAME/Roster cells already are).</div>
+    <div class="note">Download exports the CURRENT state of this whole session -- saved and not-yet-saved days alike -- so you can always grab a working copy without waiting until you've Granted the month. A hand-edited Start time changes what this session's own Generate sees but is not written into the exported file's Start column (that column expects a real Excel time value; this tool's file patcher only ever writes plain text into a cell, which is what Task/NAME/Roster cells already are).</div>
   </div>
 
   <div class="card">
@@ -216,7 +216,7 @@
 
   <div class="card">
     <h2>5. Day-by-day generation</h2>
-    <div class="note">Loading builds this session from the files/dates/conditions above. Pick a day, Generate it, review the counts below, then Grant it once you're happy -- only granted days feed the next day's Generate. You can Ungrant a day to edit or re-generate it.</div>
+    <div class="note">Loading builds this session from the files/dates/conditions above. Pick a day, Generate it, review the counts below, then Save it as a checkpoint once you're happy -- only saved days feed the next day's Generate. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Only Grant, at the bottom of this card, finalizes anything.</div>
     <div class="generate-row">
       <button type="button" class="primary" id="startBtn" disabled>Load days for review</button>
       <span class="status-line" id="statusLine"></span>
@@ -227,17 +227,17 @@
           <select id="daySelect"></select>
         </label>
         <button type="button" class="primary" id="dayGenerateBtn">Generate this day</button>
-        <button type="button" class="plain" id="dayGrantBtn">Grant this day</button>
-        <button type="button" class="plain" id="dayUngrantBtn">Ungrant this day</button>
+        <button type="button" class="plain" id="daySaveBtn">Save this day</button>
+        <button type="button" class="plain" id="dayUnsaveBtn">Edit this day (undo save)</button>
       </div>
       <div class="status-line" id="dayStatusLine"></div>
       <table class="summary-table" id="dayResultTable" style="margin-top:12px; display:none;"></table>
       <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit) ruled out every driver in this task's own locked shift and the shift(s) immediately next to it, or there were simply more tasks than available drivers. "Unassigned drivers" is left genuinely blank on purpose -- no manufactured reserve duty -- for you to fix by hand (that editing comes in a later step of this build).</div>
 
       <div class="generate-row">
-        <button type="button" class="plain" id="grantMonthBtn">Grant this month's memory for next month</button>
+        <button type="button" class="primary" id="grantMonthBtn">Grant this month's schedule</button>
       </div>
-      <div class="note">Separate from the per-day Grant above -- this saves every driver's history from all the days you've granted so far as Makkah Station's carried-forward memory for a future month, and downloads a backup copy. Do this once you're done reviewing, not after every single day.</div>
+      <div class="note">The real finish line: once you've saved as many days as you want for this month, Grant confirms exactly how many days are currently saved (out of the whole session), finalizes them as the month's schedule, saves that as memory for next month, and downloads a backup copy. Grant this once you're done reviewing the whole month -- not after every single day.</div>
 
       <div class="note" style="margin-top:14px;">
         <div style="margin-bottom:6px;">All days in this session:</div>
@@ -335,8 +335,8 @@
   const dayWorkflow = document.getElementById("dayWorkflow");
   const daySelect = document.getElementById("daySelect");
   const dayGenerateBtn = document.getElementById("dayGenerateBtn");
-  const dayGrantBtn = document.getElementById("dayGrantBtn");
-  const dayUngrantBtn = document.getElementById("dayUngrantBtn");
+  const daySaveBtn = document.getElementById("daySaveBtn");
+  const dayUnsaveBtn = document.getElementById("dayUnsaveBtn");
   const dayStatusLine = document.getElementById("dayStatusLine");
   const dayResultTable = document.getElementById("dayResultTable");
   const allDaysTable = document.getElementById("allDaysTable");
@@ -353,11 +353,12 @@
 
   let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
   let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
-  // livePlan: { taskDays, rosterData, dayStatus: {dateKey: "pending"|"generated"|"granted"},
+  // livePlan: { taskDays, rosterData, dayStatus: {dateKey: "pending"|"generated"|"saved"},
   // results: {dateKey: <assignWithConditions perDay[0] result>} } -- lives only for this browser
-  // tab's session, same lifetime as v1's loaded workbooks. See rebuildRotationStateFromGrantedDays
-  // in the engine for how a day's rotation state is derived fresh from whatever's granted right
-  // now, rather than being mutated in a way that couldn't be undone by an Ungrant.
+  // tab's session, same lifetime as v1's loaded workbooks. See rebuildRotationStateFromSavedDays
+  // in the engine for how a day's rotation state is derived fresh from whatever's saved right
+  // now, rather than being mutated in a way that couldn't be undone by editing a saved day. Grant
+  // (below) is a separate, month-level action that finalizes whatever's saved at that point.
   let livePlan = null;
 
   function setStatus(msg, isError) {
@@ -393,9 +394,9 @@
   let conditions = loadConditions();
 
   // --- Rotation memory: explicit, granted-on-purpose, shared with v1 (same station-scoped key) -
-  // Cross-MONTH memory -- separate from this page's own per-DAY Grant workflow below. Loading a
-  // slot here only seeds the starting point for drivers a day's own in-range granted history
-  // doesn't already cover.
+  // Cross-MONTH memory -- separate from this page's own per-DAY Save workflow below, and from the
+  // month-level Grant button further down. Loading a slot here only seeds the starting point for
+  // drivers a day's own in-range saved history doesn't already cover.
   const MEMORY_SLOTS_KEY = "driverAssignmentGrantedSlots_" + STATION;
   let memorySlots = loadMemorySlots();
   let memoryRotationState = {};
@@ -538,7 +539,7 @@
   // existed yet, or the supervisor confirmed discarding it); false means the caller should abort.
   async function invalidateLivePlanIfNeeded(reason) {
     if (!livePlan) return true;
-    const ok = await confirmEdit(`${reason} This restarts the whole day-by-day session from scratch -- every day's progress in this session (including already-granted days) will be lost, since it re-reads the files fresh. Continue?`);
+    const ok = await confirmEdit(`${reason} This restarts the whole day-by-day session from scratch -- every day's progress in this session (including already-saved days) will be lost, since it re-reads the files fresh. Continue?`);
     if (!ok) return false;
     livePlan = null;
     dayWorkflow.style.display = "none";
@@ -630,12 +631,12 @@
     }
   });
 
-  function statusLabel(s) { return s === "granted" ? "granted ✓" : s === "generated" ? "generated, not yet granted" : "pending"; }
+  function statusLabel(s) { return s === "saved" ? "saved ✓" : s === "generated" ? "generated, not yet saved" : "pending"; }
   function statusClass(s) { return "day-status-" + s; }
 
   startBtn.addEventListener("click", async () => {
     if (livePlan) {
-      const ok = await confirmEdit("Reload the day-by-day session from the current files/dates/conditions? Every day's progress in this session (including already-granted days) will be lost, since it re-reads the files fresh.");
+      const ok = await confirmEdit("Reload the day-by-day session from the current files/dates/conditions? Every day's progress in this session (including already-saved days) will be lost, since it re-reads the files fresh.");
       if (!ok) return;
     }
     try {
@@ -909,8 +910,8 @@
     const dateKey = daySelect.value;
     const status = livePlan.dayStatus[dateKey];
     dayGenerateBtn.disabled = false;
-    dayGrantBtn.disabled = status !== "generated";
-    dayUngrantBtn.disabled = status !== "granted";
+    daySaveBtn.disabled = status !== "generated";
+    dayUnsaveBtn.disabled = status !== "saved";
     renderDayResultTable(dateKey);
     renderTaskView(dateKey);
     renderRosterGrid();
@@ -933,9 +934,9 @@
       }
     });
 
-    const grantedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "granted");
-    const rotationState = E.rebuildRotationStateFromGrantedDays(livePlan.taskDays, grantedKeys, conditions);
-    // Any driver not already covered by this session's own granted history starts from the
+    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
+    const rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
+    // Any driver not already covered by this session's own saved history starts from the
     // cross-month memory loaded in section 3 instead of cold, same idea as v1's memory carry-over.
     Object.keys(memoryRotationState).forEach((id) => {
       if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
@@ -962,8 +963,8 @@
     const dateKey = daySelect.value;
     const status = livePlan.dayStatus[dateKey];
     if (status !== "pending") {
-      const ok = await confirmEdit(status === "granted"
-        ? `${dateKey} is already granted. Re-generating will ungrant it and replace its current assignments -- continue?`
+      const ok = await confirmEdit(status === "saved"
+        ? `${dateKey} is already saved. Re-generating will undo that save and replace its current assignments -- continue?`
         : `${dateKey} was already generated. Re-generating will replace its current assignments -- continue?`);
       if (!ok) return;
     }
@@ -974,7 +975,7 @@
       renderAllDaysTable();
       renderRosterGrid();
       onDaySelectChange();
-      setDayStatus(`Generated ${dateKey}. Review the counts below, then Grant when you're happy with it.`);
+      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.`);
     } catch (err) {
       console.error(err);
       setDayStatus("Could not generate this day: " + err.message, true);
@@ -983,24 +984,24 @@
     }
   });
 
-  dayGrantBtn.addEventListener("click", () => {
+  daySaveBtn.addEventListener("click", () => {
     const dateKey = daySelect.value;
-    livePlan.dayStatus[dateKey] = "granted";
+    livePlan.dayStatus[dateKey] = "saved";
     renderDaySelector();
     renderAllDaysTable();
     onDaySelectChange();
-    setDayStatus(`${dateKey} granted -- it'll now feed the next day's Generate.`);
+    setDayStatus(`${dateKey} saved -- it'll now feed the next day's Generate. This isn't final: Edit this day any time to change it and save again.`);
   });
 
-  dayUngrantBtn.addEventListener("click", async () => {
+  dayUnsaveBtn.addEventListener("click", async () => {
     const dateKey = daySelect.value;
-    const ok = await confirmEdit(`Ungrant ${dateKey}? It goes back to "generated" so you can re-generate it. Any later day that's already granted keeps whatever it was granted with -- it will NOT be recomputed just because you ungranted an earlier day.`);
+    const ok = await confirmEdit(`Edit ${dateKey}? This undoes its save (back to "generated") so you can change it and save again. Any later day that's already saved keeps whatever it was saved with -- it will NOT be recomputed just because you edited an earlier day.`);
     if (!ok) return;
     livePlan.dayStatus[dateKey] = "generated";
     renderDaySelector();
     renderAllDaysTable();
     onDaySelectChange();
-    setDayStatus(`${dateKey} ungranted.`);
+    setDayStatus(`${dateKey} is editable again.`);
   });
 
   function downloadBlob(blob, fileName) {
@@ -1014,9 +1015,9 @@
     URL.revokeObjectURL(url);
   }
 
-  // Walks the ENTIRE live model (every day, granted or not) into the same {row, col, value} patch
+  // Walks the ENTIRE live model (every day, saved or not) into the same {row, col, value} patch
   // shape xlsx_surgical_patch.js already expects -- Download is always exporting a full, current
-  // snapshot, not just what's been granted so far. Only emits a patch for a cell that's actually
+  // snapshot, not just what's been saved so far. Only emits a patch for a cell that's actually
   // different from what was originally parsed (see the originalTaskCodes/originalRosterValues
   // snapshots taken once at session-load time), so an export doesn't needlessly rewrite every
   // untouched cell in the whole date range. A task's own code cell is patched whenever it's a
@@ -1102,17 +1103,29 @@
     return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   }
 
+  // The real finish line for the whole month -- distinct from the per-day Save checkpoint above.
+  // Confirms exactly how many days are currently saved (out of the whole session) before doing
+  // anything, per the explicit requirement: "it will show him how many days was saved with a
+  // confirmed message, please confirm that these days that you want to grant." Once confirmed,
+  // finalizes those saved days' rotation state as this month's memory (for a future month to
+  // continue from) and downloads a backup copy so the supervisor can pick up on another laptop.
   grantMonthBtn.addEventListener("click", async () => {
     if (!livePlan) return;
-    const grantedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "granted");
-    if (!grantedKeys.length) { setStatus("Grant at least one day before granting this month's memory.", true); return; }
+    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
+    const totalDays = livePlan.taskDays.length;
+    if (!savedKeys.length) { setStatus("Save at least one day before you can Grant this month.", true); return; }
     const monthKey = E.monthKeyFromDateKey(startDateInput.value);
     const monthLabel = E.monthLabelFromDateKey(startDateInput.value);
     const replacing = !!memorySlots[monthKey];
-    const ok = await confirmEdit(`Grant ${monthLabel}'s ${grantedKeys.length} granted day(s) as this month's carried-forward memory for ${STATION}?${replacing ? ` This replaces the memory already granted for ${monthLabel}.` : ""} This saves every driver's current shift, rest-time and reserve/trip history so a future month's run can continue from here, and downloads a backup copy.`);
+    const notAllSaved = savedKeys.length < totalDays
+      ? ` Note: ${totalDays - savedKeys.length} of the ${totalDays} day(s) in this session are NOT saved and will not be part of this Grant.`
+      : "";
+    const ok = await confirmEdit(
+      `${savedKeys.length} of ${totalDays} day(s) in this session are saved. Grant ${monthLabel} for ${STATION} with these ${savedKeys.length} saved day(s) as the final schedule?${notAllSaved}${replacing ? ` This replaces the memory already granted for ${monthLabel}.` : ""} This saves every driver's current shift, rest-time and reserve/trip history so a future month's run can continue from here, and downloads a backup copy.`
+    );
     if (!ok) return;
 
-    const finalState = E.rebuildRotationStateFromGrantedDays(livePlan.taskDays, grantedKeys, conditions);
+    const finalState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
     Object.keys(memoryRotationState).forEach((id) => {
       if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
@@ -1128,7 +1141,7 @@
     const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
     downloadBlob(blob, `${STATION}_memory_${monthKey}.xlsx`);
 
-    setStatus(`Granted ${monthLabel}'s memory for ${STATION} (${grantedKeys.length} of ${livePlan.taskDays.length} day(s) granted) and downloaded a backup file.`);
+    setStatus(`Granted ${monthLabel} for ${STATION} (${savedKeys.length} of ${totalDays} day(s) saved) and downloaded a backup file.`);
   });
 })();
 </script>
