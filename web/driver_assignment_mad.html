@@ -670,12 +670,13 @@
     ws.addRow(["Granted for", monthLabel]);
     ws.addRow(["Granted at", grantedAt]);
     ws.addRow([]);
-    ws.addRow(["Driver ID", "Driver Name", "Shift Anchor Date", "Shift Anchor Index", "Shift Name", "Last Duty End Date", "Last Duty End Time", "Recent Kinds"]);
+    ws.addRow(["Driver ID", "Driver Name", "Shift Anchor Date", "Shift Anchor Index", "Shift Name", "Last Duty End Date", "Last Duty End Time", "Recent Kinds", "Cumulative Reserve", "Cumulative Trip"]);
     rows.forEach((r) => {
       ws.addRow([
         r.driverId, r.driverName, r.shiftAnchorDate, r.shiftAnchorIndex,
         r.shiftAnchorIndex != null ? E.SHIFT_NAMES[r.shiftAnchorIndex] : "",
         r.lastDutyEndDateKey, r.lastDutyEndTime, r.recentKinds,
+        r.cumulativeReserve, r.cumulativeTrip,
       ]);
     });
     ws.getRow(1).font = { bold: true, size: 13 };

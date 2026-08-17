@@ -363,35 +363,47 @@
   }
 
   // How much a driver is "owed" of a given kind (reserve vs trip) relative to the configured
-  // ratio, based on their recent history -- a positive number means they've been getting less
-  // of that kind than the target ratio calls for, so they're preferred for it. This is
-  // explicitly the "soft rule" version: it's a preference used to sort candidates, never a hard
-  // filter, so it can't itself cause a task to go unfilled the way the rest-time check can.
+  // ratio -- a positive number means they've been getting less of that kind than the target
+  // ratio calls for, so they're preferred for it. Judged against CUMULATIVE counts (every trip
+  // and reserve this driver has ever had in this rotationState, not just a short rolling window)
+  // -- a rolling window only ever prevents short-term streaks, it can't correct an imbalance that
+  // built up earlier in the month, which is exactly what real monthly totals showed: some drivers
+  // at 1 trip / 7 reserve, others at 10 trips / 1 reserve, despite the rolling-window rules never
+  // being individually violated at any single point in time. This is still the "soft rule"
+  // version: a preference used to sort candidates, never a hard filter, so it can't itself cause
+  // a task to go unfilled the way the rest-time check can.
   function ratioPreference(driverState, conditions, wantKind) {
-    const kinds = driverState.recentKinds || [];
-    if (!kinds.length) return 0;
-    const reserveCount = kinds.filter((k) => k === "reserve").length;
-    const tripCount = kinds.length - reserveCount;
+    const totalReserve = driverState.cumulativeReserve || 0;
+    const totalTrip = driverState.cumulativeTrip || 0;
+    const total = totalReserve + totalTrip;
+    if (!total) return 0;
     const targetTotal = conditions.ratioReserveDays + conditions.ratioTripDays;
     const targetFrac = wantKind === "reserve" ? conditions.ratioReserveDays / targetTotal : conditions.ratioTripDays / targetTotal;
-    const actualFrac = (wantKind === "reserve" ? reserveCount : tripCount) / kinds.length;
+    const actualFrac = (wantKind === "reserve" ? totalReserve : totalTrip) / total;
     return targetFrac - actualFrac;
   }
 
   // ratioPreference alone is a pure sort-order nudge -- it can never by itself stop a driver from
-  // drifting to, say, five reserve days out of a six-day ratio window while someone else gets
-  // one. Explicit policy: "if it's 3/3 then this driver should have at least three trip and
-  // three reserve, or four reserve to a trip or four trip to reserve, with tolerance one." A
-  // driver already at target-plus-one for a kind is excluded from candidacy for another of that
-  // same kind (see the withinQuota filter in assignWithConditions) unless every remaining
-  // candidate is equally at their ceiling, in which case the exclusion is dropped rather than
-  // leave the task -- or a leftover driver's manufactured reserve -- unfilled.
+  // drifting far past their fair share while someone else falls far behind. Explicit policy:
+  // "if it's 3/3 then this driver should have at least three trip and three reserve... with
+  // tolerance one" -- generalized here to a running fair share (target fraction times total days
+  // worked so far) rather than a fixed 6-day window, so it keeps correcting for the whole month
+  // instead of only ever judging the last few days. A driver already at (or past) fair-share-plus-
+  // tolerance for a kind is excluded from candidacy for another of that same kind (see the
+  // withinQuota filter in assignWithConditions) unless every remaining candidate is equally over,
+  // in which case the exclusion is dropped rather than leave the task -- or a leftover driver's
+  // manufactured reserve -- unfilled.
   const RATIO_TOLERANCE_DAYS = 1;
   function isOverKindQuota(driverState, conditions, wantKind) {
-    const kinds = driverState.recentKinds || [];
-    const target = wantKind === "reserve" ? conditions.ratioReserveDays : conditions.ratioTripDays;
-    const count = kinds.filter((k) => k === wantKind).length;
-    return count >= target + RATIO_TOLERANCE_DAYS;
+    const totalReserve = driverState.cumulativeReserve || 0;
+    const totalTrip = driverState.cumulativeTrip || 0;
+    const total = totalReserve + totalTrip;
+    if (!total) return false;
+    const targetTotal = conditions.ratioReserveDays + conditions.ratioTripDays;
+    const targetFrac = wantKind === "reserve" ? conditions.ratioReserveDays / targetTotal : conditions.ratioTripDays / targetTotal;
+    const fairShare = total * targetFrac;
+    const count = wantKind === "reserve" ? totalReserve : totalTrip;
+    return count >= fairShare + RATIO_TOLERANCE_DAYS;
   }
 
   // Staying within the ratio's total count isn't enough on its own -- a driver can still hit
@@ -480,6 +492,7 @@
           state[d.id] = {
             shiftAnchorDate: day.dateKey, shiftAnchorIndex: i % cycleLen,
             lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [],
+            cumulativeReserve: 0, cumulativeTrip: 0,
           };
         }
       });
@@ -599,6 +612,8 @@
         st.lastDutyEndMin = task.endMin != null ? task.endMin : task.startMin;
         st.recentKinds.push(wantKind);
         if (st.recentKinds.length > capLen) st.recentKinds.shift();
+        if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
+        else st.cumulativeTrip = (st.cumulativeTrip || 0) + 1;
       });
 
       // Any driver still available after every real task (trip, sweep, and every reserve slot,
@@ -624,6 +639,7 @@
         st.lastDutyEndMin = endMin;
         st.recentKinds.push("reserve");
         if (st.recentKinds.length > capLen) st.recentKinds.shift();
+        st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
       });
 
       return {
@@ -737,6 +753,8 @@
         lastDutyEndDateKey: st.lastDutyEndDateKey || null,
         lastDutyEndTime: st.lastDutyEndMin != null ? minutesToHHMM(st.lastDutyEndMin) : null,
         recentKinds: (st.recentKinds || []).join(","),
+        cumulativeReserve: st.cumulativeReserve || 0,
+        cumulativeTrip: st.cumulativeTrip || 0,
       };
     });
   }
@@ -759,6 +777,11 @@
     if (!anchorDateCell || !anchorIdxCell || !lastEndDateCell || !lastEndTimeCell || !recentKindsCell) {
       throw new Error("This memory file is missing one or more expected columns -- was it downloaded from this tool's Grant button?");
     }
+    // Added later than the other columns -- optional so an older memory file (granted before
+    // cumulative fairness tracking existed) still loads, just starting cumulative counts at 0
+    // rather than failing to load altogether.
+    const cumReserveCell = findHeaderCell(ws, "Cumulative Reserve", 20);
+    const cumTripCell = findHeaderCell(ws, "Cumulative Trip", 20);
 
     const readAdjacent = (cell) => {
       if (!cell) return null;
@@ -783,12 +806,16 @@
       const lastEndDateVal = displayValue(row.getCell(lastEndDateCell.col));
       const lastEndTimeVal = displayValue(row.getCell(lastEndTimeCell.col));
       const recentKindsVal = displayValue(row.getCell(recentKindsCell.col));
+      const cumReserveVal = cumReserveCell ? displayValue(row.getCell(cumReserveCell.col)) : null;
+      const cumTripVal = cumTripCell ? displayValue(row.getCell(cumTripCell.col)) : null;
       rotationState[id] = {
         shiftAnchorDate: anchorDateVal != null && anchorDateVal !== "" ? String(anchorDateVal).trim() : null,
         shiftAnchorIndex: anchorIdxVal != null && anchorIdxVal !== "" ? parseInt(anchorIdxVal, 10) : null,
         lastDutyEndDateKey: lastEndDateVal != null && lastEndDateVal !== "" ? String(lastEndDateVal).trim() : null,
         lastDutyEndMin: lastEndTimeVal != null && lastEndTimeVal !== "" ? parseHHMM(String(lastEndTimeVal).trim()) : null,
         recentKinds: recentKindsVal != null && recentKindsVal !== "" ? String(recentKindsVal).split(",").map((s) => s.trim()).filter(Boolean) : [],
+        cumulativeReserve: cumReserveVal != null && cumReserveVal !== "" ? parseInt(cumReserveVal, 10) : 0,
+        cumulativeTrip: cumTripVal != null && cumTripVal !== "" ? parseInt(cumTripVal, 10) : 0,
       };
     }
     if (!Object.keys(rotationState).length) throw new Error("This memory file has no driver rows in it.");
