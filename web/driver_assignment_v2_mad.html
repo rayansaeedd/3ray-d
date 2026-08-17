@@ -171,6 +171,9 @@
           <input type="file" id="taskFileInput" accept=".xlsx" />
         </div>
         <div class="drop-loaded" id="taskLoadedLabel"></div>
+        <div class="drop-actions">
+          <button type="button" class="plain" id="taskDownloadBtn" disabled>Download Task Program as Excel</button>
+        </div>
       </div>
       <div>
         <div class="dropzone" id="rosterDropzone">
@@ -180,8 +183,12 @@
           <input type="file" id="rosterFileInput" accept=".xlsx" />
         </div>
         <div class="drop-loaded" id="rosterLoadedLabel"></div>
+        <div class="drop-actions">
+          <button type="button" class="plain" id="rosterDownloadBtn" disabled>Download Roster as Excel</button>
+        </div>
       </div>
     </div>
+    <div class="note">Download exports the CURRENT state of this whole session -- granted and not-yet-granted days alike -- so you can always grab a working copy, not just once everything is granted. A hand-edited Start time changes what this session's own Generate sees but is not written into the exported file's Start column (that column expects a real Excel time value; this tool's file patcher only ever writes plain text into a cell, which is what Task/NAME/Roster cells already are).</div>
   </div>
 
   <div class="card">
@@ -312,10 +319,12 @@
   const taskFileInput = document.getElementById("taskFileInput");
   const taskBrowseLink = document.getElementById("taskBrowseLink");
   const taskLoadedLabel = document.getElementById("taskLoadedLabel");
+  const taskDownloadBtn = document.getElementById("taskDownloadBtn");
   const rosterDropzone = document.getElementById("rosterDropzone");
   const rosterFileInput = document.getElementById("rosterFileInput");
   const rosterBrowseLink = document.getElementById("rosterBrowseLink");
   const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
+  const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
   const memorySlotSelect = document.getElementById("memorySlotSelect");
   const memoryDropzone = document.getElementById("memoryDropzone");
   const memoryFileInput = document.getElementById("memoryFileInput");
@@ -533,6 +542,8 @@
     if (!ok) return false;
     livePlan = null;
     dayWorkflow.style.display = "none";
+    taskDownloadBtn.disabled = true;
+    rosterDownloadBtn.disabled = true;
     setStatus("Session cleared -- click \"Load days for review\" to start again.");
     return true;
   }
@@ -651,12 +662,28 @@
         const maxRow = day.tasks.reduce((m, t) => Math.max(m, t.row), 0);
         nextFreeRow[day.dateKey] = maxRow > 0 ? maxRow + 1 : 200;
       });
+      // Snapshots of the ORIGINAL parsed values, taken once here before any edit happens --
+      // Download only needs to patch a cell that's actually different from this, keeping the
+      // exported file's diff minimal (same "touch only what changed" philosophy as v1's
+      // buildPatches) instead of rewriting every cell in the whole date range on every export.
+      const originalTaskCodes = {};
+      taskDays.forEach((day) => {
+        originalTaskCodes[day.dateKey] = {};
+        day.tasks.forEach((t) => { originalTaskCodes[day.dateKey][t.row] = t.code; });
+      });
+      const originalRosterValues = {};
+      rosterData.drivers.forEach((d) => {
+        originalRosterValues[d.id] = {};
+        taskDays.forEach((day) => { originalRosterValues[d.id][day.dateKey] = d.statusByDateKey[day.dateKey] || ""; });
+      });
       // engineWrites[dateKey] = { driverId: code } -- the code currently written into the Roster
       // grid for that day BECAUSE of this UI (Generate or a driver reassignment), as opposed to a
       // genuine original leave code or a supervisor's own direct hand-edit of that cell. Lets a
       // re-Generate safely undo only its own (or a reassignment's) prior writes before re-running.
-      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow };
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, originalTaskCodes, originalRosterValues };
       dayWorkflow.style.display = "block";
+      taskDownloadBtn.disabled = false;
+      rosterDownloadBtn.disabled = false;
       renderDaySelector();
       renderAllDaysTable();
       renderRosterGrid();
@@ -667,6 +694,8 @@
       setStatus("Could not start the day-by-day session: " + err.message, true);
       livePlan = null;
       dayWorkflow.style.display = "none";
+      taskDownloadBtn.disabled = true;
+      rosterDownloadBtn.disabled = true;
     } finally {
       startBtn.disabled = false;
     }
@@ -984,6 +1013,68 @@
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
+
+  // Walks the ENTIRE live model (every day, granted or not) into the same {row, col, value} patch
+  // shape xlsx_surgical_patch.js already expects -- Download is always exporting a full, current
+  // snapshot, not just what's been granted so far. Only emits a patch for a cell that's actually
+  // different from what was originally parsed (see the originalTaskCodes/originalRosterValues
+  // snapshots taken once at session-load time), so an export doesn't needlessly rewrite every
+  // untouched cell in the whole date range. A task's own code cell is patched whenever it's a
+  // brand-new row (Add Task -- origCode is undefined) or hand-edited; the NAME cell is always
+  // included since blanking it back out (an Unassign) needs writing too, not just filling it in.
+  function buildLivePatches() {
+    const rosterPatches = { 0: [] };
+    const taskPatches = {};
+    livePlan.taskDays.forEach((day) => {
+      if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
+      const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
+      day.tasks.forEach((task) => {
+        const origCode = origCodes[task.row];
+        if (origCode === undefined || origCode !== task.code) {
+          taskPatches[day.sheetIndex].push({ row: task.row, col: day.taskCol, value: task.code });
+        }
+        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: task.driver ? E.formatDriverForTaskCell(task.driver) : "" });
+      });
+    });
+    livePlan.rosterData.drivers.forEach((driver) => {
+      livePlan.taskDays.forEach((day) => {
+        const current = driver.statusByDateKey[day.dateKey] || "";
+        const original = livePlan.originalRosterValues[driver.id][day.dateKey];
+        if (current !== original) {
+          rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: current });
+        }
+      });
+    });
+    return { rosterPatches, taskPatches };
+  }
+
+  taskDownloadBtn.addEventListener("click", async () => {
+    if (!livePlan) return;
+    try {
+      setStatus("Building the Task Program file...");
+      const { taskPatches } = buildLivePatches();
+      const buf = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
+      setStatus("Downloaded the current Task Program.");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not build the Task Program download: " + err.message, true);
+    }
+  });
+
+  rosterDownloadBtn.addEventListener("click", async () => {
+    if (!livePlan) return;
+    try {
+      setStatus("Building the Roster file...");
+      const { rosterPatches } = buildLivePatches();
+      const buf = await XlsxSurgicalPatch.applyCellPatches(rosterArrayBuffer, rosterPatches);
+      downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), rosterFileName);
+      setStatus("Downloaded the current Roster.");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not build the Roster download: " + err.message, true);
+    }
+  });
 
   async function buildMemoryWorkbookBlob(rows, station, monthLabel, grantedAt) {
     const wb = new ExcelJS.Workbook();
