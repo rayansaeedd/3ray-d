@@ -362,6 +362,19 @@
     return Math.round((dB - dA) / 60000) - minA + minB;
   }
 
+  // A duty whose end time is numerically smaller than its start time (Night: 20:00 start, 03:30
+  // end) actually ends on the CALENDAR DAY AFTER the day it was assigned for, not the same day --
+  // confirmed as a real, serious bug: recording lastDutyEndDateKey as the assigned-for day
+  // regardless overstated the rest gap to the next duty by exactly 24 hours for anyone whose last
+  // duty crossed midnight, letting the supposedly-hard 12-hour rest rule silently pass a
+  // back-to-back (or near-zero-gap) transition -- e.g. a driver's Night shift truly ending 03:30
+  // the next morning, immediately followed by an Early Morning duty starting at that same 03:30,
+  // computed as a full 24h of rest instead of the true 0. day.date is this duty's assigned-for
+  // day; addDays(day.date, 1) is only used when the duty actually wraps past midnight.
+  function dutyEndDateKey(day, startMin, endMin) {
+    return endMin != null && endMin < startMin ? dateKey(addDays(day.date, 1)) : day.dateKey;
+  }
+
   // How much a driver is "owed" of a given kind (reserve vs trip) relative to the configured
   // ratio -- a positive number means they've been getting less of that kind than the target
   // ratio calls for, so they're preferred for it. Judged against CUMULATIVE counts (every trip
@@ -655,8 +668,9 @@
         assignments.push({ task, driver: chosen, shiftIdx });
 
         const st = state[chosen.id];
-        st.lastDutyEndDateKey = day.dateKey;
-        st.lastDutyEndMin = task.endMin != null ? task.endMin : task.startMin;
+        const effectiveEndMin = task.endMin != null ? task.endMin : task.startMin;
+        st.lastDutyEndDateKey = dutyEndDateKey(day, task.startMin, effectiveEndMin);
+        st.lastDutyEndMin = effectiveEndMin;
         st.recentKinds.push(wantKind);
         if (st.recentKinds.length > capLen) st.recentKinds.shift();
         if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
@@ -678,11 +692,25 @@
         const shift = conditions.shifts[shiftIdx];
         const startMin = parseHHMM(shift.start);
         const endMin = parseHHMM(shift.end);
+
+        // Rest-time is the one hard rule that's never bent -- confirmed this was silently NOT
+        // true for manufactured reserve days: this block used to hand every leftover driver a
+        // reserve unconditionally, with no rest check at all, which is exactly how a driver could
+        // end up starting a new shift under an hour after their last one truly ended (see
+        // dutyEndDateKey above for the other half of this bug -- a duty crossing midnight has to
+        // be recorded as ending the NEXT calendar day for this check to even be correct). Skip
+        // (leave genuinely unassigned -- still flagged idle, never silently dropped) rather than
+        // start their locked shift's reserve window less than restHours after their last duty.
+        const st0 = state[driver.id];
+        const restOk = st0.lastDutyEndMin == null
+          || minutesBetween(st0.lastDutyEndDateKey, st0.lastDutyEndMin, day.dateKey, startMin) >= conditions.restHours * 60;
+        if (!restOk) return;
+
         const syntheticTask = { row: null, code: "RESERVE", kind: "reserve", destination: null, startMin, endMin, isPassengerLeg: false, synthetic: true };
         assignments.push({ task: syntheticTask, driver, shiftIdx });
         usedDriverIds.add(driver.id);
         const st = state[driver.id];
-        st.lastDutyEndDateKey = day.dateKey;
+        st.lastDutyEndDateKey = dutyEndDateKey(day, startMin, endMin);
         st.lastDutyEndMin = endMin;
         st.recentKinds.push("reserve");
         if (st.recentKinds.length > capLen) st.recentKinds.shift();
