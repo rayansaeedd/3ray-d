@@ -153,16 +153,17 @@
   }
 
   // One candidate-list per shift (Early Morning, Late Morning, Early Afternoon, Late Afternoon,
-  // Night, matching SHIFT_NAMES order in driver_assignment_engine.js), each a light, print-
-  // friendly tone so the task code text stays readable and the whole roster still reads as one
-  // grid. Each list has fallbacks for when a file's own palette already happens to use the first
-  // choice (same reasoning as the idle-flag candidates above).
+  // Night, matching SHIFT_NAMES order in driver_assignment_engine.js) -- confirmed scheme: dark
+  // yellow / light yellow / dark orange / orange / light blue, each print-friendly enough that the
+  // task code text stays readable and the whole roster still reads as one grid. Each list has
+  // fallbacks for when a file's own palette already happens to use the first choice (same
+  // reasoning as the idle-flag candidates above).
   const SHIFT_FLAG_ARGB_CANDIDATES = [
-    ["FFFFE699", "FFFFD966", "FFFFC000"], // Early Morning -- amber
-    ["FFC6E0B4", "FFA9D18E", "FF70AD47"], // Late Morning -- green
-    ["FFBDD7EE", "FF9DC3E6", "FF2E75B6"], // Early Afternoon -- blue
-    ["FFD9D2E9", "FFB4A7D6", "FF8064A2"], // Late Afternoon -- purple
-    ["FFD9D9D9", "FFBFBFBF", "FF808080"], // Night -- gray
+    ["FFFFC000", "FFE8A33C", "FFBF9000"], // Early Morning -- dark yellow
+    ["FFFFF2CC", "FFFFE699", "FFFFEB84"], // Late Morning -- light yellow
+    ["FFC55A11", "FFB45F06", "FF9C4A0A"], // Early Afternoon -- dark orange
+    ["FFED7D31", "FFF4B183", "FFFFA351"], // Late Afternoon -- orange
+    ["FFADD8E6", "FFBDD7EE", "FF9DC3E6"], // Night -- light blue
   ];
 
   async function pickShiftColors(zip) {

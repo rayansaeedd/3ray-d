@@ -212,11 +212,11 @@
     <div class="note" style="margin-top:10px;">
       <div style="margin-bottom:6px;">Downloaded roster color key (each day's cell is colored by which shift it falls in):</div>
       <div style="display:flex; flex-wrap:wrap; gap:12px;">
-        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#FFE699; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Morning</span>
-        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#C6E0B4; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Morning</span>
-        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#BDD7EE; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Afternoon</span>
-        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#D9D2E9; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Afternoon</span>
-        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#D9D9D9; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Night</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#FFC000; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Morning</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#FFF2CC; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Morning</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#C55A11; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Afternoon</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#ED7D31; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Afternoon</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#ADD8E6; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Night</span>
       </div>
       <div style="margin-top:6px; opacity:0.8;">On a file whose own template already uses one of these exact colors elsewhere, that one shift falls back to a slightly different shade automatically so it doesn't collide with existing meaning in the file.</div>
     </div>
@@ -260,7 +260,7 @@
   // that module's first-choice ARGB values with the alpha channel dropped, since a rare file
   // whose own palette collides with a first choice falls back to a slightly different shade only
   // in the actual downloaded file, not worth chasing here in the conditions UI).
-  const SHIFT_COLORS = ["#FFE699", "#C6E0B4", "#BDD7EE", "#D9D2E9", "#D9D9D9"];
+  const SHIFT_COLORS = ["#FFC000", "#FFF2CC", "#C55A11", "#ED7D31", "#ADD8E6"];
 
   // Per-driver overrides, requested for this station specifically. Gating on STATION here (not
   // splitting into a separate file) is what keeps this out of the Makkah page: mad.html and
@@ -347,7 +347,14 @@
       const raw = localStorage.getItem(CONDITIONS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && Array.isArray(parsed.shifts) && parsed.shifts.length === E.SHIFT_NAMES.length) return parsed;
+        if (parsed && Array.isArray(parsed.shifts) && parsed.shifts.length === E.SHIFT_NAMES.length) {
+          // Backfill shiftLockWeeks for a conditions object saved before shift-lock was restored to
+          // the shared engine -- this page has no UI field for it at all, so a stored object here
+          // should always just carry forward a sane default rather than ever leaving Generate
+          // permanently disabled by a silently-missing required field.
+          if (!Number.isInteger(parsed.shiftLockWeeks)) parsed.shiftLockWeeks = 2;
+          return parsed;
+        }
       }
     } catch (err) { /* ignore, fall through to defaults */ }
     return E.defaultConditions();
@@ -490,6 +497,9 @@
       ratioReserveDays: parseInt(document.getElementById("cfRatioReserve").value, 10) || 0,
       ratioTripDays: parseInt(document.getElementById("cfRatioTrip").value, 10) || 0,
       restHours: parseFloat(document.getElementById("cfRestHours").value) || 0,
+      // No UI field for this on this page -- always carry forward whatever was already in effect
+      // rather than silently dropping it and leaving Generate permanently disabled.
+      shiftLockWeeks: Number.isInteger(conditions.shiftLockWeeks) ? conditions.shiftLockWeeks : 2,
     };
     conditions = next;
     saveConditions(conditions);
