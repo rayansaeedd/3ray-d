@@ -133,8 +133,14 @@
   .task-driver-btn { min-width: 160px; text-align: left; }
   .driver-picker-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .driver-picker-list { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
-  .driver-picker-list-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .driver-picker-list-item {
+    padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
   .driver-picker-list-item:hover { background: #f0f1f4; }
+  .driver-picker-name { flex: 1; }
+  .driver-picker-shift { font-size: 11px; color: #666; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+  .driver-picker-shift.unknown { font-style: italic; color: #999; }
 </style>
 </head>
 <body>
@@ -866,6 +872,29 @@
 
   // --- Driver-search picker: shared modal, reused for every task's Driver button ---------------
   let activePickerTask = null; // { dateKey, row }
+  let pickerRotationState = null; // snapshot used only to look up each driver's last-week shift
+  let pickerLastWeekDate = null;
+
+  // The exact same rotationState recipe generateDay() uses (replay of this session's saved days,
+  // falling back to cross-month memory for anyone not covered) -- read-only here, just to look up
+  // where a driver was locked into a week before the day being reassigned, so a supervisor
+  // reassigning a task can see at a glance whether picking this driver means a big jump from their
+  // recent shift ("I want to know the other driver what was his shift on the last week").
+  function computeReadOnlyRotationState() {
+    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
+    const state = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
+    Object.keys(memoryRotationState).forEach((id) => {
+      if (!state[id]) state[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
+    });
+    return state;
+  }
+
+  function lastWeekShiftBadge(driverId) {
+    const st = pickerRotationState[driverId];
+    const idx = st ? E.computeShiftIndexForDriver(st, conditions, pickerLastWeekDate) : null;
+    if (idx == null) return `<span class="driver-picker-shift unknown">no shift on record</span>`;
+    return `<span class="driver-picker-shift"><span class="shift-swatch" style="background:${SHIFT_COLORS[idx]};"></span>last week: ${escapeAttr(conditions.shifts[idx].name)}</span>`;
+  }
 
   function renderDriverPickerList(query) {
     const q = query.trim().toUpperCase();
@@ -873,12 +902,15 @@
       .filter((d) => !q || d.name.toUpperCase().includes(q) || d.id.includes(q))
       .sort((a, b) => a.name.localeCompare(b.name));
     const items = [`<div class="driver-picker-list-item" data-clear="1"><em>-- Unassign --</em></div>`]
-      .concat(list.map((d) => `<div class="driver-picker-list-item" data-driver-id="${d.id}">${escapeAttr(d.name)} (${d.id})</div>`));
+      .concat(list.map((d) => `<div class="driver-picker-list-item" data-driver-id="${d.id}"><span class="driver-picker-name">${escapeAttr(d.name)} (${d.id})</span>${lastWeekShiftBadge(d.id)}</div>`));
     driverPickerList.innerHTML = items.join("");
   }
 
   function openDriverPicker(dateKey, row) {
     activePickerTask = { dateKey, row };
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    pickerRotationState = computeReadOnlyRotationState();
+    pickerLastWeekDate = day ? E.addDays(day.date, -7) : null;
     driverPickerSearch.value = "";
     renderDriverPickerList("");
     driverPickerOverlay.style.display = "flex";
@@ -887,6 +919,8 @@
   function closeDriverPicker() {
     driverPickerOverlay.style.display = "none";
     activePickerTask = null;
+    pickerRotationState = null;
+    pickerLastWeekDate = null;
   }
   driverPickerSearch.addEventListener("input", () => renderDriverPickerList(driverPickerSearch.value));
   driverPickerClose.addEventListener("click", closeDriverPicker);
