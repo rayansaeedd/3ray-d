@@ -119,6 +119,13 @@
   .day-status-generated { color: #a06a00; font-weight: 700; }
   .day-status-granted { color: var(--ink); font-weight: 700; }
   .table-scroll { overflow-x: auto; }
+
+  .roster-grid-table { white-space: nowrap; }
+  .roster-grid-table th, .roster-grid-table td { padding: 3px 4px; }
+  .roster-grid-table td.roster-driver-name { text-align: left; font-weight: 700; font-size: 11px; background: #f7f8fa; position: sticky; left: 0; }
+  .roster-grid-table th.roster-col-selected, .roster-grid-table td.roster-col-selected { background: #eafaf7; }
+  .roster-grid-table input { width: 68px; font-size: 11px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+  .roster-grid-table input:focus { outline: 2px solid var(--ink); }
 </style>
 </head>
 <body>
@@ -222,6 +229,12 @@
       </div>
     </div>
   </div>
+
+  <div class="card" id="rosterGridCard" style="display:none;">
+    <h2>6. Roster (editable)</h2>
+    <div class="note">Type directly into any cell to fix it by hand -- this grid and the Task Program view (coming next) are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
+    <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
+  </div>
 </main>
 
 <div id="confirmEditOverlay" class="driver-picker-overlay" style="display:none;">
@@ -290,6 +303,8 @@
   const dayResultTable = document.getElementById("dayResultTable");
   const allDaysTable = document.getElementById("allDaysTable");
   const grantMonthBtn = document.getElementById("grantMonthBtn");
+  const rosterGridCard = document.getElementById("rosterGridCard");
+  const rosterGridTable = document.getElementById("rosterGridTable");
 
   let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
   let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
@@ -590,10 +605,16 @@
       taskDays.forEach((day) => { day.tasks.forEach((t) => { t.driver = null; }); });
       const dayStatus = {};
       taskDays.forEach((day) => { dayStatus[day.dateKey] = "pending"; });
-      livePlan = { taskDays, rosterData, dayStatus, results: {} };
+      // engineWrites[dateKey] = { driverId: code } -- exactly what Generate itself wrote into the
+      // Roster grid for that day, so a re-Generate can safely clear only ITS OWN prior writes
+      // before re-running (a driver's cell needs to go back to blank for them to be reconsidered
+      // available) without ever touching a genuine original leave code or a supervisor's own
+      // direct hand-edit of that cell.
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {} };
       dayWorkflow.style.display = "block";
       renderDaySelector();
       renderAllDaysTable();
+      renderRosterGrid();
       onDaySelectChange();
       setStatus(`Loaded ${taskDays.length} day(s) for review. Pick a day above and click Generate.`);
     } catch (err) {
@@ -645,6 +666,47 @@
     dayResultTable.style.display = "table";
   }
 
+  function escapeAttr(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+
+  // Full roster grid: one row per driver, one column per day in this session's date range, each
+  // cell a directly-editable input bound straight to that driver's statusByDateKey -- Generate is
+  // what keeps this consistent with the Task Program view; after that, edits here are this grid's
+  // own, per the confirmed decision that the two are independently editable. Re-rendered on driver
+  // schema-affecting events only (session load, Generate, day-select change for the highlight) --
+  // never on a plain cell edit itself, so an in-progress edit never gets its focus yanked out from
+  // under it.
+  function renderRosterGrid() {
+    if (!livePlan) { rosterGridCard.style.display = "none"; return; }
+    rosterGridCard.style.display = "block";
+    const dateKeys = livePlan.taskDays.map((d) => d.dateKey);
+    const selectedDateKey = daySelect.value;
+    const headerCells = dateKeys.map((dk) =>
+      `<th class="${dk === selectedDateKey ? "roster-col-selected" : ""}">${dk.slice(5)}</th>`
+    ).join("");
+    const rows = livePlan.rosterData.drivers
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((driver) => {
+        const cells = dateKeys.map((dk) => {
+          const val = driver.statusByDateKey[dk] || "";
+          const selected = dk === selectedDateKey ? "roster-col-selected" : "";
+          return `<td class="${selected}"><input type="text" data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
+        }).join("");
+        return `<tr><td class="roster-driver-name">${driver.name}</td>${cells}</tr>`;
+      }).join("");
+    rosterGridTable.innerHTML = `<tr><th>Driver</th>${headerCells}</tr>${rows}`;
+  }
+
+  rosterGridTable.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.tagName !== "INPUT" || !t.dataset.rosterDriver) return;
+    const driver = livePlan.rosterData.drivers.find((d) => d.id === t.dataset.rosterDriver);
+    if (!driver) return;
+    driver.statusByDateKey[t.dataset.rosterDate] = t.value.trim();
+  });
+
   function onDaySelectChange() {
     const dateKey = daySelect.value;
     const status = livePlan.dayStatus[dateKey];
@@ -652,14 +714,28 @@
     dayGrantBtn.disabled = status !== "generated";
     dayUngrantBtn.disabled = status !== "granted";
     renderDayResultTable(dateKey);
+    renderRosterGrid();
     setDayStatus(`${dateKey}: ${statusLabel(status)}.`);
   }
   daySelect.addEventListener("change", onDaySelectChange);
 
   async function generateDay(dateKey) {
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+
+    // Undo this engine's own previous writes for this exact day (if any) so those drivers are
+    // reconsidered available -- but only a cell still holding exactly what Generate itself wrote
+    // last time; a cell the supervisor hand-edited since is left alone (and that driver correctly
+    // stays unavailable for this Generate, per isAvailable's "must be blank" contract).
+    const prevWrites = livePlan.engineWrites[dateKey] || {};
+    Object.keys(prevWrites).forEach((driverId) => {
+      const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
+      if (driver && driver.statusByDateKey[dateKey] === prevWrites[driverId]) {
+        driver.statusByDateKey[dateKey] = "";
+      }
+    });
+
     const grantedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "granted");
-    const rotationState = E.rebuildRotationStateFromGrantedDays(livePlan.rosterData, livePlan.taskDays, grantedKeys, conditions);
+    const rotationState = E.rebuildRotationStateFromGrantedDays(livePlan.taskDays, grantedKeys, conditions);
     // Any driver not already covered by this session's own granted history starts from the
     // cross-month memory loaded in section 3 instead of cold, same idea as v1's memory carry-over.
     Object.keys(memoryRotationState).forEach((id) => {
@@ -668,10 +744,17 @@
     day.tasks.forEach((t) => { t.driver = null; });
     const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES);
     const dayResult = result.perDay[0];
+    const newWrites = {};
     dayResult.assignments.forEach(({ task, driver }) => {
       const t = day.tasks.find((x) => x.row === task.row);
       if (t) t.driver = driver;
+      // Writes the Roster grid's cell too -- Generate is what keeps both views consistent; after
+      // this, the two grids are independently editable (no ongoing auto-sync back the other way).
+      const code = E.stripCodeForRoster(task.code);
+      driver.statusByDateKey[dateKey] = code;
+      newWrites[driver.id] = code;
     });
+    livePlan.engineWrites[dateKey] = newWrites;
     livePlan.results[dateKey] = dayResult;
     livePlan.dayStatus[dateKey] = "generated";
   }
@@ -690,6 +773,7 @@
       await generateDay(dateKey);
       renderDaySelector();
       renderAllDaysTable();
+      renderRosterGrid();
       onDaySelectChange();
       setDayStatus(`Generated ${dateKey}. Review the counts below, then Grant when you're happy with it.`);
     } catch (err) {
@@ -767,7 +851,7 @@
     const ok = await confirmEdit(`Grant ${monthLabel}'s ${grantedKeys.length} granted day(s) as this month's carried-forward memory for ${STATION}?${replacing ? ` This replaces the memory already granted for ${monthLabel}.` : ""} This saves every driver's current shift, rest-time and reserve/trip history so a future month's run can continue from here, and downloads a backup copy.`);
     if (!ok) return;
 
-    const finalState = E.rebuildRotationStateFromGrantedDays(livePlan.rosterData, livePlan.taskDays, grantedKeys, conditions);
+    const finalState = E.rebuildRotationStateFromGrantedDays(livePlan.taskDays, grantedKeys, conditions);
     Object.keys(memoryRotationState).forEach((id) => {
       if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });

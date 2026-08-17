@@ -695,9 +695,19 @@
   // Independent of whatever assignWithConditions originally proposed for a day -- only what's
   // granted now matters. `days` is the live taskDays-shaped array (each task carrying whatever
   // `.driver` the supervisor's edits left it with, or null if still unassigned).
-  function rebuildRotationStateFromGrantedDays(rosterData, days, grantedDateKeys, conditions) {
+  //
+  // Deliberately does NOT read the roster's own statusByDateKey to figure out who was "available"
+  // that day, unlike a live Generate -- a live Generate itself writes each assignment's code back
+  // into that exact same cell (see the "Roster grid" write-back in v2's own Generate handler), so
+  // by the time a LATER day's replay runs, an earlier granted day's cells are no longer blank; a
+  // driver actually assigned that day would misleadingly look "unavailable" in a fresh scan and
+  // get skipped for first-seen shift-anchor seeding. A first-seen driver here is instead anchored
+  // to the shift matching the task they were actually observed doing that day -- real information
+  // this replay has and a live Generate's blind, position-based spread doesn't need to guess at.
+  // A driver who was available but genuinely got nothing that day isn't seeded here at all; they
+  // get seeded fresh, correctly, by the live Generate call itself when THEIR day comes up.
+  function rebuildRotationStateFromGrantedDays(days, grantedDateKeys, conditions) {
     const state = {};
-    const cycleLen = conditions.shifts.length;
     const grantedSet = new Set(grantedDateKeys);
     const orderedDays = days
       .filter((day) => grantedSet.has(day.dateKey))
@@ -705,16 +715,11 @@
       .sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
 
     orderedDays.forEach((day) => {
-      const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
-      available.forEach((d, i) => {
-        if (!state[d.id]) {
-          state[d.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: i % cycleLen, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
-        }
-      });
       (day.tasks || []).forEach((task) => {
         if (!task.driver) return;
         if (!state[task.driver.id]) {
-          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
+          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         recordAssignment(state, day, task, task.driver, conditions);
       });
