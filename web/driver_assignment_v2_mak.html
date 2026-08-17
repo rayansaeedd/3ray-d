@@ -212,6 +212,19 @@
       <input type="file" id="memoryFileInput" accept=".xlsx" />
     </div>
     <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no memory loaded.</div>
+
+    <div class="note" style="margin-top:18px;">Or skip building a memory file by hand -- drop a completed month's own Task Program (the real file, with driver names already filled in) and this reads each driver's shift, reserve/trip mix and last duty straight out of it. Only the Task Program is needed for this -- no Roster upload, since every task's own NAME cell already says who did it. Set the first date this file covers, then drop it below.</div>
+    <div class="date-range-row" style="margin-top:10px;">
+      <label class="field">First day this completed Task Program covers
+        <input type="date" id="importMonthStartDate" />
+      </label>
+    </div>
+    <div class="dropzone" id="importMonthDropzone" style="margin-top:10px; max-width:460px;">
+      <div class="icon">&#8595;</div>
+      <div><strong>Import a completed month's Task Program</strong></div>
+      <div class="hint">Drop the completed Task Program .xlsx here, or <span class="browse-link" id="importMonthBrowseLink">browse</span>. Set the date above first.</div>
+      <input type="file" id="importMonthFileInput" accept=".xlsx" />
+    </div>
   </div>
 
   <div class="card">
@@ -338,6 +351,10 @@
   const memoryFileInput = document.getElementById("memoryFileInput");
   const memoryBrowseLink = document.getElementById("memoryBrowseLink");
   const memoryStatusLabel = document.getElementById("memoryStatusLabel");
+  const importMonthStartDateInput = document.getElementById("importMonthStartDate");
+  const importMonthDropzone = document.getElementById("importMonthDropzone");
+  const importMonthFileInput = document.getElementById("importMonthFileInput");
+  const importMonthBrowseLink = document.getElementById("importMonthBrowseLink");
   const startBtn = document.getElementById("startBtn");
   const statusLine = document.getElementById("statusLine");
   const dayWorkflow = document.getElementById("dayWorkflow");
@@ -584,6 +601,75 @@
     }
   }
 
+  // --- Import a completed month's Task Program directly into memory ---------------------------
+  // A completed month's Task Program already has every task's NAME cell resolved to a real
+  // driver (VLOOKUP result "<possible 'T- ' prefix><ID>-<NAME><phone, no separator>") -- reading
+  // that directly is more reliable than cross-referencing the Roster's own day-by-day codes,
+  // which strip the letter suffix that actually says reserve vs trip vs sweep. Confirmed directly
+  // against a real August file: 70% of that month's tasks shared a same-day stripped code with at
+  // least one other task, which made a first attempt at Roster-based matching genuinely
+  // misattribute at least one driver's history to someone else entirely. No Roster upload is
+  // needed for this at all -- the Task Program alone carries who did what, its real kind, and its
+  // real start/end time.
+  function readResolvedCell(cell) {
+    let v = cell.value;
+    if (v && typeof v === "object" && !(v instanceof Date) && "result" in v) {
+      v = v.result;
+      if (v && typeof v === "object" && "error" in v) return null;
+    }
+    return v;
+  }
+
+  function parseResolvedNameCell(text) {
+    const s = String(text);
+    const idMatch = /(\d{5,8})/.exec(s);
+    if (!idMatch) return null;
+    const id = idMatch[1];
+    const afterId = s.slice(idMatch.index + id.length).replace(/^[\s-]+/, "");
+    const name = afterId.replace(/\d+\s*$/, "").trim();
+    return { id, name: name || null };
+  }
+
+  // No endDate -- processes every day-sheet this file actually has, whatever range that turns out
+  // to be, rather than assuming a fixed month length.
+  function computeStateFromCompletedTaskProgram(taskWb, startDate) {
+    const taskDays = E.parseTaskProgram(taskWb, startDate);
+    if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in this file.");
+
+    const state = {};
+    const namesById = {};
+    let totalTasks = 0, resolvedTasks = 0;
+
+    taskDays.forEach((day) => {
+      const ws = taskWb.worksheets[day.sheetIndex];
+      day.tasks.forEach((task) => {
+        totalTasks++;
+        const nameVal = readResolvedCell(ws.getRow(task.row).getCell(day.nameCol));
+        if (nameVal == null || String(nameVal).trim() === "") return;
+        const parsed = parseResolvedNameCell(nameVal);
+        if (!parsed) return;
+        resolvedTasks++;
+        if (parsed.name && !namesById[parsed.id]) namesById[parsed.id] = parsed.name;
+
+        if (!state[parsed.id]) {
+          const shiftIdx = E.classifyShiftForMinutes(conditions, task.startMin);
+          state[parsed.id] = {
+            shiftAnchorDate: day.dateKey,
+            shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0,
+            lastDutyEndDateKey: null, lastDutyEndMin: null,
+            recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0,
+          };
+        }
+        E.recordAssignment(state, day, task, { id: parsed.id }, conditions);
+      });
+    });
+
+    return {
+      state, namesById, totalTasks, resolvedTasks,
+      firstDateKey: taskDays[0].dateKey, lastDateKey: taskDays[taskDays.length - 1].dateKey,
+    };
+  }
+
   wireDropzone(taskDropzone, taskFileInput, taskBrowseLink, async (file) => {
     try {
       if (!(await invalidateLivePlanIfNeeded("You loaded a new Task Program file."))) return;
@@ -636,6 +722,49 @@
     } catch (err) {
       console.error(err);
       setStatus("Could not read this memory file: " + err.message, true);
+    }
+  });
+
+  wireDropzone(importMonthDropzone, importMonthFileInput, importMonthBrowseLink, async (file) => {
+    try {
+      if (!importMonthStartDateInput.value) {
+        setStatus("Set \"First day this completed Task Program covers\" above before dropping the file.", true);
+        return;
+      }
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      const [y, m, d] = importMonthStartDateInput.value.split("-").map((x) => parseInt(x, 10));
+      const startDate = new Date(y, m - 1, d);
+      const result = computeStateFromCompletedTaskProgram(loaded.wb, startDate);
+
+      const monthKey = E.monthKeyFromDateKey(result.firstDateKey);
+      const monthLabel = E.monthLabelFromDateKey(result.firstDateKey);
+      const replacing = !!memorySlots[monthKey];
+      const driverCount = Object.keys(result.state).length;
+      const ok = await confirmEdit(
+        `Import ${result.firstDateKey} to ${result.lastDateKey} from "${file.name}"? This resolved ${result.resolvedTasks} of ${result.totalTasks} task rows to a real driver and computed rotation history for ${driverCount} driver(s). It'll be saved as ${monthLabel}'s memory${replacing ? ` (replacing what's already saved for ${monthLabel})` : ""} and downloaded as a backup file.`
+      );
+      if (!ok) { setStatus(""); return; }
+
+      memoryRotationState = result.state;
+      memorySlotSelect.value = "";
+
+      const grantedAt = new Date().toISOString();
+      memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(result.state)) };
+      saveMemorySlots(memorySlots);
+      renderMemorySlotOptions();
+      memorySlotSelect.value = monthKey;
+
+      const rosterLike = { drivers: Object.keys(result.namesById).map((id) => ({ id, name: result.namesById[id] })) };
+      const rows = E.buildMemoryRows(rosterLike, result.state);
+      const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
+      downloadBlob(blob, `${STATION}_memory_${monthKey}.xlsx`);
+
+      setMemoryStatus(`Imported ${monthLabel} directly from its Task Program (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved. Saved as memory and downloaded a backup file.`);
+      setStatus("");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not import this Task Program: " + err.message, true);
     }
   });
 
