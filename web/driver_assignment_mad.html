@@ -487,8 +487,31 @@
     const rangeOk = startDateInput.value && endDateInput.value && endDateInput.value >= startDateInput.value;
     generateBtn.disabled = !(taskWorkbook && rosterWorkbook && rangeOk && E.conditionsAreComplete(conditions));
   }
-  startDateInput.addEventListener("change", updateGenerateEnabled);
-  endDateInput.addEventListener("change", updateGenerateEnabled);
+
+  // A previous Generate's downloaded-file buttons, Grant button, and result tables must never
+  // survive something that makes them stale -- dropping a new task/roster file, changing the
+  // date range, or a failed regenerate attempt. Without this, the download buttons stayed
+  // enabled pointing at null buffers (from the dropzone handlers resetting
+  // patchedTaskBuffer/patchedRosterBuffer to null on a new file), and clicking Download would
+  // silently produce a garbage few-byte file instead of erroring -- new Blob([null]) doesn't
+  // throw, it just serializes the word "null". The two summary cards had the same hole one level
+  // up: they stayed visible showing the OLD run's numbers, and monthlySummaryDownloadBtn would
+  // silently export lastMonthlySummary from that stale run since nothing ever disabled it.
+  function invalidateGeneratedResult() {
+    plan = null;
+    lastMonthlySummary = null;
+    patchedTaskBuffer = null;
+    patchedRosterBuffer = null;
+    taskDownloadBtn.disabled = true;
+    rosterDownloadBtn.disabled = true;
+    grantRow.style.display = "none";
+    grantNote.style.display = "none";
+    summaryCard.style.display = "none";
+    monthlySummaryCard.style.display = "none";
+  }
+
+  startDateInput.addEventListener("change", () => { invalidateGeneratedResult(); updateGenerateEnabled(); });
+  endDateInput.addEventListener("change", () => { invalidateGeneratedResult(); updateGenerateEnabled(); });
 
   function wireDropzone(zoneEl, inputEl, browseLinkEl, onFile) {
     // Only the "browse" link opens the file picker (matching order_b_scheduler.html's proven
@@ -532,7 +555,7 @@
       taskWorkbook = loaded.wb;
       taskArrayBuffer = loaded.buf;
       taskFileName = file.name;
-      patchedTaskBuffer = null;
+      invalidateGeneratedResult();
       taskLoadedLabel.textContent = `Loaded: ${file.name} (${taskWorkbook.worksheets.length} sheet${taskWorkbook.worksheets.length === 1 ? "" : "s"})`;
       setStatus("");
       updateGenerateEnabled();
@@ -549,14 +572,13 @@
       rosterWorkbook = loaded.wb;
       rosterArrayBuffer = loaded.buf;
       rosterFileName = file.name;
-      patchedRosterBuffer = null;
+      invalidateGeneratedResult();
       const data = E.parseRoster(rosterWorkbook);
       rosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
       setStatus("");
       updateGenerateEnabled();
     } catch (err) {
       console.error(err);
-      rosterWorkbook = null;
       setStatus("Could not read this file: " + err.message, true);
     }
   });
@@ -584,6 +606,7 @@
   generateBtn.addEventListener("click", async () => {
     try {
       generateBtn.disabled = true;
+      invalidateGeneratedResult();
       const [y, m, d] = startDateInput.value.split("-").map((x) => parseInt(x, 10));
       const startDate = new Date(y, m - 1, d);
 
