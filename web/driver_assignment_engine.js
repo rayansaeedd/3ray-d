@@ -378,6 +378,22 @@
     return targetFrac - actualFrac;
   }
 
+  // ratioPreference alone is a pure sort-order nudge -- it can never by itself stop a driver from
+  // drifting to, say, five reserve days out of a six-day ratio window while someone else gets
+  // one. Explicit policy: "if it's 3/3 then this driver should have at least three trip and
+  // three reserve, or four reserve to a trip or four trip to reserve, with tolerance one." A
+  // driver already at target-plus-one for a kind is excluded from candidacy for another of that
+  // same kind (see the withinQuota filter in assignWithConditions) unless every remaining
+  // candidate is equally at their ceiling, in which case the exclusion is dropped rather than
+  // leave the task -- or a leftover driver's manufactured reserve -- unfilled.
+  const RATIO_TOLERANCE_DAYS = 1;
+  function isOverKindQuota(driverState, conditions, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    const target = wantKind === "reserve" ? conditions.ratioReserveDays : conditions.ratioTripDays;
+    const count = kinds.filter((k) => k === wantKind).length;
+    return count >= target + RATIO_TOLERANCE_DAYS;
+  }
+
   // rotationState: { [driverId]: { shiftAnchorDate, shiftAnchorIndex, lastDutyEndDateKey,
   // lastDutyEndMin, recentKinds: [] } } -- passed in and mutated in place so the caller can
   // persist it (e.g. to localStorage per station) and hand it back in on the next run to
@@ -505,6 +521,12 @@
         if (!restOk.length) { unassignedTasks.push(task); return; }
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
+
+        // Keep the ratio within tolerance: drop anyone already at their ceiling for this kind,
+        // unless that would empty the candidate list entirely.
+        const withinQuota = restOk.filter((d) => !isOverKindQuota(state[d.id], conditions, wantKind));
+        if (withinQuota.length) restOk = withinQuota;
+
         if (usedFallback) {
           // Among the fallback candidates, still prefer whoever's own locked shift is closest to
           // this task's start time, so the relaxation degrades gracefully rather than picking
@@ -779,5 +801,6 @@
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,
+    isOverKindQuota,
   };
 });
