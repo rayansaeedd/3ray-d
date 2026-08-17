@@ -372,35 +372,40 @@
   // being individually violated at any single point in time. This is still the "soft rule"
   // version: a preference used to sort candidates, never a hard filter, so it can't itself cause
   // a task to go unfilled the way the rest-time check can.
-  function ratioPreference(driverState, conditions, wantKind) {
+  // targetReserveFrac: the reserve share to compare this driver against -- see
+  // groupReserveFrac() in assignWithConditions for where this actually comes from (each
+  // driver's own shift-peer group's real running average, not a fixed configured number).
+  function ratioPreference(driverState, targetReserveFrac, wantKind) {
     const totalReserve = driverState.cumulativeReserve || 0;
     const totalTrip = driverState.cumulativeTrip || 0;
     const total = totalReserve + totalTrip;
     if (!total) return 0;
-    const targetTotal = conditions.ratioReserveDays + conditions.ratioTripDays;
-    const targetFrac = wantKind === "reserve" ? conditions.ratioReserveDays / targetTotal : conditions.ratioTripDays / targetTotal;
+    const targetFrac = wantKind === "reserve" ? targetReserveFrac : 1 - targetReserveFrac;
     const actualFrac = (wantKind === "reserve" ? totalReserve : totalTrip) / total;
     return targetFrac - actualFrac;
   }
 
   // ratioPreference alone is a pure sort-order nudge -- it can never by itself stop a driver from
-  // drifting far past their fair share while someone else falls far behind. Explicit policy:
-  // "if it's 3/3 then this driver should have at least three trip and three reserve... with
-  // tolerance one" -- generalized here to a running fair share (target fraction times total days
-  // worked so far) rather than a fixed 6-day window, so it keeps correcting for the whole month
-  // instead of only ever judging the last few days. A driver already at (or past) fair-share-plus-
-  // tolerance for a kind is excluded from candidacy for another of that same kind (see the
-  // withinQuota filter in assignWithConditions) unless every remaining candidate is equally over,
-  // in which case the exclusion is dropped rather than leave the task -- or a leftover driver's
-  // manufactured reserve -- unfilled.
+  // drifting far past their fair share while someone else falls far behind. Originally this
+  // measured "fair share" against the configured ratio (e.g. 3 reserve : 3 trip) directly. That
+  // broke down against a real month's data: real task supply skewed heavily toward reserve (more
+  // reserve slots than trip slots, plus every leftover available driver getting a manufactured
+  // reserve duty), so a fixed 50/50 target became mathematically unreachable for most of the
+  // roster partway through the month -- and once "everyone's already over" for a whole shift's
+  // peer group, the old fallback just gave up on fairness entirely, letting the spread run wild
+  // (some drivers over 90% reserve, others barely touched). Comparing each driver to their own
+  // shift-peer group's actual running average instead of the fixed target keeps "fair" always
+  // achievable no matter how skewed the real supply is: everyone within a shift group converges
+  // toward the SAME ratio as their peers, rather than a random few absorbing the group's
+  // shortfall alone. See groupReserveFrac() in assignWithConditions for where targetReserveFrac
+  // comes from.
   const RATIO_TOLERANCE_DAYS = 1;
-  function isOverKindQuota(driverState, conditions, wantKind) {
+  function isOverKindQuota(driverState, targetReserveFrac, wantKind) {
     const totalReserve = driverState.cumulativeReserve || 0;
     const totalTrip = driverState.cumulativeTrip || 0;
     const total = totalReserve + totalTrip;
     if (!total) return false;
-    const targetTotal = conditions.ratioReserveDays + conditions.ratioTripDays;
-    const targetFrac = wantKind === "reserve" ? conditions.ratioReserveDays / targetTotal : conditions.ratioTripDays / targetTotal;
+    const targetFrac = wantKind === "reserve" ? targetReserveFrac : 1 - targetReserveFrac;
     const fairShare = total * targetFrac;
     const count = wantKind === "reserve" ? totalReserve : totalTrip;
     return count >= fairShare + RATIO_TOLERANCE_DAYS;
@@ -498,10 +503,35 @@
       });
 
       const byShift = {};
+      const driverShiftIdx = {};
       available.forEach((d) => {
         const idx = computeShiftIndexForDriver(state[d.id], conditions, day.date);
+        driverShiftIdx[d.id] = idx;
         (byShift[idx] = byShift[idx] || []).push(d);
       });
+
+      // Each shift's peer-group reserve share, as of the start of today: the real running
+      // average of everyone currently locked to that shift, not the configured ratio. Computed
+      // once per day (not re-derived mid-day) so today's own picks don't shift the target out
+      // from under each other. Falls back to the configured ratio only while a group has no
+      // history at all yet (day 1, or a shift nobody's been locked to before).
+      const configuredReserveFrac = conditions.ratioReserveDays / (conditions.ratioReserveDays + conditions.ratioTripDays);
+      const groupTotals = {};
+      Object.keys(byShift).forEach((idxStr) => {
+        const idx = parseInt(idxStr, 10);
+        const totals = { reserve: 0, trip: 0 };
+        byShift[idx].forEach((d) => {
+          const st = state[d.id];
+          totals.reserve += st.cumulativeReserve || 0;
+          totals.trip += st.cumulativeTrip || 0;
+        });
+        groupTotals[idx] = totals;
+      });
+      const groupReserveFrac = (idx) => {
+        const totals = idx != null ? groupTotals[idx] : null;
+        const groupTotal = totals ? totals.reserve + totals.trip : 0;
+        return groupTotal ? totals.reserve / groupTotal : configuredReserveFrac;
+      };
 
       const usedDriverIds = new Set();
       const assignments = [];
@@ -549,10 +579,13 @@
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
         // A candidate is "fairness compliant" for this task if picking them wouldn't push them
-        // over their ratio ceiling AND wouldn't repeat their immediately previous kind -- the two
-        // rules are applied together so the same adjacent-shift borrow below can rescue either
-        // one, instead of each rule needing its own separate widening logic.
-        const isFairnessCompliant = (d) => !isOverKindQuota(state[d.id], conditions, wantKind) && !isRepeatingLastKind(state[d.id], wantKind);
+        // over their OWN shift-peer group's ratio ceiling AND wouldn't repeat their immediately
+        // previous kind -- the two rules are applied together so the same adjacent-shift borrow
+        // below can rescue either one, instead of each rule needing its own separate widening
+        // logic. Each candidate is judged against their own group (driverShiftIdx[d.id]), not
+        // the task's shift -- a borrowed candidate from another shift still owes fairness to
+        // their own peers, not the task's.
+        const isFairnessCompliant = (d) => !isOverKindQuota(state[d.id], groupReserveFrac(driverShiftIdx[d.id]), wantKind) && !isRepeatingLastKind(state[d.id], wantKind);
         let fairOk = restOk.filter(isFairnessCompliant);
 
         // If literally everyone left in THIS shift's own locked-in bucket already breaks a
@@ -573,6 +606,24 @@
             restOk = adjacentFairOk;
             fairOk = adjacentFairOk;
             usedFallback = true; // reuse the shift-closeness tiebreak sort below for this borrowed pool
+          } else {
+            // Even the neighboring shift has nobody fairness-compliant left. This is what actually
+            // happens when a shift bucket is structurally short on trip (or reserve) supply for a
+            // long stretch -- confirmed directly against a real month's output: some drivers ended
+            // up at 13 reserve/3 trip while others sat at 2 reserve/14 trip, the same per-shift
+            // supply skew pulling opposite directions, because adjacent-only borrowing had nowhere
+            // left to draw from on THIS shift's own persistently short side. Widening one more
+            // step -- every available driver, any shift -- is what actually lets a trip-surplus
+            // shift correct a reserve-starved one instead of the tolerance cap just giving up.
+            // Still fairness-first, and still only a preference: shift-closeness remains the
+            // tiebreak below via usedFallback, so this only reaches further when it actually has to.
+            const anyPool = available.filter((d) => !usedDriverIds.has(d.id));
+            const anyFairOk = restFilter(anyPool, task).filter(isFairnessCompliant);
+            if (anyFairOk.length) {
+              restOk = anyFairOk;
+              fairOk = anyFairOk;
+              usedFallback = true;
+            }
           }
         }
 
@@ -583,18 +634,18 @@
           // this task's start time, so the relaxation degrades gracefully rather than picking
           // arbitrarily.
           restOk.sort((a, b) => {
-            const scoreA = ratioPreference(state[a.id], conditions, wantKind) + specialRuleBias(a, task, rules);
-            const scoreB = ratioPreference(state[b.id], conditions, wantKind) + specialRuleBias(b, task, rules);
+            const scoreA = ratioPreference(state[a.id], groupReserveFrac(driverShiftIdx[a.id]), wantKind) + specialRuleBias(a, task, rules);
+            const scoreB = ratioPreference(state[b.id], groupReserveFrac(driverShiftIdx[b.id]), wantKind) + specialRuleBias(b, task, rules);
             const ratioDiff = scoreB - scoreA;
             if (ratioDiff !== 0) return ratioDiff;
-            const distA = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[a.id], conditions, day.date), shiftIdx, cycleLen);
-            const distB = shiftIdx == null ? 0 : shiftDistance(computeShiftIndexForDriver(state[b.id], conditions, day.date), shiftIdx, cycleLen);
+            const distA = shiftIdx == null ? 0 : shiftDistance(driverShiftIdx[a.id], shiftIdx, cycleLen);
+            const distB = shiftIdx == null ? 0 : shiftDistance(driverShiftIdx[b.id], shiftIdx, cycleLen);
             return distA - distB;
           });
         } else {
           restOk.sort((a, b) => {
-            const scoreA = ratioPreference(state[a.id], conditions, wantKind) + specialRuleBias(a, task, rules);
-            const scoreB = ratioPreference(state[b.id], conditions, wantKind) + specialRuleBias(b, task, rules);
+            const scoreA = ratioPreference(state[a.id], groupReserveFrac(driverShiftIdx[a.id]), wantKind) + specialRuleBias(a, task, rules);
+            const scoreB = ratioPreference(state[b.id], groupReserveFrac(driverShiftIdx[b.id]), wantKind) + specialRuleBias(b, task, rules);
             return scoreB - scoreA;
           });
         }
