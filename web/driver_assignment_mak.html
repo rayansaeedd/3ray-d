@@ -207,7 +207,7 @@
   <div class="card" id="summaryCard" style="display:none;">
     <h2>5. Result</h2>
     <table class="summary-table" id="summaryTable"></table>
-    <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit -- never bent) ruled out every available driver that day, or there were simply more tasks than available drivers. Shift-lock is a soft preference: a driver outside their locked shift still gets picked over leaving a task unfilled. "Unassigned drivers" = every task that day was already filled and this driver was left over -- in the downloaded roster file, that driver's day cell is recolored (picking a color not already used anywhere in your roster's own palette, so it never collides with a color your file already uses for something else) so it stands out from an ordinary blank/available cell.</div>
+    <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit -- never bent) ruled out every available driver that day, or there were simply more tasks than available drivers. Shift-lock is a soft preference: a driver outside their locked shift still gets picked over leaving a task unfilled. "Unassigned drivers" should always read 0 -- any driver left over once every real task is handled gets a manufactured "RESERVE" duty for the day (written into their roster cell, in their own locked shift's window) instead of being left blank, so no available driver ever shows up with nothing to do.</div>
     <div class="drop-actions" id="grantRow" style="display:none; margin-top:14px;">
       <button type="button" class="primary" id="grantBtn">Grant this as <span id="grantMonthLabel"></span>'s final schedule</button>
     </div>

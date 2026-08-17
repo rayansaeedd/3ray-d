@@ -537,6 +537,31 @@
         if (st.recentKinds.length > capLen) st.recentKinds.shift();
       });
 
+      // Any driver still available after every real task (trip, sweep, and every reserve slot,
+      // including the round-robin-spread duplicates) has been handled gets a manufactured
+      // reserve duty for the day -- "if there are unassigned drivers, create a reserve task for
+      // them, I don't want to see any unassigned driver." This is a synthetic task with no row
+      // in the Task Program (there's no real duty behind it to patch there), so buildPatches()
+      // only ever writes it into that driver's own roster day-cell -- the same "RESERVE" label
+      // already used elsewhere in these files for a reserve day -- never into the Task Program.
+      // Their own locked shift's window stands in for a start/end time, so this reads as a
+      // normal reserve day within their rotation rather than a special case, and updates
+      // rest-time/ratio state exactly the way a real reserve task would.
+      available.filter((d) => !usedDriverIds.has(d.id)).forEach((driver) => {
+        const shiftIdx = computeShiftIndexForDriver(state[driver.id], conditions, day.date);
+        const shift = conditions.shifts[shiftIdx];
+        const startMin = parseHHMM(shift.start);
+        const endMin = parseHHMM(shift.end);
+        const syntheticTask = { row: null, code: "RESERVE", kind: "reserve", destination: null, startMin, endMin, isPassengerLeg: false, synthetic: true };
+        assignments.push({ task: syntheticTask, driver });
+        usedDriverIds.add(driver.id);
+        const st = state[driver.id];
+        st.lastDutyEndDateKey = day.dateKey;
+        st.lastDutyEndMin = endMin;
+        st.recentKinds.push("reserve");
+        if (st.recentKinds.length > capLen) st.recentKinds.shift();
+      });
+
       return {
         date: day.date, dateKey: day.dateKey, sheetIndex: day.sheetIndex, nameCol: day.nameCol,
         assignments,
@@ -734,7 +759,9 @@
     plan.perDay.forEach((day) => {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       day.assignments.forEach(({ task, driver }) => {
-        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
+        if (!task.synthetic) {
+          taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
+        }
         rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code });
       });
       (day.unassignedDrivers || []).forEach((driver) => {
