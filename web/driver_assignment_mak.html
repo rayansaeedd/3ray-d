@@ -208,6 +208,17 @@
     <h2>5. Result</h2>
     <table class="summary-table" id="summaryTable"></table>
     <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit -- never bent) ruled out every available driver that day, or there were simply more tasks than available drivers. Shift-lock is a soft preference: a driver outside their locked shift still gets picked over leaving a task unfilled. "Unassigned drivers" should always read 0 -- any driver left over once every real task is handled gets a manufactured "RESERVE" duty for the day (written into their roster cell, in their own locked shift's window) instead of being left blank, so no available driver ever shows up with nothing to do.</div>
+    <div class="note" style="margin-top:10px;">
+      <div style="margin-bottom:6px;">Downloaded roster color key (each day's cell is colored by which shift it falls in):</div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px;">
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#FFE699; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Morning</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#C6E0B4; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Morning</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#BDD7EE; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Early Afternoon</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#D9D2E9; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Late Afternoon</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span style="width:14px; height:14px; border-radius:3px; background:#D9D9D9; border:1px solid rgba(0,0,0,0.15); display:inline-block;"></span>Night</span>
+      </div>
+      <div style="margin-top:6px; opacity:0.8;">On a file whose own template already uses one of these exact colors elsewhere, that one shift falls back to a slightly different shade automatically so it doesn't collide with existing meaning in the file.</div>
+    </div>
     <div class="drop-actions" id="grantRow" style="display:none; margin-top:14px;">
       <button type="button" class="primary" id="grantBtn">Grant this as <span id="grantMonthLabel"></span>'s final schedule</button>
     </div>

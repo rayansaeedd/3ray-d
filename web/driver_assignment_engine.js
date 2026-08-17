@@ -652,7 +652,7 @@
         const chosen = restOk[0];
 
         usedDriverIds.add(chosen.id);
-        assignments.push({ task, driver: chosen });
+        assignments.push({ task, driver: chosen, shiftIdx });
 
         const st = state[chosen.id];
         st.lastDutyEndDateKey = day.dateKey;
@@ -679,7 +679,7 @@
         const startMin = parseHHMM(shift.start);
         const endMin = parseHHMM(shift.end);
         const syntheticTask = { row: null, code: "RESERVE", kind: "reserve", destination: null, startMin, endMin, isPassengerLeg: false, synthetic: true };
-        assignments.push({ task: syntheticTask, driver });
+        assignments.push({ task: syntheticTask, driver, shiftIdx });
         usedDriverIds.add(driver.id);
         const st = state[driver.id];
         st.lastDutyEndDateKey = day.dateKey;
@@ -896,11 +896,14 @@
     const taskPatches = {};
     plan.perDay.forEach((day) => {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
-      day.assignments.forEach(({ task, driver }) => {
+      day.assignments.forEach(({ task, driver, shiftIdx }) => {
         if (!task.synthetic) {
           taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
         }
-        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code });
+        // shiftIdx colors the roster cell so a supervisor can see each day's shift at a glance --
+        // one color per shift (see SHIFT_FLAG_ARGB_CANDIDATES in xlsx_surgical_patch.js), picked
+        // per-file to avoid colliding with that file's own existing palette.
+        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code, shiftIdx });
       });
       (day.unassignedDrivers || []).forEach((driver) => {
         rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], flag: true });

@@ -110,29 +110,69 @@
     return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
   }
 
+  // Reads every fill color already present in this specific file's xl/styles.xml <fills>
+  // palette -- shared by every "pick a color that won't collide with this file's own existing
+  // meaning" decision below (the idle-driver flag, and now the per-shift roster colors).
+  async function getExistingFillRgbs(zip) {
+    const stylesFile = zip.file("xl/styles.xml");
+    const existingRgbs = new Set();
+    if (!stylesFile) return existingRgbs;
+    const xml = await stylesFile.async("string");
+    const fillsMatch = /<fills count="\d+">([\s\S]*?)<\/fills>/.exec(xml);
+    if (fillsMatch) {
+      const rgbRe = /rgb="([0-9A-Fa-f]{8})"/g;
+      let m;
+      while ((m = rgbRe.exec(fillsMatch[1]))) existingRgbs.add(m[1].toUpperCase());
+    }
+    return existingRgbs;
+  }
+
+  // Picks the first candidate (in order) not already present anywhere in this file's own
+  // palette, and not already claimed by an earlier pick in this same patch run (alreadyPicked) --
+  // so two different purposes (e.g. two different shifts) never accidentally end up the same
+  // color just because both of their first choices happened to collide with the file's palette.
+  // Falls back to the first candidate if every one collides (matches this module's existing
+  // "reuse the request cleanly rather than error" style -- a rare double-use of one color is far
+  // better than failing the whole patch).
+  function pickColor(candidates, existingRgbs, alreadyPicked) {
+    const pick = candidates.find((c) => !existingRgbs.has(c) && !alreadyPicked.has(c));
+    return pick || candidates[0];
+  }
+
   // Candidate fill colors to flag a driver who was available on a given day but had no task
   // left to give them once every task that day was filled. A single hardcoded color is not
   // safe: a real roster's own palette can already use a given color for something else entirely
   // (confirmed directly against a real file whose own template already painted "not scheduled"
   // day cells with this exact magenta, unrelated to this tool) -- reusing it would make the new
   // flag visually indistinguishable from an existing, different meaning already in the file.
-  // pickIdleFlagColor() checks each candidate, in order, against the specific file being patched
-  // and picks the first one not already present anywhere in its xl/styles.xml <fills> palette.
   const IDLE_FLAG_ARGB_CANDIDATES = ["FFFF00FF", "FF00FFFF", "FFFF3399", "FF33CCFF", "FF9933FF", "FF00CC99"];
 
   async function pickIdleFlagColor(zip) {
-    const stylesFile = zip.file("xl/styles.xml");
-    if (!stylesFile) return IDLE_FLAG_ARGB_CANDIDATES[0];
-    const xml = await stylesFile.async("string");
-    const fillsMatch = /<fills count="\d+">([\s\S]*?)<\/fills>/.exec(xml);
-    const existingRgbs = new Set();
-    if (fillsMatch) {
-      const rgbRe = /rgb="([0-9A-Fa-f]{8})"/g;
-      let m;
-      while ((m = rgbRe.exec(fillsMatch[1]))) existingRgbs.add(m[1].toUpperCase());
-    }
-    const pick = IDLE_FLAG_ARGB_CANDIDATES.find((c) => !existingRgbs.has(c));
-    return pick || IDLE_FLAG_ARGB_CANDIDATES[0];
+    const existingRgbs = await getExistingFillRgbs(zip);
+    return pickColor(IDLE_FLAG_ARGB_CANDIDATES, existingRgbs, new Set());
+  }
+
+  // One candidate-list per shift (Early Morning, Late Morning, Early Afternoon, Late Afternoon,
+  // Night, matching SHIFT_NAMES order in driver_assignment_engine.js), each a light, print-
+  // friendly tone so the task code text stays readable and the whole roster still reads as one
+  // grid. Each list has fallbacks for when a file's own palette already happens to use the first
+  // choice (same reasoning as the idle-flag candidates above).
+  const SHIFT_FLAG_ARGB_CANDIDATES = [
+    ["FFFFE699", "FFFFD966", "FFFFC000"], // Early Morning -- amber
+    ["FFC6E0B4", "FFA9D18E", "FF70AD47"], // Late Morning -- green
+    ["FFBDD7EE", "FF9DC3E6", "FF2E75B6"], // Early Afternoon -- blue
+    ["FFD9D2E9", "FFB4A7D6", "FF8064A2"], // Late Afternoon -- purple
+    ["FFD9D9D9", "FFBFBFBF", "FF808080"], // Night -- gray
+  ];
+
+  async function pickShiftColors(zip) {
+    const existingRgbs = await getExistingFillRgbs(zip);
+    const alreadyPicked = new Set();
+    return SHIFT_FLAG_ARGB_CANDIDATES.map((candidates) => {
+      const color = pickColor(candidates, existingRgbs, alreadyPicked);
+      alreadyPicked.add(color);
+      return color;
+    });
   }
 
   // Finds (or, the first time it's needed, appends) a solid-fill cellXf style in xl/styles.xml
@@ -192,6 +232,19 @@
     if (!m) return insertCellIntoRow(xml, address, null, ` s="${styleIndex}"`);
     const attrs = /\ss="\d+"/.test(m[1]) ? m[1].replace(/\ss="\d+"/, ` s="${styleIndex}"`) : `${m[1]} s="${styleIndex}"`;
     const newCellXml = `<c r="${address}"${attrs}${m[2]}`;
+    return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
+  }
+
+  // Writes both a new value AND a new (explicit) style index for a cell in one go -- used for
+  // the per-shift roster coloring, where every patched cell needs its usual value (the task code)
+  // plus a fill that shows which shift it belongs to, rather than the existing style it happened
+  // to already carry.
+  function patchCellValueAndStyleInSheetXml(xml, address, value, styleIndex) {
+    const re = new RegExp(`<c r="${address}"([^>]*?)(?:/>|>([\\s\\S]*?)</c>)`);
+    const m = re.exec(xml);
+    const styleAttr = ` s="${styleIndex}"`;
+    const newCellXml = buildCellXml(address, styleAttr, value);
+    if (!m) return insertCellIntoRow(xml, address, value, styleAttr);
     return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
   }
 
@@ -289,13 +342,16 @@
     return rows;
   }
 
-  // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true }, ...] }
+  // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true } |
+  // { row, col, value, shiftIdx }, ...] }
   // A `flag: true` entry is style-only -- it recolors the cell (to whichever candidate color
   // pickIdleFlagColor() finds unused in this specific file) without touching whatever value is
-  // already there (used to mark an available-but-unused driver's day cell).
+  // already there (used to mark an available-but-unused driver's day cell). A `shiftIdx` entry
+  // writes the value AND recolors the cell to that shift's color (0-4, matching SHIFT_NAMES
+  // order in driver_assignment_engine.js), so a supervisor can see each day's shift at a glance.
   // Returns a new ArrayBuffer for the patched .xlsx -- every part not named in patchesBySheetIndex
-  // (plus xl/styles.xml, only if a flag patch is actually present) is carried through by JSZip
-  // unchanged.
+  // (plus xl/styles.xml, only if a flag or shiftIdx patch is actually present) is carried through
+  // by JSZip unchanged.
   async function applyCellPatches(originalArrayBuffer, patchesBySheetIndex) {
     const zip = await JSZip.loadAsync(originalArrayBuffer);
     // Real .xlsx files (including every one this engine has been tested against) don't carry
@@ -317,6 +373,23 @@
       return flagStyleIndex;
     }
 
+    let shiftStyleIndexes = null;
+    async function getShiftStyleIndex(shiftIdx) {
+      if (!shiftStyleIndexes) {
+        const colors = await pickShiftColors(zip);
+        // Sequential, not Promise.all -- ensureFillStyle reads xl/styles.xml, appends to it, and
+        // writes it straight back into the zip. Running all 5 calls concurrently means each one
+        // starts from the same stale snapshot and the last write wins, silently discarding the
+        // other 4 shifts' fills (confirmed directly: only 1 of 5 shift colors actually made it
+        // into a real patched file's styles.xml under Promise.all).
+        shiftStyleIndexes = [];
+        for (const color of colors) {
+          shiftStyleIndexes.push(await ensureFillStyle(zip, color));
+        }
+      }
+      return shiftStyleIndexes[shiftIdx];
+    }
+
     for (const sheetIndexStr of Object.keys(patchesBySheetIndex)) {
       const sheetIndex = parseInt(sheetIndexStr, 10);
       const partName = sheetParts[sheetIndex];
@@ -327,6 +400,9 @@
         if (patch.flag) {
           const styleIndex = await getFlagStyleIndex();
           xml = patchCellStyleInSheetXml(xml, address, styleIndex);
+        } else if (patch.shiftIdx != null) {
+          const styleIndex = await getShiftStyleIndex(patch.shiftIdx);
+          xml = patchCellValueAndStyleInSheetXml(xml, address, patch.value, styleIndex);
         } else {
           xml = patchCellInSheetXml(xml, address, patch.value);
         }
@@ -347,8 +423,8 @@
 
   return {
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
-    patchCellInSheetXml, patchCellStyleInSheetXml, ensureFillStyle,
-    pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES,
+    patchCellInSheetXml, patchCellStyleInSheetXml, patchCellValueAndStyleInSheetXml, ensureFillStyle,
+    pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES, pickShiftColors, SHIFT_FLAG_ARGB_CANDIDATES,
     getDrawingPartNames, findPassengerMarkedRows,
   };
 });
