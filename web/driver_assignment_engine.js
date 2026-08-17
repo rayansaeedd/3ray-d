@@ -89,6 +89,20 @@
     return null;
   }
 
+  // The real roster never carries a task code's full letter suffix -- confirmed directly against
+  // a real completed month by cross-referencing 48 real driver/day pairs against the Task
+  // Program's own codes: a task like "0600/7RK" (reserve) always lands in the roster as just
+  // "0600/7", the same "HHMM/routeDigits" shape a plain trip code like "0700/7A" also gets
+  // trimmed down to. Reserve and trip end up looking identical in the roster text -- there's no
+  // separate "RESERVE" label anywhere in a real file. The one exception: a code with no route
+  // digits at all between the slash and the letters (e.g. "1100/RA", seen when a reserve slot
+  // has no route number) is left completely untouched, since there's nothing to trim down to.
+  function stripCodeForRoster(code) {
+    const s = String(code).trim();
+    const m = /^(\d{3,5}\/\d{1,2})[A-Za-z]{1,3}\s*$/.exec(s);
+    return m ? m[1] : s;
+  }
+
   // A task's cell being highlighted yellow in the Task Program is how the supervisor marks that
   // specific leg as a Passenger assignment (as opposed to Main/driving) -- confirmed directly.
   function isPassengerLegCell(cell) {
@@ -316,12 +330,13 @@
     return {
       // Blank on purpose -- the supervisor has to set every shift's window before Generate is
       // allowed to run, per how this was specified: "before we hit generate, we have to set
-      // conditions."
+      // conditions." These 5 windows are only used to label each assignment's shift for the
+      // roster coloring now -- real start times spread continuously across the day, so they're
+      // no longer a lock a driver gets held to.
       shifts: SHIFT_NAMES.map((name) => ({ name, start: "", end: "" })),
       ratioReserveDays: 4,
       ratioTripDays: 2,
       restHours: 12,
-      shiftLockWeeks: 2,
     };
   }
 
@@ -341,8 +356,7 @@
       && Number.isFinite(conditions.ratioReserveDays) && conditions.ratioReserveDays >= 0
       && Number.isFinite(conditions.ratioTripDays) && conditions.ratioTripDays >= 0
       && (conditions.ratioReserveDays + conditions.ratioTripDays) > 0
-      && Number.isFinite(conditions.restHours) && conditions.restHours >= 0
-      && Number.isInteger(conditions.shiftLockWeeks) && conditions.shiftLockWeeks >= 1;
+      && Number.isFinite(conditions.restHours) && conditions.restHours >= 0;
   }
 
   // Handles a shift window that crosses midnight (e.g. Night 19:00-03:30) the same way a plain
@@ -379,31 +393,6 @@
     return bestIdx;
   }
 
-  // A driver's locked shift for a given date is computed purely from an anchor point (the date
-  // and shift index they were locked into at some point) plus how many whole shiftLockWeeks
-  // blocks have elapsed since then, cycling through the fixed Early Morning -> Late Morning ->
-  // Early Afternoon -> Late Afternoon -> Night -> repeat order. Computing it this way (rather
-  // than storing "current shift" directly) is what lets a later run just keep advancing from
-  // wherever a previous run left off, without needing to replay every day in between.
-  function computeShiftIndexForDriver(driverState, conditions, date) {
-    if (!driverState || !driverState.shiftAnchorDate) return null;
-    const anchor = new Date(driverState.shiftAnchorDate + "T00:00:00");
-    const target = new Date(dateKey(date) + "T00:00:00");
-    const daysBetween = Math.round((target - anchor) / 86400000);
-    const weeksElapsed = Math.floor(daysBetween / 7);
-    const blocksElapsed = Math.floor(weeksElapsed / conditions.shiftLockWeeks);
-    const n = conditions.shifts.length;
-    return ((driverState.shiftAnchorIndex + blocksElapsed) % n + n) % n;
-  }
-
-  // Circular distance between two shift indexes around the fixed 5-shift rotation order, used
-  // only to rank fallback candidates (never a hard filter).
-  function shiftDistance(a, b, cycleLen) {
-    if (a == null) return cycleLen;
-    const diff = Math.abs(a - b);
-    return Math.min(diff, cycleLen - diff);
-  }
-
   function minutesBetween(dateKeyA, minA, dateKeyB, minB) {
     const dA = new Date(dateKeyA + "T00:00:00");
     const dB = new Date(dateKeyB + "T00:00:00");
@@ -436,6 +425,14 @@
   // targetReserveFrac: the reserve share to compare this driver against -- see
   // groupReserveFrac() in assignWithConditions for where this actually comes from (each
   // driver's own shift-peer group's real running average, not a fixed configured number).
+  // A pure sort-order nudge toward the configured ratio -- never a hard exclusion. Confirmed
+  // against a real completed month that this is the right shape: real reserve/trip totals vary
+  // driver to driver on their own (roughly 0.5x-4x the target ratio in practice), so forcing
+  // everyone toward a tight band doesn't match how this actually gets done by hand. A hard quota
+  // was tried and removed -- once a fixed target became unreachable for part of the roster (real
+  // task supply skews toward reserve some days), the exclusion just had to keep getting widened
+  // and second-guessed. A soft nudge plus "don't repeat yesterday's kind" (isRepeatingLastKind
+  // below) is simpler and matches the real spread better.
   function ratioPreference(driverState, targetReserveFrac, wantKind) {
     const totalReserve = driverState.cumulativeReserve || 0;
     const totalTrip = driverState.cumulativeTrip || 0;
@@ -446,49 +443,22 @@
     return targetFrac - actualFrac;
   }
 
-  // ratioPreference alone is a pure sort-order nudge -- it can never by itself stop a driver from
-  // drifting far past their fair share while someone else falls far behind. Originally this
-  // measured "fair share" against the configured ratio (e.g. 3 reserve : 3 trip) directly. That
-  // broke down against a real month's data: real task supply skewed heavily toward reserve (more
-  // reserve slots than trip slots, plus every leftover available driver getting a manufactured
-  // reserve duty), so a fixed 50/50 target became mathematically unreachable for most of the
-  // roster partway through the month -- and once "everyone's already over" for a whole shift's
-  // peer group, the old fallback just gave up on fairness entirely, letting the spread run wild
-  // (some drivers over 90% reserve, others barely touched). Comparing each driver to their own
-  // shift-peer group's actual running average instead of the fixed target keeps "fair" always
-  // achievable no matter how skewed the real supply is: everyone within a shift group converges
-  // toward the SAME ratio as their peers, rather than a random few absorbing the group's
-  // shortfall alone. See groupReserveFrac() in assignWithConditions for where targetReserveFrac
-  // comes from.
-  const RATIO_TOLERANCE_DAYS = 1;
-  function isOverKindQuota(driverState, targetReserveFrac, wantKind) {
-    const totalReserve = driverState.cumulativeReserve || 0;
-    const totalTrip = driverState.cumulativeTrip || 0;
-    const total = totalReserve + totalTrip;
-    if (!total) return false;
-    const targetFrac = wantKind === "reserve" ? targetReserveFrac : 1 - targetReserveFrac;
-    const fairShare = total * targetFrac;
-    const count = wantKind === "reserve" ? totalReserve : totalTrip;
-    return count >= fairShare + RATIO_TOLERANCE_DAYS;
-  }
-
-  // Staying within the ratio's total count isn't enough on its own -- a driver can still hit
-  // exactly 3 reserve / 3 trip while every reserve day comes first and every trip day comes
-  // last (RRRTTT). Explicit policy: "make it a mix, one day reserve one day trip... do not put
-  // it in a sequence." A driver whose most recent assignment was already this same kind is
-  // excluded from candidacy for another one of that kind, the same "unless it would empty the
-  // list" pattern as the quota check -- this is what actually forces alternation (RTRTRT)
-  // instead of just capping the total.
+  // A driver can still hit their overall ratio while every reserve day comes first and every
+  // trip day comes last (RRRTTT). Explicit policy: "make it a mix, one day reserve one day
+  // trip... do not put it in a sequence." A driver whose most recent assignment was already this
+  // same kind is preferred against (not hard-excluded -- see assignWithConditions, this only
+  // narrows the candidate pool when it wouldn't leave the task unfilled) for another one of that
+  // kind -- this is what actually forces alternation (RTRTRT) instead of just capping the total.
   function isRepeatingLastKind(driverState, wantKind) {
     const kinds = driverState.recentKinds || [];
     if (!kinds.length) return false;
     return kinds[kinds.length - 1] === wantKind;
   }
 
-  // rotationState: { [driverId]: { shiftAnchorDate, shiftAnchorIndex, lastDutyEndDateKey,
-  // lastDutyEndMin, recentKinds: [] } } -- passed in and mutated in place so the caller can
+  // rotationState: { [driverId]: { lastDutyEndDateKey, lastDutyEndMin, recentKinds: [],
+  // cumulativeReserve, cumulativeTrip } } -- passed in and mutated in place so the caller can
   // persist it (e.g. to localStorage per station) and hand it back in on the next run to
-  // continue every driver's rotation/rest-time/ratio history instead of restarting cold.
+  // continue every driver's rest-time/ratio history instead of restarting cold.
   // specialRules (optional): per-driver overrides layered on top of the general rules, e.g. a
   // named driver who should never take a sweep, or should be steered toward/away from trips to
   // a particular destination. Each entry: { match(driver) => bool, excludeKinds: [...],
@@ -543,61 +513,32 @@
     return result;
   }
 
+  // Rebuilt from a real completed month (supervisor-provided): no shift-locking (real start
+  // times spread continuously across the day with no natural gaps except overnight -- there was
+  // never a clean partition to lock drivers into), no manufactured reserve duties (a driver with
+  // nothing safe to give them is left genuinely blank, flagged, for a supervisor to decide), and
+  // fairness as a soft nudge toward the configured ratio rather than a hard quota -- a real
+  // month's own reserve/trip split naturally varies driver to driver, it isn't forced flat.
+  // What stays hard, because it's the one rule a real schedule never bends: rest-time between
+  // duties, and never repeating a driver's exact previous-day kind when it can be avoided.
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
     const state = rotationState || {};
     const rules = specialRules || [];
-    const cycleLen = conditions.shifts.length;
+    const targetReserveFrac = conditions.ratioReserveDays / (conditions.ratioReserveDays + conditions.ratioTripDays);
+    const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
+
     const perDay = taskDays.map((day) => {
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
 
-      // A driver seen for the first time (no rotation state yet, in this run or a previous one)
-      // gets spread across the 5 shifts by their position in today's available list, rather than
-      // everyone defaulting to the same shift.
-      available.forEach((d, i) => {
+      available.forEach((d) => {
         if (!state[d.id]) {
-          state[d.id] = {
-            shiftAnchorDate: day.dateKey, shiftAnchorIndex: i % cycleLen,
-            lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [],
-            cumulativeReserve: 0, cumulativeTrip: 0,
-          };
+          state[d.id] = { lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
       });
-
-      const byShift = {};
-      const driverShiftIdx = {};
-      available.forEach((d) => {
-        const idx = computeShiftIndexForDriver(state[d.id], conditions, day.date);
-        driverShiftIdx[d.id] = idx;
-        (byShift[idx] = byShift[idx] || []).push(d);
-      });
-
-      // Each shift's peer-group reserve share, as of the start of today: the real running
-      // average of everyone currently locked to that shift, not the configured ratio. Computed
-      // once per day (not re-derived mid-day) so today's own picks don't shift the target out
-      // from under each other. Falls back to the configured ratio only while a group has no
-      // history at all yet (day 1, or a shift nobody's been locked to before).
-      const configuredReserveFrac = conditions.ratioReserveDays / (conditions.ratioReserveDays + conditions.ratioTripDays);
-      const groupTotals = {};
-      Object.keys(byShift).forEach((idxStr) => {
-        const idx = parseInt(idxStr, 10);
-        const totals = { reserve: 0, trip: 0 };
-        byShift[idx].forEach((d) => {
-          const st = state[d.id];
-          totals.reserve += st.cumulativeReserve || 0;
-          totals.trip += st.cumulativeTrip || 0;
-        });
-        groupTotals[idx] = totals;
-      });
-      const groupReserveFrac = (idx) => {
-        const totals = idx != null ? groupTotals[idx] : null;
-        const groupTotal = totals ? totals.reserve + totals.trip : 0;
-        return groupTotal ? totals.reserve / groupTotal : configuredReserveFrac;
-      };
 
       const usedDriverIds = new Set();
       const assignments = [];
       const unassignedTasks = [];
-      const capLen = conditions.ratioReserveDays + conditions.ratioTripDays;
 
       const restFilter = (list, task) => list.filter((d) => {
         if (isExcludedBySpecialRule(d, task, rules)) return false;
@@ -616,103 +557,32 @@
       const orderedTasks = day.tasks.filter((t) => t.kind !== "reserve").concat(spreadReserveTasks(day.tasks.filter((t) => t.kind === "reserve")));
 
       orderedTasks.forEach((task) => {
-        const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
-        const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
+        const candidates = available.filter((d) => !usedDriverIds.has(d.id));
 
-        // Hard rule: never violated, even if it leaves this task unfilled -- see the rest-time
-        // condition this mirrors.
-        let restOk = restFilter(inShift, task);
-
-        // Soft shift-bucket matching must never be the reason a task goes unfilled while an
-        // available driver exists -- a task whose start time falls outside every configured
-        // shift window (e.g. a task starting before the earliest shift's window opens) would
-        // otherwise be permanently unassignable no matter how many drivers are free that day.
-        // Falling back to every remaining available driver (still hard-filtered by rest-time)
-        // keeps the rest-time rule absolute while making the shift match itself a preference.
-        let usedFallback = false;
-        if (!restOk.length) {
-          const stillAvailable = available.filter((d) => !usedDriverIds.has(d.id));
-          restOk = restFilter(stillAvailable, task);
-          usedFallback = true;
-        }
+        // Hard rule: never violated, even if it leaves this task unfilled.
+        const restOk = restFilter(candidates, task);
         if (!restOk.length) { unassignedTasks.push(task); return; }
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
-        // A candidate is "fairness compliant" for this task if picking them wouldn't push them
-        // over their OWN shift-peer group's ratio ceiling AND wouldn't repeat their immediately
-        // previous kind -- the two rules are applied together so the same adjacent-shift borrow
-        // below can rescue either one, instead of each rule needing its own separate widening
-        // logic. Each candidate is judged against their own group (driverShiftIdx[d.id]), not
-        // the task's shift -- a borrowed candidate from another shift still owes fairness to
-        // their own peers, not the task's.
-        const isFairnessCompliant = (d) => !isOverKindQuota(state[d.id], groupReserveFrac(driverShiftIdx[d.id]), wantKind) && !isRepeatingLastKind(state[d.id], wantKind);
-        let fairOk = restOk.filter(isFairnessCompliant);
+        // Prefer whoever didn't just do this same kind yesterday -- "make it a mix, one day
+        // reserve one day trip" -- but only when that's actually possible; if literally everyone
+        // left would be repeating, don't leave the task unfilled over it.
+        const notRepeating = restOk.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+        const pool = notRepeating.length ? notRepeating : restOk;
 
-        // If literally everyone left in THIS shift's own locked-in bucket already breaks a
-        // fairness rule (over quota for this kind, or would repeat their last kind), there's
-        // nobody in it to pick fairly today. Rather than give up on fairness, borrow from the
-        // immediately adjacent shift(s) in the fixed rotation order only (Early Morning <-> Late
-        // Morning, Early Afternoon <-> Late Afternoon, Late Afternoon <-> Night, never further)
-        // -- "so there's not a lot of gap between shift." Not attempted once the shift match has
-        // already been abandoned entirely (usedFallback), since that's already drawing from
-        // every shift.
-        if (!fairOk.length && !usedFallback && shiftIdx != null) {
-          const adjacentPool = [shiftIdx - 1, shiftIdx + 1]
-            .filter((i) => i >= 0 && i < cycleLen)
-            .flatMap((i) => byShift[i] || [])
-            .filter((d) => !usedDriverIds.has(d.id));
-          const adjacentFairOk = restFilter(adjacentPool, task).filter(isFairnessCompliant);
-          if (adjacentFairOk.length) {
-            restOk = adjacentFairOk;
-            fairOk = adjacentFairOk;
-            usedFallback = true; // reuse the shift-closeness tiebreak sort below for this borrowed pool
-          } else {
-            // Even the neighboring shift has nobody fairness-compliant left. This is what actually
-            // happens when a shift bucket is structurally short on trip (or reserve) supply for a
-            // long stretch -- confirmed directly against a real month's output: some drivers ended
-            // up at 13 reserve/3 trip while others sat at 2 reserve/14 trip, the same per-shift
-            // supply skew pulling opposite directions, because adjacent-only borrowing had nowhere
-            // left to draw from on THIS shift's own persistently short side. Widening one more
-            // step -- every available driver, any shift -- is what actually lets a trip-surplus
-            // shift correct a reserve-starved one instead of the tolerance cap just giving up.
-            // Still fairness-first, and still only a preference: shift-closeness remains the
-            // tiebreak below via usedFallback, so this only reaches further when it actually has to.
-            const anyPool = available.filter((d) => !usedDriverIds.has(d.id));
-            const anyFairOk = restFilter(anyPool, task).filter(isFairnessCompliant);
-            if (anyFairOk.length) {
-              restOk = anyFairOk;
-              fairOk = anyFairOk;
-              usedFallback = true;
-            }
-          }
-        }
-
-        if (fairOk.length) restOk = fairOk;
-
-        if (usedFallback) {
-          // Among the fallback candidates, still prefer whoever's own locked shift is closest to
-          // this task's start time, so the relaxation degrades gracefully rather than picking
-          // arbitrarily.
-          restOk.sort((a, b) => {
-            const scoreA = ratioPreference(state[a.id], groupReserveFrac(driverShiftIdx[a.id]), wantKind) + specialRuleBias(a, task, rules);
-            const scoreB = ratioPreference(state[b.id], groupReserveFrac(driverShiftIdx[b.id]), wantKind) + specialRuleBias(b, task, rules);
-            const ratioDiff = scoreB - scoreA;
-            if (ratioDiff !== 0) return ratioDiff;
-            const distA = shiftIdx == null ? 0 : shiftDistance(driverShiftIdx[a.id], shiftIdx, cycleLen);
-            const distB = shiftIdx == null ? 0 : shiftDistance(driverShiftIdx[b.id], shiftIdx, cycleLen);
-            return distA - distB;
-          });
-        } else {
-          restOk.sort((a, b) => {
-            const scoreA = ratioPreference(state[a.id], groupReserveFrac(driverShiftIdx[a.id]), wantKind) + specialRuleBias(a, task, rules);
-            const scoreB = ratioPreference(state[b.id], groupReserveFrac(driverShiftIdx[b.id]), wantKind) + specialRuleBias(b, task, rules);
-            return scoreB - scoreA;
-          });
-        }
-        const chosen = restOk[0];
+        // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
+        // relative to their own history sorts first, but this never excludes anyone the way a
+        // hard quota did; a real month's own totals vary driver to driver on their own.
+        pool.sort((a, b) => {
+          const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
+          const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
+          return scoreB - scoreA;
+        });
+        const chosen = pool[0];
 
         usedDriverIds.add(chosen.id);
+        const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         assignments.push({ task, driver: chosen, shiftIdx });
 
         const st = state[chosen.id];
@@ -725,50 +595,13 @@
         else st.cumulativeTrip = (st.cumulativeTrip || 0) + 1;
       });
 
-      // Any driver still available after every real task (trip, sweep, and every reserve slot,
-      // including the round-robin-spread duplicates) has been handled gets a manufactured
-      // reserve duty for the day -- "if there are unassigned drivers, create a reserve task for
-      // them, I don't want to see any unassigned driver." This is a synthetic task with no row
-      // in the Task Program (there's no real duty behind it to patch there), so buildPatches()
-      // only ever writes it into that driver's own roster day-cell -- the same "RESERVE" label
-      // already used elsewhere in these files for a reserve day -- never into the Task Program.
-      // Their own locked shift's window stands in for a start/end time, so this reads as a
-      // normal reserve day within their rotation rather than a special case, and updates
-      // rest-time/ratio state exactly the way a real reserve task would.
-      available.filter((d) => !usedDriverIds.has(d.id)).forEach((driver) => {
-        const shiftIdx = computeShiftIndexForDriver(state[driver.id], conditions, day.date);
-        const shift = conditions.shifts[shiftIdx];
-        const startMin = parseHHMM(shift.start);
-        const endMin = parseHHMM(shift.end);
-
-        // Rest-time is the one hard rule that's never bent -- confirmed this was silently NOT
-        // true for manufactured reserve days: this block used to hand every leftover driver a
-        // reserve unconditionally, with no rest check at all, which is exactly how a driver could
-        // end up starting a new shift under an hour after their last one truly ended (see
-        // dutyEndDateKey above for the other half of this bug -- a duty crossing midnight has to
-        // be recorded as ending the NEXT calendar day for this check to even be correct). Skip
-        // (leave genuinely unassigned -- still flagged idle, never silently dropped) rather than
-        // start their locked shift's reserve window less than restHours after their last duty.
-        const st0 = state[driver.id];
-        const restOk = st0.lastDutyEndMin == null
-          || minutesBetween(st0.lastDutyEndDateKey, st0.lastDutyEndMin, day.dateKey, startMin) >= conditions.restHours * 60;
-        if (!restOk) return;
-
-        const syntheticTask = { row: null, code: "RESERVE", kind: "reserve", destination: null, startMin, endMin, isPassengerLeg: false, synthetic: true };
-        assignments.push({ task: syntheticTask, driver, shiftIdx });
-        usedDriverIds.add(driver.id);
-        const st = state[driver.id];
-        st.lastDutyEndDateKey = dutyEndDateKey(day, startMin, endMin);
-        st.lastDutyEndMin = endMin;
-        st.recentKinds.push("reserve");
-        if (st.recentKinds.length > capLen) st.recentKinds.shift();
-        st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
-      });
-
       return {
         date: day.date, dateKey: day.dateKey, sheetIndex: day.sheetIndex, nameCol: day.nameCol,
         assignments,
         unassignedTasks,
+        // Any driver still available with nothing assigned -- deliberately left blank rather
+        // than given a manufactured duty; buildPatches() only recolors these cells (the idle
+        // flag), never writes a value, so a supervisor can spot and fill them in by hand.
         unassignedDrivers: available.filter((d) => !usedDriverIds.has(d.id)),
       };
     });
@@ -803,13 +636,13 @@
 
     weeks.forEach((week, wi) => {
       week.days.forEach((day) => {
-        day.assignments.forEach(({ task, driver }) => {
+        day.assignments.forEach(({ task, driver, shiftIdx }) => {
           const wk = ensure(driver).weeks[wi];
           if (task.kind === "reserve") wk.reserveCount++;
           else if (task.kind === "sweep") wk.sweepCount++;
           else wk.tripCount++;
-          const st = rotationState[driver.id];
-          const shiftIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+          // Which shift band each actual assignment's start time falls in -- there's no lock to
+          // report anymore, just what this driver's real duties that week happened to land in.
           if (shiftIdx != null) wk.shiftIndexes.add(shiftIdx);
         });
       });
@@ -871,8 +704,6 @@
       return {
         driverId: id,
         driverName: nameById[id] || "",
-        shiftAnchorDate: st.shiftAnchorDate || null,
-        shiftAnchorIndex: st.shiftAnchorIndex != null ? st.shiftAnchorIndex : null,
         lastDutyEndDateKey: st.lastDutyEndDateKey || null,
         lastDutyEndTime: st.lastDutyEndMin != null ? minutesToHHMM(st.lastDutyEndMin) : null,
         recentKinds: (st.recentKinds || []).join(","),
@@ -892,17 +723,17 @@
 
     const idHeaderCell = findHeaderCell(ws, "Driver ID", 20);
     if (!idHeaderCell) throw new Error("This doesn't look like a rotation memory file -- no \"Driver ID\" column found. Was it downloaded from this tool's Grant button?");
-    const anchorDateCell = findHeaderCell(ws, "Shift Anchor Date", 20);
-    const anchorIdxCell = findHeaderCell(ws, "Shift Anchor Index", 20);
     const lastEndDateCell = findHeaderCell(ws, "Last Duty End Date", 20);
     const lastEndTimeCell = findHeaderCell(ws, "Last Duty End Time", 20);
     const recentKindsCell = findHeaderCell(ws, "Recent Kinds", 20);
-    if (!anchorDateCell || !anchorIdxCell || !lastEndDateCell || !lastEndTimeCell || !recentKindsCell) {
+    if (!lastEndDateCell || !lastEndTimeCell || !recentKindsCell) {
       throw new Error("This memory file is missing one or more expected columns -- was it downloaded from this tool's Grant button?");
     }
     // Added later than the other columns -- optional so an older memory file (granted before
     // cumulative fairness tracking existed) still loads, just starting cumulative counts at 0
-    // rather than failing to load altogether.
+    // rather than failing to load altogether. "Shift Anchor Date"/"Shift Anchor Index" were
+    // dropped once shift-locking was removed -- an older memory file that still has those columns
+    // loads fine, they're just never read.
     const cumReserveCell = findHeaderCell(ws, "Cumulative Reserve", 20);
     const cumTripCell = findHeaderCell(ws, "Cumulative Trip", 20);
 
@@ -924,16 +755,12 @@
       const idVal = displayValue(row.getCell(idCol));
       if (idVal == null || String(idVal).trim() === "") continue;
       const id = String(idVal).trim();
-      const anchorDateVal = displayValue(row.getCell(anchorDateCell.col));
-      const anchorIdxVal = displayValue(row.getCell(anchorIdxCell.col));
       const lastEndDateVal = displayValue(row.getCell(lastEndDateCell.col));
       const lastEndTimeVal = displayValue(row.getCell(lastEndTimeCell.col));
       const recentKindsVal = displayValue(row.getCell(recentKindsCell.col));
       const cumReserveVal = cumReserveCell ? displayValue(row.getCell(cumReserveCell.col)) : null;
       const cumTripVal = cumTripCell ? displayValue(row.getCell(cumTripCell.col)) : null;
       rotationState[id] = {
-        shiftAnchorDate: anchorDateVal != null && anchorDateVal !== "" ? String(anchorDateVal).trim() : null,
-        shiftAnchorIndex: anchorIdxVal != null && anchorIdxVal !== "" ? parseInt(anchorIdxVal, 10) : null,
         lastDutyEndDateKey: lastEndDateVal != null && lastEndDateVal !== "" ? String(lastEndDateVal).trim() : null,
         lastDutyEndMin: lastEndTimeVal != null && lastEndTimeVal !== "" ? parseHHMM(String(lastEndTimeVal).trim()) : null,
         recentKinds: recentKindsVal != null && recentKindsVal !== "" ? String(recentKindsVal).split(",").map((s) => s.trim()).filter(Boolean) : [],
@@ -973,14 +800,16 @@
     plan.perDay.forEach((day) => {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       day.assignments.forEach(({ task, driver, shiftIdx }) => {
-        if (!task.synthetic) {
-          taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
-        }
+        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: formatDriverForTaskCell(driver) });
         // shiftIdx colors the roster cell so a supervisor can see each day's shift at a glance --
         // one color per shift (see SHIFT_FLAG_ARGB_CANDIDATES in xlsx_surgical_patch.js), picked
-        // per-file to avoid colliding with that file's own existing palette.
-        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: task.code, shiftIdx });
+        // per-file to avoid colliding with that file's own existing palette. The value written is
+        // the real roster's own stripped format (see stripCodeForRoster), not the Task Program's
+        // full letter-suffixed code.
+        rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], value: stripCodeForRoster(task.code), shiftIdx });
       });
+      // A driver left genuinely unassigned (nothing safe to give them) gets only a color flag --
+      // the cell's content is left exactly as it was (blank), for a supervisor to fill in by hand.
       (day.unassignedDrivers || []).forEach((driver) => {
         rosterPatches[0].push({ row: driver.row, col: driver.colByDateKey[day.dateKey], flag: true });
       });
@@ -989,13 +818,13 @@
   }
 
   return {
-    dateKey, addDays, isAvailable, classifyCode, classifyDestination,
+    dateKey, addDays, isAvailable, classifyCode, classifyDestination, stripCodeForRoster,
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
-    classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
+    classifyShiftForMinutes, assignWithConditions,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,
-    isOverKindQuota, isRepeatingLastKind,
+    isRepeatingLastKind,
   };
 });
