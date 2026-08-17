@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Driver Task Assignment v2 — Madinah Station</title>
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="driver_assignment_engine.js"></script>
+<script src="xlsx_surgical_patch.js"></script>
+<style>
+  :root {
+    --blue: #4472C4; --green: #70AD47; --red: #C00000;
+    --ink: #0E6E63; --line: #14181C; --stripe: #EAF3EA; --paper: #FFFFFF; --border: #d7dbe3;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; background: #f4f5f7; color: #1a1d24; }
+  header { background: var(--ink); color: #fff; padding: 18px 28px; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 12px; opacity: .75; margin-top: 2px; }
+  main { max-width: 1080px; margin: 24px auto; padding: 0 20px 60px; }
+
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .note { font-size: 11px; color: #888; margin-top: 6px; }
+
+  .stage-banner {
+    background: #fff8e6; border: 1px solid #f0d68a; border-radius: 8px; padding: 10px 14px;
+    font-size: 12px; color: #7a5c00; margin-bottom: 18px;
+  }
+
+  label.field { font-size: 12px; color: #555; font-weight: 700; display: flex; flex-direction: column; gap: 4px; max-width: 220px; }
+  input[type=date] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+  select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: #fff; min-width: 260px; }
+
+  .drop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .drop-grid { grid-template-columns: 1fr; } }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px; background: #fbfbfd;
+    padding: 30px 16px; text-align: center; color: #666; transition: all .15s ease; cursor: pointer;
+  }
+  .dropzone.drag-over { border-color: var(--ink); background: #eafaf7; color: var(--ink); }
+  .dropzone .icon { font-size: 30px; margin-bottom: 6px; }
+  .dropzone .hint { font-size: 11px; margin-top: 6px; color: #999; }
+  .dropzone input[type=file] { display: none; }
+  .browse-link { color: var(--ink); text-decoration: underline; cursor: pointer; }
+  .drop-loaded { font-size: 12px; font-weight: 700; color: var(--ink); margin-top: 10px; }
+  .drop-actions { margin-top: 12px; display: flex; justify-content: center; }
+
+  button.primary {
+    background: var(--ink); color: #fff; border: 2px solid var(--line); padding: 9px 18px; border-radius: 8px;
+    font-weight: 700; cursor: pointer; font-size: 13px; box-shadow: 3px 3px 0 var(--line);
+    transition: transform .1s ease, box-shadow .1s ease;
+  }
+  button.primary:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 var(--line); }
+  button.primary:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--line); }
+  button.primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; transform: none; }
+  button.plain {
+    background: none; border: 1.5px solid var(--border); border-radius: 6px; padding: 8px 14px;
+    font-weight: 700; font-size: 12px; cursor: pointer;
+  }
+  button.plain:disabled { opacity: .4; cursor: not-allowed; }
+
+  .generate-row { display: flex; align-items: center; gap: 14px; margin-top: 18px; flex-wrap: wrap; }
+
+  .summary-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 6px; }
+  .summary-table th, .summary-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
+  .summary-table th { background: #f0f1f4; }
+  .summary-table td.warn { color: var(--red); font-weight: 700; }
+
+  .status-line { font-size: 12px; color: #666; margin-top: 10px; }
+  .status-line.error { color: var(--red); font-weight: 700; }
+
+  .date-range-row { display: flex; gap: 18px; flex-wrap: wrap; }
+
+  .conditions-summary-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px; }
+  .conditions-summary-table th, .conditions-summary-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: center; }
+  .conditions-summary-table th { background: #f0f1f4; }
+  .conditions-summary-table td.unset { color: var(--red); font-style: italic; }
+  .conditions-rules { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .conditions-rule { background: #f7f8fa; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; }
+  .shift-swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; margin-right: 5px; }
+  .conditions-rule .label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .conditions-rule .value { font-weight: 700; font-size: 14px; margin-top: 2px; }
+  .conditions-rule .value.unset { color: var(--red); font-style: italic; font-size: 12px; }
+
+  .conditions-form-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px 14px; margin-bottom: 16px; }
+  @media (max-width: 900px) { .conditions-form-grid { grid-template-columns: 1fr 1fr; } }
+  .conditions-form-grid label.field { max-width: none; }
+  .conditions-form-grid input[type=time] { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; width: 100%; }
+  .conditions-rules-form { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 16px; }
+  .conditions-rules-form label.field input[type=number] {
+    width: 90px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  }
+
+  .driver-picker-overlay {
+    position: fixed; inset: 0; background: rgba(20,24,36,.45); z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .driver-picker-modal {
+    background: #fff; border-radius: 10px; width: 100%; max-width: 440px; max-height: 80vh;
+    padding: 18px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  }
+  .driver-picker-header { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 14px; }
+  .driver-picker-close { border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: #888; }
+  .confirm-edit-modal { max-width: 380px; }
+  .confirm-edit-modal p { font-size: 13px; line-height: 1.5; margin: 0; }
+  .confirm-edit-modal .actions { margin-top: 4px; display: flex; gap: 10px; }
+  .confirm-edit-modal button.plain {
+    background: none; border: 1.5px solid var(--border); border-radius: 6px; padding: 9px 16px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+
+  .day-status-pending { color: #888; }
+  .day-status-generated { color: #a06a00; font-weight: 700; }
+  .day-status-granted { color: var(--ink); font-weight: 700; }
+  .table-scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Driver Task Assignment v2 — Madinah Station</h1>
+  <div class="sub">Day-by-day generation: load both files, set your conditions, then Generate one day at a time and review it before Grant makes it final and lets the next day's Generate build on it.</div>
+</header>
+
+<main>
+  <div class="stage-banner">v2, work in progress: this build proves out the day-by-day Generate/Grant mechanics. Editable grids, driver-search reassignment, Add Task and file export land in later steps -- v1 (the whole-month tool) is unaffected and still works the same way it always has.</div>
+
+  <div class="card">
+    <h2>1. Schedule dates</h2>
+    <div class="date-range-row">
+      <label class="field">First day this Task Program covers
+        <input type="date" id="startDate" />
+      </label>
+      <label class="field">Last day
+        <input type="date" id="endDate" />
+      </label>
+    </div>
+    <div class="note">Each tab in the Task Program file is treated as one consecutive day starting from the first date, in the order the tabs appear in the workbook -- the last date is just used to confirm the range before you drop files.</div>
+  </div>
+
+  <div class="card">
+    <h2>2. Drop your files</h2>
+    <div class="drop-grid">
+      <div>
+        <div class="dropzone" id="taskDropzone">
+          <div class="icon">&#8595;</div>
+          <div><strong>Task Program</strong></div>
+          <div class="hint">Drop the .xlsx file here, or <span class="browse-link" id="taskBrowseLink">browse</span>.</div>
+          <input type="file" id="taskFileInput" accept=".xlsx" />
+        </div>
+        <div class="drop-loaded" id="taskLoadedLabel"></div>
+      </div>
+      <div>
+        <div class="dropzone" id="rosterDropzone">
+          <div class="icon">&#8595;</div>
+          <div><strong>Roster</strong></div>
+          <div class="hint">Drop the .xlsx file here, or <span class="browse-link" id="rosterBrowseLink">browse</span>.</div>
+          <input type="file" id="rosterFileInput" accept=".xlsx" />
+        </div>
+        <div class="drop-loaded" id="rosterLoadedLabel"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Continue from previous memory (optional)</h2>
+    <div class="note">Only matters if you want this run to continue a driver's shift rotation, rest-time and reserve/trip balance from an earlier granted month. Skip this to start every driver fresh -- nothing carries over unless you explicitly load it here. This is shared with v1's memory files -- a month granted from either tool can feed the other.</div>
+    <div class="date-range-row" style="margin-top:12px;">
+      <label class="field" style="max-width:340px;">Continue from a granted month
+        <select id="memorySlotSelect"><option value="">Start fresh (no memory)</option></select>
+      </label>
+    </div>
+    <div class="dropzone" id="memoryDropzone" style="margin-top:14px; max-width:460px;">
+      <div class="icon">&#8595;</div>
+      <div><strong>Or upload a memory file</strong></div>
+      <div class="hint">On a different laptop/browser? Drop the memory .xlsx you downloaded when you granted a previous month, or <span class="browse-link" id="memoryBrowseLink">browse</span>.</div>
+      <input type="file" id="memoryFileInput" accept=".xlsx" />
+    </div>
+    <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no memory loaded.</div>
+  </div>
+
+  <div class="card">
+    <h2>4. Conditions</h2>
+    <div class="note">These have to be set before you can start. They're remembered on this device -- come back and Edit any of them any time.</div>
+    <div id="conditionsView"></div>
+  </div>
+
+  <div class="card">
+    <h2>5. Day-by-day generation</h2>
+    <div class="note">Loading builds this session from the files/dates/conditions above. Pick a day, Generate it, review the counts below, then Grant it once you're happy -- only granted days feed the next day's Generate. You can Ungrant a day to edit or re-generate it.</div>
+    <div class="generate-row">
+      <button type="button" class="primary" id="startBtn" disabled>Load days for review</button>
+      <span class="status-line" id="statusLine"></span>
+    </div>
+    <div id="dayWorkflow" style="display:none; margin-top:18px;">
+      <div class="generate-row" style="margin-top:0;">
+        <label class="field" style="max-width:340px;">Day
+          <select id="daySelect"></select>
+        </label>
+        <button type="button" class="primary" id="dayGenerateBtn">Generate this day</button>
+        <button type="button" class="plain" id="dayGrantBtn">Grant this day</button>
+        <button type="button" class="plain" id="dayUngrantBtn">Ungrant this day</button>
+      </div>
+      <div class="status-line" id="dayStatusLine"></div>
+      <table class="summary-table" id="dayResultTable" style="margin-top:12px; display:none;"></table>
+      <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit) ruled out every driver in this task's own locked shift and the shift(s) immediately next to it, or there were simply more tasks than available drivers. "Unassigned drivers" is left genuinely blank on purpose -- no manufactured reserve duty -- for you to fix by hand (that editing comes in a later step of this build).</div>
+
+      <div class="generate-row">
+        <button type="button" class="plain" id="grantMonthBtn">Grant this month's memory for next month</button>
+      </div>
+      <div class="note">Separate from the per-day Grant above -- this saves every driver's history from all the days you've granted so far as Madinah Station's carried-forward memory for a future month, and downloads a backup copy. Do this once you're done reviewing, not after every single day.</div>
+
+      <div class="note" style="margin-top:14px;">
+        <div style="margin-bottom:6px;">All days in this session:</div>
+        <div class="table-scroll"><table class="summary-table" id="allDaysTable"></table></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="confirmEditOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal confirm-edit-modal">
+    <div class="driver-picker-header">
+      <span>Confirm</span>
+      <button type="button" id="confirmEditClose" class="driver-picker-close">&times;</button>
+    </div>
+    <p id="confirmEditMessage"></p>
+    <div class="actions">
+      <button class="primary" id="confirmEditYes">Yes, continue</button>
+      <button type="button" class="plain" id="confirmEditNo">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const STATION = "MAD";
+  const E = window.DriverAssignmentEngine;
+
+  const SHIFT_COLORS = ["#FFE699", "#C6E0B4", "#BDD7EE", "#D9D2E9", "#D9D9D9"];
+
+  // Per-driver overrides, same as v1 -- STATION-gated so mad/mak stay identical apart from this.
+  const SPECIAL_RULES = STATION === "MAD" ? [
+    {
+      match: (driver) => {
+        const n = (driver.name || "").toUpperCase();
+        return n.includes("RAYAN") && n.includes("SAUD") && n.includes("SAEED");
+      },
+      excludeKinds: ["sweep"],
+      tripDestinationBias: { KAIA: 2, MAK: -0.6 },
+      passengerLegBonus: { MAK: 1.4 },
+    },
+  ] : [];
+
+  const startDateInput = document.getElementById("startDate");
+  const endDateInput = document.getElementById("endDate");
+  const conditionsView = document.getElementById("conditionsView");
+  const confirmEditOverlay = document.getElementById("confirmEditOverlay");
+  const confirmEditMessage = document.getElementById("confirmEditMessage");
+  const confirmEditYes = document.getElementById("confirmEditYes");
+  const confirmEditNo = document.getElementById("confirmEditNo");
+  const confirmEditClose = document.getElementById("confirmEditClose");
+  const taskDropzone = document.getElementById("taskDropzone");
+  const taskFileInput = document.getElementById("taskFileInput");
+  const taskBrowseLink = document.getElementById("taskBrowseLink");
+  const taskLoadedLabel = document.getElementById("taskLoadedLabel");
+  const rosterDropzone = document.getElementById("rosterDropzone");
+  const rosterFileInput = document.getElementById("rosterFileInput");
+  const rosterBrowseLink = document.getElementById("rosterBrowseLink");
+  const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
+  const memorySlotSelect = document.getElementById("memorySlotSelect");
+  const memoryDropzone = document.getElementById("memoryDropzone");
+  const memoryFileInput = document.getElementById("memoryFileInput");
+  const memoryBrowseLink = document.getElementById("memoryBrowseLink");
+  const memoryStatusLabel = document.getElementById("memoryStatusLabel");
+  const startBtn = document.getElementById("startBtn");
+  const statusLine = document.getElementById("statusLine");
+  const dayWorkflow = document.getElementById("dayWorkflow");
+  const daySelect = document.getElementById("daySelect");
+  const dayGenerateBtn = document.getElementById("dayGenerateBtn");
+  const dayGrantBtn = document.getElementById("dayGrantBtn");
+  const dayUngrantBtn = document.getElementById("dayUngrantBtn");
+  const dayStatusLine = document.getElementById("dayStatusLine");
+  const dayResultTable = document.getElementById("dayResultTable");
+  const allDaysTable = document.getElementById("allDaysTable");
+  const grantMonthBtn = document.getElementById("grantMonthBtn");
+
+  let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
+  let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
+  // livePlan: { taskDays, rosterData, dayStatus: {dateKey: "pending"|"generated"|"granted"},
+  // results: {dateKey: <assignWithConditions perDay[0] result>} } -- lives only for this browser
+  // tab's session, same lifetime as v1's loaded workbooks. See rebuildRotationStateFromGrantedDays
+  // in the engine for how a day's rotation state is derived fresh from whatever's granted right
+  // now, rather than being mutated in a way that couldn't be undone by an Ungrant.
+  let livePlan = null;
+
+  function setStatus(msg, isError) {
+    statusLine.textContent = msg || "";
+    statusLine.className = "status-line" + (isError ? " error" : "");
+  }
+  function setDayStatus(msg, isError) {
+    dayStatusLine.textContent = msg || "";
+    dayStatusLine.className = "status-line" + (isError ? " error" : "");
+  }
+
+  // --- Conditions: shifts/ratio/rest-time/shift-lock, persisted per station in this browser --
+  // A separate localStorage key from v1's ("...V2_...") since v2's conditions object always
+  // carries shiftLockWeeks -- loading v1's older saved shape here (which may predate that field,
+  // from the stretch when shift-lock was removed) would otherwise silently fail
+  // conditionsAreComplete with no obvious reason why.
+  const CONDITIONS_KEY = "driverAssignmentConditionsV2_" + STATION;
+
+  function loadConditions() {
+    try {
+      const raw = localStorage.getItem(CONDITIONS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.shifts) && parsed.shifts.length === E.SHIFT_NAMES.length && Number.isInteger(parsed.shiftLockWeeks)) return parsed;
+      }
+    } catch (err) { /* ignore, fall through to defaults */ }
+    return E.defaultConditions();
+  }
+  function saveConditions(c) {
+    try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(c)); } catch (err) { /* storage disabled -- won't persist */ }
+  }
+
+  let conditions = loadConditions();
+
+  // --- Rotation memory: explicit, granted-on-purpose, shared with v1 (same station-scoped key) -
+  // Cross-MONTH memory -- separate from this page's own per-DAY Grant workflow below. Loading a
+  // slot here only seeds the starting point for drivers a day's own in-range granted history
+  // doesn't already cover.
+  const MEMORY_SLOTS_KEY = "driverAssignmentGrantedSlots_" + STATION;
+  let memorySlots = loadMemorySlots();
+  let memoryRotationState = {};
+
+  function loadMemorySlots() {
+    try {
+      const raw = localStorage.getItem(MEMORY_SLOTS_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch (err) { /* ignore */ }
+    return {};
+  }
+  function saveMemorySlots(slots) {
+    try { localStorage.setItem(MEMORY_SLOTS_KEY, JSON.stringify(slots)); } catch (err) { /* storage disabled -- won't persist */ }
+  }
+  function setMemoryStatus(text) { memoryStatusLabel.textContent = text; }
+  function renderMemorySlotOptions() {
+    const entries = Object.keys(memorySlots)
+      .map((k) => ({ key: k, ...memorySlots[k] }))
+      .sort((a, b) => (b.grantedAt || "").localeCompare(a.grantedAt || ""));
+    const current = memorySlotSelect.value;
+    memorySlotSelect.innerHTML = `<option value="">Start fresh (no memory)</option>` +
+      entries.map((e) => `<option value="${e.key}">${e.monthLabel} (granted ${new Date(e.grantedAt).toLocaleDateString()})</option>`).join("");
+    if (entries.some((e) => e.key === current)) memorySlotSelect.value = current;
+  }
+  renderMemorySlotOptions();
+  setMemoryStatus("Starting fresh -- no memory loaded.");
+
+  memorySlotSelect.addEventListener("change", () => {
+    const key = memorySlotSelect.value;
+    memoryFileInput.value = "";
+    if (!key) {
+      memoryRotationState = {};
+      setMemoryStatus("Starting fresh -- no memory loaded.");
+      return;
+    }
+    const slot = memorySlots[key];
+    memoryRotationState = JSON.parse(JSON.stringify(slot.rotationState));
+    setMemoryStatus(`Continuing from granted memory: ${slot.monthLabel} (${Object.keys(memoryRotationState).length} driver${Object.keys(memoryRotationState).length === 1 ? "" : "s"}).`);
+  });
+
+  let _confirmEditResolve = null;
+  function confirmEdit(message) {
+    confirmEditMessage.textContent = message;
+    confirmEditOverlay.style.display = "flex";
+    return new Promise((resolve) => { _confirmEditResolve = resolve; });
+  }
+  function closeConfirmEdit(result) {
+    confirmEditOverlay.style.display = "none";
+    if (_confirmEditResolve) { const r = _confirmEditResolve; _confirmEditResolve = null; r(result); }
+  }
+  confirmEditYes.addEventListener("click", () => closeConfirmEdit(true));
+  confirmEditNo.addEventListener("click", () => closeConfirmEdit(false));
+  confirmEditClose.addEventListener("click", () => closeConfirmEdit(false));
+  confirmEditOverlay.addEventListener("click", (e) => { if (e.target === confirmEditOverlay) closeConfirmEdit(false); });
+
+  function fmtRatio(c) { return `${c.ratioReserveDays} reserve : ${c.ratioTripDays} trip`; }
+
+  function renderConditionsSummary() {
+    const shiftRows = conditions.shifts.map((s, i) => `
+      <tr>
+        <td><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${s.name}</td>
+        <td class="${s.start ? "" : "unset"}">${s.start || "not set"}</td>
+        <td class="${s.end ? "" : "unset"}">${s.end || "not set"}</td>
+      </tr>`).join("");
+    conditionsView.innerHTML = `
+      <table class="conditions-summary-table">
+        <tr><th>Shift</th><th>Start</th><th>End</th></tr>
+        ${shiftRows}
+      </table>
+      <div class="conditions-rules">
+        <div class="conditions-rule"><div class="label">Ratio (soft)</div><div class="value">${fmtRatio(conditions)}</div></div>
+        <div class="conditions-rule"><div class="label">Rest between duties (hard)</div><div class="value">${conditions.restHours}h</div></div>
+        <div class="conditions-rule"><div class="label">Weeks per shift before rotating</div><div class="value">${conditions.shiftLockWeeks}</div></div>
+      </div>
+      <button type="button" class="plain" id="conditionsEditBtn">Edit conditions</button>
+      ${E.conditionsAreComplete(conditions) ? "" : `<div class="note" style="color:var(--red);">Every shift needs a start and end time before you can start.</div>`}
+    `;
+    document.getElementById("conditionsEditBtn").addEventListener("click", onEditConditionsClick);
+  }
+
+  function renderConditionsForm() {
+    const shiftRows = conditions.shifts.map((s, i) => `
+      <label class="field"><span><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${s.name}</span>
+        <input type="time" data-shift-start="${i}" value="${s.start}" />
+      </label>
+      <label class="field">&nbsp;
+        <input type="time" data-shift-end="${i}" value="${s.end}" />
+      </label>`).join("");
+    conditionsView.innerHTML = `
+      <div class="conditions-form-grid">${shiftRows}</div>
+      <div class="conditions-rules-form">
+        <label class="field">Ratio -- reserve days <input type="number" min="0" id="cfRatioReserve" value="${conditions.ratioReserveDays}" /></label>
+        <label class="field">Ratio -- trip days <input type="number" min="0" id="cfRatioTrip" value="${conditions.ratioTripDays}" /></label>
+        <label class="field">Rest between duties (hours) <input type="number" min="0" id="cfRestHours" value="${conditions.restHours}" /></label>
+        <label class="field">Weeks per shift before rotating <input type="number" min="1" id="cfShiftLockWeeks" value="${conditions.shiftLockWeeks}" /></label>
+      </div>
+      <div class="actions" style="display:flex; gap:10px;">
+        <button type="button" class="primary" id="conditionsSaveBtn">Save conditions</button>
+        <button type="button" class="plain" id="conditionsCancelBtn">Cancel</button>
+      </div>
+    `;
+    document.getElementById("conditionsSaveBtn").addEventListener("click", onSaveConditionsClick);
+    document.getElementById("conditionsCancelBtn").addEventListener("click", renderConditionsSummary);
+  }
+
+  async function onEditConditionsClick() {
+    const ok = await confirmEdit("Edit the scheduling conditions? This changes how future Generate clicks assign drivers for this station.");
+    if (ok) renderConditionsForm();
+  }
+
+  function onSaveConditionsClick() {
+    const shifts = conditions.shifts.map((s, i) => ({
+      name: s.name,
+      start: document.querySelector(`[data-shift-start="${i}"]`).value,
+      end: document.querySelector(`[data-shift-end="${i}"]`).value,
+    }));
+    const next = {
+      shifts,
+      ratioReserveDays: parseInt(document.getElementById("cfRatioReserve").value, 10) || 0,
+      ratioTripDays: parseInt(document.getElementById("cfRatioTrip").value, 10) || 0,
+      restHours: parseFloat(document.getElementById("cfRestHours").value) || 0,
+      shiftLockWeeks: Math.max(1, parseInt(document.getElementById("cfShiftLockWeeks").value, 10) || 1),
+    };
+    conditions = next;
+    saveConditions(conditions);
+    renderConditionsSummary();
+    updateStartEnabled();
+  }
+
+  renderConditionsSummary();
+
+  function updateStartEnabled() {
+    const rangeOk = startDateInput.value && endDateInput.value && endDateInput.value >= startDateInput.value;
+    startBtn.disabled = !(taskWorkbook && rosterWorkbook && rangeOk && E.conditionsAreComplete(conditions));
+  }
+
+  // Files/dates/conditions changing after a session was already started must not leave a stale
+  // livePlan sitting behind an out-of-sync UI -- same failure mode v1's invalidateGeneratedResult
+  // exists to close. Returns true if it's safe to proceed with whatever triggered this (no session
+  // existed yet, or the supervisor confirmed discarding it); false means the caller should abort.
+  async function invalidateLivePlanIfNeeded(reason) {
+    if (!livePlan) return true;
+    const ok = await confirmEdit(`${reason} This restarts the whole day-by-day session from scratch -- every day's progress in this session (including already-granted days) will be lost, since it re-reads the files fresh. Continue?`);
+    if (!ok) return false;
+    livePlan = null;
+    dayWorkflow.style.display = "none";
+    setStatus("Session cleared -- click \"Load days for review\" to start again.");
+    return true;
+  }
+
+  startDateInput.addEventListener("change", async () => { if (await invalidateLivePlanIfNeeded("You changed the schedule dates.")) updateStartEnabled(); });
+  endDateInput.addEventListener("change", async () => { if (await invalidateLivePlanIfNeeded("You changed the schedule dates.")) updateStartEnabled(); });
+
+  function wireDropzone(zoneEl, inputEl, browseLinkEl, onFile) {
+    browseLinkEl.addEventListener("click", () => inputEl.click());
+    inputEl.addEventListener("change", () => { if (inputEl.files[0]) onFile(inputEl.files[0]); });
+    ["dragenter", "dragover"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.add("drag-over"); }));
+    ["dragleave", "drop"].forEach((evt) => zoneEl.addEventListener(evt, (e) => { e.preventDefault(); zoneEl.classList.remove("drag-over"); }));
+    zoneEl.addEventListener("drop", (e) => { if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+  }
+
+  async function loadWorkbook(file) {
+    const buf = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf.slice(0));
+    return { wb, buf };
+  }
+
+  async function markPassengerLegs(taskDays, arrayBuffer) {
+    const zip = await JSZip.loadAsync(arrayBuffer.slice(0));
+    for (const day of taskDays) {
+      const passengerRows = await XlsxSurgicalPatch.findPassengerMarkedRows(zip, day.sheetIndex);
+      if (!passengerRows.size) continue;
+      day.tasks.forEach((task) => { if (passengerRows.has(task.row)) task.isPassengerLeg = true; });
+    }
+  }
+
+  wireDropzone(taskDropzone, taskFileInput, taskBrowseLink, async (file) => {
+    try {
+      if (!(await invalidateLivePlanIfNeeded("You loaded a new Task Program file."))) return;
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      taskWorkbook = loaded.wb;
+      taskArrayBuffer = loaded.buf;
+      taskFileName = file.name;
+      taskLoadedLabel.textContent = `Loaded: ${file.name} (${taskWorkbook.worksheets.length} sheet${taskWorkbook.worksheets.length === 1 ? "" : "s"})`;
+      setStatus("");
+      updateStartEnabled();
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  wireDropzone(rosterDropzone, rosterFileInput, rosterBrowseLink, async (file) => {
+    try {
+      if (!(await invalidateLivePlanIfNeeded("You loaded a new Roster file."))) return;
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      rosterWorkbook = loaded.wb;
+      rosterArrayBuffer = loaded.buf;
+      rosterFileName = file.name;
+      const data = E.parseRoster(rosterWorkbook);
+      rosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
+      setStatus("");
+      updateStartEnabled();
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  wireDropzone(memoryDropzone, memoryFileInput, memoryBrowseLink, async (file) => {
+    try {
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      const parsed = E.parseMemoryWorkbook(loaded.wb);
+      if (parsed.station && parsed.station !== STATION) {
+        const proceed = await confirmEdit(`This memory file says it was granted for station "${parsed.station}", not "${STATION}". Load it anyway?`);
+        if (!proceed) { setStatus(""); return; }
+      }
+      memoryRotationState = parsed.rotationState;
+      memorySlotSelect.value = "";
+      const count = Object.keys(memoryRotationState).length;
+      setMemoryStatus(`Loaded memory file: ${parsed.station || "unknown station"}, granted for ${parsed.monthLabel || "an unknown month"} (${count} driver${count === 1 ? "" : "s"}).`);
+      setStatus("");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this memory file: " + err.message, true);
+    }
+  });
+
+  function statusLabel(s) { return s === "granted" ? "granted ✓" : s === "generated" ? "generated, not yet granted" : "pending"; }
+  function statusClass(s) { return "day-status-" + s; }
+
+  startBtn.addEventListener("click", async () => {
+    if (livePlan) {
+      const ok = await confirmEdit("Reload the day-by-day session from the current files/dates/conditions? Every day's progress in this session (including already-granted days) will be lost, since it re-reads the files fresh.");
+      if (!ok) return;
+    }
+    try {
+      startBtn.disabled = true;
+      setStatus("Loading day-by-day session...");
+      const [y, m, d] = startDateInput.value.split("-").map((x) => parseInt(x, 10));
+      const startDate = new Date(y, m - 1, d);
+      const [ey, em, ed] = endDateInput.value.split("-").map((x) => parseInt(x, 10));
+      const endDate = new Date(ey, em - 1, ed);
+      const rosterData = E.parseRoster(rosterWorkbook);
+      const taskDays = E.parseTaskProgram(taskWorkbook, startDate, endDate);
+      if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file for this date range.");
+      await markPassengerLegs(taskDays, taskArrayBuffer);
+      taskDays.forEach((day) => { day.tasks.forEach((t) => { t.driver = null; }); });
+      const dayStatus = {};
+      taskDays.forEach((day) => { dayStatus[day.dateKey] = "pending"; });
+      livePlan = { taskDays, rosterData, dayStatus, results: {} };
+      dayWorkflow.style.display = "block";
+      renderDaySelector();
+      renderAllDaysTable();
+      onDaySelectChange();
+      setStatus(`Loaded ${taskDays.length} day(s) for review. Pick a day above and click Generate.`);
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not start the day-by-day session: " + err.message, true);
+      livePlan = null;
+      dayWorkflow.style.display = "none";
+    } finally {
+      startBtn.disabled = false;
+    }
+  });
+
+  function renderDaySelector() {
+    const current = daySelect.value;
+    daySelect.innerHTML = livePlan.taskDays.map((day) =>
+      `<option value="${day.dateKey}">${day.dateKey} — ${statusLabel(livePlan.dayStatus[day.dateKey])}</option>`
+    ).join("");
+    if (livePlan.taskDays.some((d) => d.dateKey === current)) daySelect.value = current;
+  }
+
+  function renderAllDaysTable() {
+    const rows = livePlan.taskDays.map((day) => {
+      const result = livePlan.results[day.dateKey];
+      const status = livePlan.dayStatus[day.dateKey];
+      return `<tr>
+        <td>${day.dateKey}</td>
+        <td class="${statusClass(status)}">${statusLabel(status)}</td>
+        <td>${result ? result.assignments.length : "--"}</td>
+        <td class="${result && result.unassignedTasks.length ? "warn" : ""}">${result ? result.unassignedTasks.length : "--"}</td>
+        <td class="${result && result.unassignedDrivers.length ? "warn" : ""}">${result ? result.unassignedDrivers.length : "--"}</td>
+      </tr>`;
+    }).join("");
+    allDaysTable.innerHTML = `
+      <tr><th>Date</th><th>Status</th><th>Assigned</th><th>Unassigned tasks</th><th>Unassigned drivers</th></tr>
+      ${rows}`;
+  }
+
+  function renderDayResultTable(dateKey) {
+    const result = livePlan.results[dateKey];
+    if (!result) { dayResultTable.style.display = "none"; return; }
+    dayResultTable.innerHTML = `
+      <tr><th>Date</th><th>Assigned</th><th>Unassigned tasks</th><th>Unassigned drivers</th></tr>
+      <tr>
+        <td>${dateKey}</td>
+        <td>${result.assignments.length}</td>
+        <td class="${result.unassignedTasks.length ? "warn" : ""}">${result.unassignedTasks.length}</td>
+        <td class="${result.unassignedDrivers.length ? "warn" : ""}">${result.unassignedDrivers.length}</td>
+      </tr>`;
+    dayResultTable.style.display = "table";
+  }
+
+  function onDaySelectChange() {
+    const dateKey = daySelect.value;
+    const status = livePlan.dayStatus[dateKey];
+    dayGenerateBtn.disabled = false;
+    dayGrantBtn.disabled = status !== "generated";
+    dayUngrantBtn.disabled = status !== "granted";
+    renderDayResultTable(dateKey);
+    setDayStatus(`${dateKey}: ${statusLabel(status)}.`);
+  }
+  daySelect.addEventListener("change", onDaySelectChange);
+
+  async function generateDay(dateKey) {
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const grantedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "granted");
+    const rotationState = E.rebuildRotationStateFromGrantedDays(livePlan.rosterData, livePlan.taskDays, grantedKeys, conditions);
+    // Any driver not already covered by this session's own granted history starts from the
+    // cross-month memory loaded in section 3 instead of cold, same idea as v1's memory carry-over.
+    Object.keys(memoryRotationState).forEach((id) => {
+      if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
+    });
+    day.tasks.forEach((t) => { t.driver = null; });
+    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES);
+    const dayResult = result.perDay[0];
+    dayResult.assignments.forEach(({ task, driver }) => {
+      const t = day.tasks.find((x) => x.row === task.row);
+      if (t) t.driver = driver;
+    });
+    livePlan.results[dateKey] = dayResult;
+    livePlan.dayStatus[dateKey] = "generated";
+  }
+
+  dayGenerateBtn.addEventListener("click", async () => {
+    const dateKey = daySelect.value;
+    const status = livePlan.dayStatus[dateKey];
+    if (status !== "pending") {
+      const ok = await confirmEdit(status === "granted"
+        ? `${dateKey} is already granted. Re-generating will ungrant it and replace its current assignments -- continue?`
+        : `${dateKey} was already generated. Re-generating will replace its current assignments -- continue?`);
+      if (!ok) return;
+    }
+    try {
+      dayGenerateBtn.disabled = true;
+      await generateDay(dateKey);
+      renderDaySelector();
+      renderAllDaysTable();
+      onDaySelectChange();
+      setDayStatus(`Generated ${dateKey}. Review the counts below, then Grant when you're happy with it.`);
+    } catch (err) {
+      console.error(err);
+      setDayStatus("Could not generate this day: " + err.message, true);
+    } finally {
+      dayGenerateBtn.disabled = false;
+    }
+  });
+
+  dayGrantBtn.addEventListener("click", () => {
+    const dateKey = daySelect.value;
+    livePlan.dayStatus[dateKey] = "granted";
+    renderDaySelector();
+    renderAllDaysTable();
+    onDaySelectChange();
+    setDayStatus(`${dateKey} granted -- it'll now feed the next day's Generate.`);
+  });
+
+  dayUngrantBtn.addEventListener("click", async () => {
+    const dateKey = daySelect.value;
+    const ok = await confirmEdit(`Ungrant ${dateKey}? It goes back to "generated" so you can re-generate it. Any later day that's already granted keeps whatever it was granted with -- it will NOT be recomputed just because you ungranted an earlier day.`);
+    if (!ok) return;
+    livePlan.dayStatus[dateKey] = "generated";
+    renderDaySelector();
+    renderAllDaysTable();
+    onDaySelectChange();
+    setDayStatus(`${dateKey} ungranted.`);
+  });
+
+  function downloadBlob(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function buildMemoryWorkbookBlob(rows, station, monthLabel, grantedAt) {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Rotation Memory");
+    ws.addRow(["Driver Assignment Engine -- Rotation Memory"]);
+    ws.addRow(["Station", station]);
+    ws.addRow(["Granted for", monthLabel]);
+    ws.addRow(["Granted at", grantedAt]);
+    ws.addRow([]);
+    ws.addRow(["Driver ID", "Driver Name", "Shift Anchor Date", "Shift Anchor Index", "Last Duty End Date", "Last Duty End Time", "Recent Kinds", "Cumulative Reserve", "Cumulative Trip"]);
+    rows.forEach((r) => {
+      ws.addRow([
+        r.driverId, r.driverName,
+        r.shiftAnchorDate, r.shiftAnchorIndex,
+        r.lastDutyEndDateKey, r.lastDutyEndTime, r.recentKinds,
+        r.cumulativeReserve, r.cumulativeTrip,
+      ]);
+    });
+    ws.getRow(1).font = { bold: true, size: 13 };
+    const headerRowIdx = 6;
+    ws.getRow(headerRowIdx).font = { bold: true };
+    ws.getRow(headerRowIdx).eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF3EA" } }; });
+    ws.columns.forEach((col, i) => { col.width = i === 1 ? 28 : 16; });
+    const buf = await wb.xlsx.writeBuffer();
+    return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  }
+
+  grantMonthBtn.addEventListener("click", async () => {
+    if (!livePlan) return;
+    const grantedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "granted");
+    if (!grantedKeys.length) { setStatus("Grant at least one day before granting this month's memory.", true); return; }
+    const monthKey = E.monthKeyFromDateKey(startDateInput.value);
+    const monthLabel = E.monthLabelFromDateKey(startDateInput.value);
+    const replacing = !!memorySlots[monthKey];
+    const ok = await confirmEdit(`Grant ${monthLabel}'s ${grantedKeys.length} granted day(s) as this month's carried-forward memory for ${STATION}?${replacing ? ` This replaces the memory already granted for ${monthLabel}.` : ""} This saves every driver's current shift, rest-time and reserve/trip history so a future month's run can continue from here, and downloads a backup copy.`);
+    if (!ok) return;
+
+    const finalState = E.rebuildRotationStateFromGrantedDays(livePlan.rosterData, livePlan.taskDays, grantedKeys, conditions);
+    Object.keys(memoryRotationState).forEach((id) => {
+      if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
+    });
+    const grantedAt = new Date().toISOString();
+    memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(finalState)) };
+    saveMemorySlots(memorySlots);
+    renderMemorySlotOptions();
+    memorySlotSelect.value = monthKey;
+    memoryRotationState = finalState;
+    setMemoryStatus(`Continuing from granted memory: ${monthLabel} (${Object.keys(finalState).length} driver(s)).`);
+
+    const rows = E.buildMemoryRows(livePlan.rosterData, finalState);
+    const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
+    downloadBlob(blob, `${STATION}_memory_${monthKey}.xlsx`);
+
+    setStatus(`Granted ${monthLabel}'s memory for ${STATION} (${grantedKeys.length} of ${livePlan.taskDays.length} day(s) granted) and downloaded a backup file.`);
+  });
+})();
+</script>
+</body>
+</html>
