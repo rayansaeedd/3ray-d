@@ -135,6 +135,11 @@
   #taskViewTable input[type=time] { font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
   #taskViewTable td.task-driver-cell { text-align: left; }
   .task-driver-btn { min-width: 160px; text-align: left; }
+  #taskViewTable td.task-drag-handle { cursor: grab; color: #aaa; font-size: 14px; padding: 4px 2px; user-select: none; }
+  #taskViewTable td.task-drag-handle:active { cursor: grabbing; }
+  #taskViewTable td.task-order-num { color: #888; font-size: 11px; font-weight: 700; text-align: center; }
+  #taskViewTable tr.task-row-dragging { opacity: 0.4; }
+  #taskViewTable tr.task-row:hover { background: #fafbfc; }
   .driver-picker-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .driver-picker-list { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
   .driver-picker-list-item {
@@ -804,6 +809,11 @@
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file for this date range.");
       await markPassengerLegs(taskDays, taskArrayBuffer);
       taskDays.forEach((day) => { day.tasks.forEach((t) => { t.driver = null; }); });
+      // Seeds the initial display order by start time, once -- from here on, day.tasks's own
+      // array order IS the display order (dragging a row reorders this array directly; see the
+      // drag handlers below), so a hand-edited Start time no longer silently re-shuffles a row a
+      // supervisor already dragged into place.
+      taskDays.forEach((day) => { day.tasks.sort((a, b) => (a.startMin ?? 9999) - (b.startMin ?? 9999)); });
       const dayStatus = {};
       taskDays.forEach((day) => { dayStatus[day.dateKey] = "pending"; });
       // nextFreeRow[dateKey]: where "Add Task" writes its next blank row -- one past this day's
@@ -983,25 +993,28 @@
   // searchable picker. Re-rendered on day-select change, after Generate, after Add Task, and after
   // a driver reassignment (never on every keystroke of a text edit -- only on 'change'/blur, so an
   // in-progress edit never loses focus mid-type).
+  // day.tasks's own array order IS the display/working order -- drag-and-drop below reorders it
+  // directly, so rendering just walks it as-is (no re-sort here; see the one-time seed sort in
+  // the session-load handler for where the initial start-time-based order comes from).
   function renderTaskView(dateKey) {
     if (!livePlan) { taskViewCard.style.display = "none"; return; }
     taskViewCard.style.display = "block";
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     if (!day) return;
     const rows = day.tasks
-      .slice()
-      .sort((a, b) => (a.startMin ?? 9999) - (b.startMin ?? 9999))
-      .map((task) => {
+      .map((task, index) => {
         const driverLabel = task.driver ? escapeAttr(task.driver.name) : "-- unassigned --";
         const timeVal = task.startMin != null ? E.minutesToHHMM(task.startMin) : "";
-        return `<tr>
+        return `<tr class="task-row" draggable="true" data-task-row="${task.row}">
+          <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
+          <td class="task-order-num">${index + 1}</td>
           <td><input type="text" class="task-code-input" data-task-row="${task.row}" value="${escapeAttr(task.code)}" /></td>
           <td>${task.kind}</td>
           <td><input type="time" class="task-start-input" data-task-row="${task.row}" value="${timeVal}" /></td>
           <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${driverLabel}</button></td>
         </tr>`;
       }).join("");
-    taskViewTable.innerHTML = `<tr><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th></tr>${rows}`;
+    taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th></tr>${rows}`;
   }
 
   taskViewTable.addEventListener("change", (e) => {
@@ -1039,13 +1052,60 @@
     const task = day.tasks.find((x) => x.row === row);
     if (!task) return;
     task.startMin = E.parseHHMM(t.value);
-    renderTaskView(dateKey); // re-sort by the new start time
+    renderTaskView(dateKey); // re-renders in the SAME order -- Start no longer drives display order
   }, true);
 
   taskViewTable.addEventListener("click", (e) => {
     const btn = e.target.closest(".task-driver-btn");
     if (!btn) return;
     openDriverPicker(daySelect.value, parseInt(btn.dataset.taskRow, 10));
+  });
+
+  // --- Drag-to-reorder: moves a task up/down within its day's own working order -------------
+  // Session-only and purely about review/organization -- it never changes which physical Excel
+  // row a task's code/driver land in on export (that's still whatever row it originally came
+  // from, or the row Add Task assigned it), only the order this app displays and lets a
+  // supervisor work through them in.
+  let draggedTaskRow = null;
+
+  taskViewTable.addEventListener("dragstart", (e) => {
+    const tr = e.target.closest("tr.task-row");
+    if (!tr) return;
+    draggedTaskRow = parseInt(tr.dataset.taskRow, 10);
+    tr.classList.add("task-row-dragging");
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  });
+
+  taskViewTable.addEventListener("dragend", (e) => {
+    const tr = e.target.closest("tr.task-row");
+    if (tr) tr.classList.remove("task-row-dragging");
+    draggedTaskRow = null;
+  });
+
+  taskViewTable.addEventListener("dragover", (e) => {
+    if (draggedTaskRow == null) return;
+    const tr = e.target.closest("tr.task-row");
+    if (!tr) return;
+    e.preventDefault(); // required for a drop to be allowed to fire at all
+  });
+
+  taskViewTable.addEventListener("drop", (e) => {
+    if (draggedTaskRow == null) return;
+    const tr = e.target.closest("tr.task-row");
+    if (!tr) { draggedTaskRow = null; return; }
+    e.preventDefault();
+    const targetRow = parseInt(tr.dataset.taskRow, 10);
+    const fromRow = draggedTaskRow;
+    draggedTaskRow = null;
+    if (targetRow === fromRow) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const fromIdx = day.tasks.findIndex((t) => t.row === fromRow);
+    if (fromIdx === -1 || !day.tasks.some((t) => t.row === targetRow)) return;
+    const [moved] = day.tasks.splice(fromIdx, 1);
+    const toIdx = day.tasks.findIndex((t) => t.row === targetRow); // re-found post-removal, indices may have shifted
+    day.tasks.splice(toIdx, 0, moved);
+    renderTaskView(dateKey);
   });
 
   addTaskBtn.addEventListener("click", () => {
