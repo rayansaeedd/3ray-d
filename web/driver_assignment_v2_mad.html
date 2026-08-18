@@ -140,6 +140,10 @@
   #taskViewTable td.task-order-num { color: #888; font-size: 11px; font-weight: 700; text-align: center; }
   #taskViewTable tr.task-row-dragging { opacity: 0.4; }
   #taskViewTable tr.task-row:hover { background: #fafbfc; }
+  /* Marks a row Add Task created this session -- not present in the original uploaded file --
+     so it's obvious at a glance which tasks are the engine's own addition. */
+  #taskViewTable tr.task-row-added { background: #E3F2FD; }
+  #taskViewTable tr.task-row-added:hover { background: #D2E8FB; }
   .driver-picker-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .driver-picker-list { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
   .driver-picker-list-item {
@@ -283,9 +287,10 @@
 
   <div class="card" id="taskViewCard" style="display:none;">
     <h2>6. Task Program (selected day)</h2>
-    <div class="note">Click a driver's name to reassign that task through a searchable list, or type directly into Code/Start to fix a task by hand. "Add Task" appends a blank reserve-shaped row (same as v1's manufactured reserve duty used to be, except now you fill it in -- or leave it blank) for a driver with nothing safe to give them.</div>
+    <div class="note">Click a driver's name to reassign that task through a searchable list, or type directly into Code/Start to fix a task by hand. "Add Task" appends a blank reserve-shaped row (same as v1's manufactured reserve duty used to be, except now you fill it in -- or leave it blank) for a driver with nothing safe to give them. Rows added this way are highlighted light blue so they're easy to tell apart from the original file's own tasks.</div>
     <div class="generate-row" style="margin-top:10px;">
       <button type="button" class="plain" id="addTaskBtn">Add Task</button>
+      <button type="button" class="plain" id="addReserveForUnassignedBtn" disabled>Add Reserve Task for Every Unassigned Driver</button>
     </div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table" id="taskViewTable"></table></div>
   </div>
@@ -391,6 +396,7 @@
   const taskViewCard = document.getElementById("taskViewCard");
   const taskViewTable = document.getElementById("taskViewTable");
   const addTaskBtn = document.getElementById("addTaskBtn");
+  const addReserveForUnassignedBtn = document.getElementById("addReserveForUnassignedBtn");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
@@ -1001,11 +1007,17 @@
     taskViewCard.style.display = "block";
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     if (!day) return;
+    const origCodes = livePlan.originalTaskCodes[dateKey] || {};
     const rows = day.tasks
       .map((task, index) => {
         const driverLabel = task.driver ? escapeAttr(task.driver.name) : "-- unassigned --";
         const timeVal = task.startMin != null ? E.minutesToHHMM(task.startMin) : "";
-        return `<tr class="task-row" draggable="true" data-task-row="${task.row}">
+        // A row with no entry in the ORIGINAL snapshot at all was never in the real file --
+        // Add Task (single or bulk) created it this session. Same signal buildLivePatches()
+        // already uses to decide which rows need their style cloned from a real task row on
+        // export; here it's just a visual flag so it's obvious at a glance in the UI too.
+        const isAdded = origCodes[task.row] === undefined;
+        return `<tr class="task-row${isAdded ? " task-row-added" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
           <td><input type="text" class="task-code-input" data-task-row="${task.row}" value="${escapeAttr(task.code)}" /></td>
@@ -1115,6 +1127,44 @@
     const row = livePlan.nextFreeRow[dateKey]++;
     day.tasks.push({ row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null });
     renderTaskView(dateKey);
+  });
+
+  // Shows/enables against the SELECTED day's own last Generate result -- there's nothing to add
+  // reserve tasks for until a day has actually been generated and left some drivers unassigned.
+  function updateAddReserveForUnassignedBtn(dateKey) {
+    const result = livePlan && livePlan.results[dateKey];
+    const count = result ? result.unassignedDrivers.length : 0;
+    addReserveForUnassignedBtn.textContent = count > 0
+      ? `Add Reserve Task for Every Unassigned Driver (${count})`
+      : "Add Reserve Task for Every Unassigned Driver";
+    addReserveForUnassignedBtn.disabled = count === 0;
+  }
+
+  // One click instead of clicking Add Task once per unassigned driver by hand: appends one blank
+  // reserve-shaped row PER driver the last Generate left unassigned, pre-assigning each one to
+  // its own driver directly (same setTaskDriver() path a manual pick would use, so the Roster
+  // grid updates too) -- code and start are left blank for the supervisor to fill in, same as a
+  // single Add Task always has been.
+  addReserveForUnassignedBtn.addEventListener("click", () => {
+    if (!livePlan) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const result = livePlan.results[dateKey];
+    const unassignedDrivers = result ? result.unassignedDrivers.slice() : [];
+    if (!day || !unassignedDrivers.length) return;
+    unassignedDrivers.forEach((driver) => {
+      const row = livePlan.nextFreeRow[dateKey]++;
+      const task = { row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null };
+      day.tasks.push(task);
+      setTaskDriver(dateKey, task, driver);
+    });
+    result.unassignedDrivers = []; // they each have a task now -- keeps the Result table's count honest
+    renderTaskView(dateKey);
+    renderRosterGrid();
+    renderAllDaysTable();
+    renderDayResultTable(dateKey);
+    updateAddReserveForUnassignedBtn(dateKey);
+    setDayStatus(`Added ${unassignedDrivers.length} reserve task${unassignedDrivers.length === 1 ? "" : "s"}, one per unassigned driver.`);
   });
 
   // --- Driver-search picker: shared modal, reused for every task's Driver button ---------------
@@ -1233,6 +1283,7 @@
     renderDayResultTable(dateKey);
     renderTaskView(dateKey);
     renderRosterGrid();
+    updateAddReserveForUnassignedBtn(dateKey);
     setDayStatus(`${dateKey}: ${statusLabel(status)}.`);
   }
   daySelect.addEventListener("change", onDaySelectChange);
