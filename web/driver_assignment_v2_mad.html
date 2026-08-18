@@ -154,6 +154,8 @@
      so it's obvious at a glance which tasks are the engine's own addition. */
   #taskViewTable tr.task-row-added { background: #E3F2FD; }
   #taskViewTable tr.task-row-added:hover { background: #D2E8FB; }
+  .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
+  .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
   .driver-picker-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .driver-picker-list { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
   .driver-picker-list-item {
@@ -1205,6 +1207,13 @@
         // already uses to decide which rows need their style cloned from a real task row on
         // export; here it's just a visual flag so it's obvious at a glance in the UI too.
         const isAdded = origCodes[task.row] === undefined;
+        // Delete only ever applies to a row Add Task created this session -- a real row from the
+        // original file always stays (there's no such thing as "removing" a real trip's row from
+        // the exported file; the surgical patcher only ever edits cell values in place, never
+        // deletes/shifts rows), so the button simply doesn't exist for those rows at all.
+        const deleteCell = isAdded
+          ? `<button type="button" class="plain task-delete-btn" data-task-row="${task.row}" title="Delete this added task">&times;</button>`
+          : "";
         return `<tr class="task-row${isAdded ? " task-row-added" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
@@ -1212,9 +1221,10 @@
           <td>${task.kind}</td>
           <td><input type="time" class="task-start-input" data-task-row="${task.row}" value="${timeVal}" /></td>
           <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${driverLabel}</button></td>
+          <td class="task-delete-cell">${deleteCell}</td>
         </tr>`;
       }).join("");
-    taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th></tr>${rows}`;
+    taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th><th></th></tr>${rows}`;
   }
 
   taskViewTable.addEventListener("change", (e) => {
@@ -1259,6 +1269,32 @@
     const btn = e.target.closest(".task-driver-btn");
     if (!btn) return;
     openDriverPicker(daySelect.value, parseInt(btn.dataset.taskRow, 10));
+  });
+
+  // Delete only ever targets a row Add Task (single or bulk) created this session -- see the
+  // isAdded comment above, the button simply isn't rendered for a real original row. Clears the
+  // driver's roster cell first (same as picking "clear" in the driver picker would) so deleting
+  // an already-assigned added task doesn't leave a stale roster entry behind.
+  taskViewTable.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".task-delete-btn");
+    if (!btn) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const row = parseInt(btn.dataset.taskRow, 10);
+    const idx = day.tasks.findIndex((t) => t.row === row);
+    if (idx === -1) return;
+    const task = day.tasks[idx];
+    const label = task.code ? `"${task.code}"` : "this blank task";
+    const driverNote = task.driver ? ` -- currently assigned to ${task.driver.name}` : "";
+    const ok = await confirmEdit(`Delete ${label}${driverNote}? This can't be undone.`);
+    if (!ok) return;
+    if (task.driver) setTaskDriver(dateKey, task, null);
+    day.tasks.splice(idx, 1);
+    renderTaskView(dateKey);
+    renderRosterGrid();
+    renderAllDaysTable();
+    updateAddReserveForUnassignedBtn(dateKey);
+    setDayStatus(`Deleted ${label}.`);
   });
 
   // --- Drag-to-reorder: moves a task up/down within its day's own working order -------------
