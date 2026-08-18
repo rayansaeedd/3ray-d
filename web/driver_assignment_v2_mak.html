@@ -157,6 +157,13 @@
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
   .task-duplicate-warning { margin-top: 10px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f0b8b8; border-radius: 8px; color: var(--red); font-size: 13px; font-weight: 700; }
+  #rosterSwapModeBtn.active { background: #2f6fed; color: #fff; border-color: #2f6fed; }
+  .roster-swap-panel { margin-top: 10px; padding: 10px 12px; background: #eef4ff; border: 1px solid #c7d9fb; border-radius: 8px; font-size: 13px; }
+  .roster-swap-hint { color: #2a4d8f; }
+  .roster-swap-keys { color: #6b83ad; font-weight: 400; }
+  .roster-swap-preview { font-weight: 700; color: #1d3a70; margin-bottom: 8px; }
+  .roster-swap-actions { display: flex; gap: 10px; }
+  .roster-grid-table input.roster-cell-swap-selected { outline: 2px solid #2f6fed !important; outline-offset: -1px; background: #dce8ff !important; }
   #taskViewTable tr.task-row-duplicate { background: #fde3e3; }
   #taskViewTable tr.task-row-duplicate:hover { background: #fbd2d2; }
   .task-driver-duplicate-flag { color: var(--red); margin-right: 4px; }
@@ -330,6 +337,10 @@
     <h2>7. Roster (editable)</h2>
     <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. The dot next to each driver's name shows their shift a week before the selected day (gray means no record) -- click it for that driver's shift last week, the week before, and a reserve/trip breakdown. This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
     <div class="roster-legend" id="rosterShiftLegend"></div>
+    <div class="generate-row" style="margin-top:10px;">
+      <button type="button" class="plain" id="rosterSwapModeBtn">Swap two task codes (F2)</button>
+    </div>
+    <div id="rosterSwapPanel" class="roster-swap-panel" style="display:none;"></div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
 </main>
@@ -467,6 +478,8 @@
   const addReserveForUnassignedBtn = document.getElementById("addReserveForUnassignedBtn");
   const removedTasksList = document.getElementById("removedTasksList");
   const taskDuplicateWarning = document.getElementById("taskDuplicateWarning");
+  const rosterSwapModeBtn = document.getElementById("rosterSwapModeBtn");
+  const rosterSwapPanel = document.getElementById("rosterSwapPanel");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
@@ -1053,7 +1066,9 @@
             const shiftIdx = E.classifyShiftForMinutes(conditions, task.startMin);
             if (shiftIdx != null) inputStyle = ` style="background:${SHIFT_COLORS[shiftIdx]};"`;
           }
-          return `<td class="${selected}"><input type="text"${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
+          const isSwapSelected = swapSelection.some((c) => c.driverId === driver.id && c.dateKey === dk);
+          const inputClass = isSwapSelected ? ' class="roster-cell-swap-selected"' : "";
+          return `<td class="${selected}"><input type="text"${inputClass}${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
         }).join("");
         return `<tr><td class="roster-driver-name">${lastWeekSwatch(driver.id)}${driver.name}</td>${cells}</tr>`;
       }).join("");
@@ -1088,6 +1103,11 @@
   rosterGridTable.addEventListener("click", (e) => {
     const input = e.target.closest("input[data-roster-driver]");
     if (!input) return;
+    if (swapModeActive) {
+      input.blur(); // clicking during swap mode selects the cell, never edits it
+      handleSwapCellClick(input.dataset.rosterDriver, input.dataset.rosterDate);
+      return;
+    }
     openRosterCellPicker(input.dataset.rosterDriver, input.dataset.rosterDate);
   });
   // Typing directly dismisses the menu rather than leaving it sitting over the cell -- covers
@@ -1112,6 +1132,134 @@
       renderRosterGrid();
     }
     closeRosterCellPicker();
+  });
+
+  // --- Swap two task codes: F2 arms it, click two cells, Enter confirms, Escape cancels -----
+  // Solves the "copy this driver's code somewhere, copy the other driver's code, paste them
+  // back swapped by hand" workflow directly: this swaps the underlying TASK's driver (the same
+  // setTaskDriver() path Generate and the driver picker already use), not just the two cells'
+  // text, so the Task Program view and the export stay consistent automatically -- no separate
+  // step needed there. The two cells don't have to be the same date; whichever task is behind
+  // each cell travels with it, so this also covers "trade a duty across two different days."
+  let swapModeActive = false;
+  let swapSelection = []; // up to 2 of { driverId, dateKey }
+
+  function setSwapMode(active) {
+    swapModeActive = active;
+    swapSelection = [];
+    rosterSwapModeBtn.textContent = active ? "Exit swap mode (Esc)" : "Swap two task codes (F2)";
+    rosterSwapModeBtn.classList.toggle("active", active);
+    renderRosterSwapPanel();
+    if (livePlan) renderRosterGrid();
+  }
+  rosterSwapModeBtn.addEventListener("click", () => setSwapMode(!swapModeActive));
+
+  function handleSwapCellClick(driverId, dateKey) {
+    const idx = swapSelection.findIndex((c) => c.driverId === driverId && c.dateKey === dateKey);
+    if (idx !== -1) {
+      swapSelection.splice(idx, 1);
+    } else if (swapSelection.length < 2) {
+      swapSelection.push({ driverId, dateKey });
+    } else {
+      setDayStatus("Already have 2 cells selected -- press Enter to swap them, Escape to clear, or click a highlighted cell to deselect it.");
+      return;
+    }
+    renderRosterSwapPanel();
+    renderRosterGrid();
+  }
+
+  function describeSwapCell(cell) {
+    const driver = livePlan.rosterData.drivers.find((d) => d.id === cell.driverId);
+    const val = driver.statusByDateKey[cell.dateKey] || "(blank)";
+    return `${escapeAttr(driver.name)} — ${cell.dateKey} (${escapeAttr(val)})`;
+  }
+
+  function renderRosterSwapPanel() {
+    if (!swapModeActive) { rosterSwapPanel.style.display = "none"; rosterSwapPanel.innerHTML = ""; return; }
+    rosterSwapPanel.style.display = "block";
+    if (swapSelection.length < 2) {
+      const hint = swapSelection.length
+        ? `Selected: ${describeSwapCell(swapSelection[0])}. Pick a second cell.`
+        : "Swap mode armed -- click two task-code cells to swap them.";
+      rosterSwapPanel.innerHTML = `<div class="roster-swap-hint">${hint} <span class="roster-swap-keys">(Enter to confirm once 2 are picked, Esc to cancel)</span></div>`;
+      return;
+    }
+    rosterSwapPanel.innerHTML = `
+      <div class="roster-swap-preview">${describeSwapCell(swapSelection[0])} &#8646; ${describeSwapCell(swapSelection[1])}</div>
+      <div class="roster-swap-actions">
+        <button type="button" class="primary" id="rosterSwapNowBtn">Swap now (Enter)</button>
+        <button type="button" class="plain" id="rosterSwapClearBtn">Clear selection</button>
+      </div>`;
+    document.getElementById("rosterSwapNowBtn").addEventListener("click", performSwap);
+    document.getElementById("rosterSwapClearBtn").addEventListener("click", () => {
+      swapSelection = [];
+      renderRosterSwapPanel();
+      renderRosterGrid();
+    });
+  }
+
+  // Only ever swaps two cells that each have a real task behind them -- a leave/vacation code or
+  // a blank cell has no task to hand to the other driver, so there's nothing meaningful to trade
+  // (a plain text swap there would desync the Roster from the Task Program, the exact problem
+  // this feature exists to avoid).
+  function performSwap() {
+    if (swapSelection.length !== 2) return;
+    const [c1, c2] = swapSelection;
+    const day1 = livePlan.taskDays.find((d) => d.dateKey === c1.dateKey);
+    const day2 = livePlan.taskDays.find((d) => d.dateKey === c2.dateKey);
+    const driver1 = livePlan.rosterData.drivers.find((d) => d.id === c1.driverId);
+    const driver2 = livePlan.rosterData.drivers.find((d) => d.id === c2.driverId);
+    const task1 = day1 && day1.tasks.find((t) => t.driver && t.driver.id === c1.driverId);
+    const task2 = day2 && day2.tasks.find((t) => t.driver && t.driver.id === c2.driverId);
+
+    if (!task1 || !task2) {
+      setDayStatus("Swap only works between two cells that each have a real task assigned -- pick two task codes, not a leave/vacation code or a blank cell.", true);
+      return;
+    }
+
+    // NOT two sequential setTaskDriver() calls: when both cells are the same date, reassigning
+    // task1 first writes driver2's tracked entry, and setTaskDriver's own "is this MY tracked
+    // write" check on task2 then sees THAT fresh entry sitting under driver2 and wrongly clears
+    // it as stale, wiping out task1's just-written code. Clearing both old assignments first
+    // (against their ORIGINAL pairing, before either new one is written) avoids the collision
+    // whether the two cells share a date or not.
+    const writes1 = livePlan.engineWrites[c1.dateKey] = livePlan.engineWrites[c1.dateKey] || {};
+    const writes2 = livePlan.engineWrites[c2.dateKey] = livePlan.engineWrites[c2.dateKey] || {};
+    if (driver1.statusByDateKey[c1.dateKey] === writes1[driver1.id]) driver1.statusByDateKey[c1.dateKey] = "";
+    delete writes1[driver1.id];
+    if (driver2.statusByDateKey[c2.dateKey] === writes2[driver2.id]) driver2.statusByDateKey[c2.dateKey] = "";
+    delete writes2[driver2.id];
+
+    task1.driver = driver2;
+    task2.driver = driver1;
+    driver2.statusByDateKey[c1.dateKey] = task1.code;
+    writes1[driver2.id] = task1.code;
+    driver1.statusByDateKey[c2.dateKey] = task2.code;
+    writes2[driver1.id] = task2.code;
+
+    swapSelection = [];
+    renderRosterSwapPanel();
+    renderRosterGrid();
+    renderAllDaysTable();
+    if (livePlan.taskDays.some((d) => d.dateKey === daySelect.value)) renderTaskView(daySelect.value);
+    setDayStatus(`Swapped ${driver1.name} and ${driver2.name}'s task codes.`);
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (!livePlan) return;
+    if (e.key === "F2") {
+      e.preventDefault();
+      setSwapMode(!swapModeActive);
+      return;
+    }
+    if (!swapModeActive) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setSwapMode(false);
+    } else if (e.key === "Enter" && swapSelection.length === 2) {
+      e.preventDefault();
+      performSwap();
+    }
   });
 
   // --- Roster name swatch: click for a small "why this color" info window -------------------
