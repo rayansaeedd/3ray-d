@@ -156,6 +156,10 @@
   #taskViewTable tr.task-row-added:hover { background: #D2E8FB; }
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
+  .task-duplicate-warning { margin-top: 10px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f0b8b8; border-radius: 8px; color: var(--red); font-size: 13px; font-weight: 700; }
+  #taskViewTable tr.task-row-duplicate { background: #fde3e3; }
+  #taskViewTable tr.task-row-duplicate:hover { background: #fbd2d2; }
+  .task-driver-duplicate-flag { color: var(--red); margin-right: 4px; }
   .removed-tasks-list { margin-top: 12px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f3d6d6; border-radius: 8px; }
   .removed-tasks-title { font-size: 12px; font-weight: 700; color: #8a4b4b; margin-bottom: 6px; }
   .removed-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 13px; }
@@ -317,6 +321,7 @@
       <button type="button" class="plain" id="addTaskBtn">Add Task</button>
       <button type="button" class="plain" id="addReserveForUnassignedBtn" disabled>Add Reserve Task for Every Unassigned Driver</button>
     </div>
+    <div id="taskDuplicateWarning" class="task-duplicate-warning" style="display:none;"></div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table" id="taskViewTable"></table></div>
     <div id="removedTasksList" class="removed-tasks-list" style="display:none;"></div>
   </div>
@@ -461,6 +466,7 @@
   const addTaskBtn = document.getElementById("addTaskBtn");
   const addReserveForUnassignedBtn = document.getElementById("addReserveForUnassignedBtn");
   const removedTasksList = document.getElementById("removedTasksList");
+  const taskDuplicateWarning = document.getElementById("taskDuplicateWarning");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
@@ -952,16 +958,18 @@
     const rows = livePlan.taskDays.map((day) => {
       const result = livePlan.results[day.dateKey];
       const status = livePlan.dayStatus[day.dateKey];
+      const dupCount = findDuplicateDriverAssignments(day).length;
       return `<tr>
         <td>${day.dateKey}</td>
         <td class="${statusClass(status)}">${statusLabel(status)}</td>
         <td>${result ? result.assignments.length : "--"}</td>
         <td class="${result && result.unassignedTasks.length ? "warn" : ""}">${result ? result.unassignedTasks.length : "--"}</td>
         <td class="${result && result.unassignedDrivers.length ? "warn" : ""}">${result ? result.unassignedDrivers.length : "--"}</td>
+        <td class="${dupCount ? "warn" : ""}" title="${dupCount ? "Same driver on more than one task -- open this day to see who" : ""}">${dupCount || 0}</td>
       </tr>`;
     }).join("");
     allDaysTable.innerHTML = `
-      <tr><th>Date</th><th>Status</th><th>Assigned</th><th>Unassigned tasks</th><th>Unassigned drivers</th></tr>
+      <tr><th>Date</th><th>Status</th><th>Assigned</th><th>Unassigned tasks</th><th>Unassigned drivers</th><th>Duplicate drivers</th></tr>
       ${rows}`;
   }
 
@@ -1195,6 +1203,21 @@
     }
   }
 
+  // Same driver on two (or more) tasks the same day is never valid -- one person can't work two
+  // duties at once. Generate itself can't produce this (it tracks usedDriverIds per day), so this
+  // only ever happens from a hand reassignment via the "All" picker filter (which doesn't exclude
+  // already-busy drivers the way "Unassigned" does) or a Restore bringing an original assignment
+  // back onto a driver who's since been given a different task. Always computed fresh off
+  // day.tasks, never a stale Generate-time snapshot, so it reflects whatever's true right now.
+  function findDuplicateDriverAssignments(day) {
+    const counts = {};
+    day.tasks.forEach((t) => {
+      if (!t.driver) return;
+      (counts[t.driver.id] = counts[t.driver.id] || { driver: t.driver, count: 0 }).count++;
+    });
+    return Object.values(counts).filter((c) => c.count > 1);
+  }
+
   // Renders the SELECTED day's tasks as a table -- Code/Start directly editable, Driver opens the
   // searchable picker. Re-rendered on day-select change, after Generate, after Add Task, and after
   // a driver reassignment (never on every keystroke of a text edit -- only on 'change'/blur, so an
@@ -1208,6 +1231,9 @@
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     if (!day) return;
     const origCodes = livePlan.originalTaskCodes[dateKey] || {};
+    const duplicates = findDuplicateDriverAssignments(day);
+    const duplicateDriverIds = new Set(duplicates.map((d) => d.driver.id));
+
     const rows = day.tasks
       .map((task, index) => {
         const driverLabel = task.driver ? escapeAttr(task.driver.name) : "-- unassigned --";
@@ -1223,17 +1249,28 @@
         // ever edits cell values in place and never deletes/shifts a real spreadsheet row.
         const deleteTitle = isAdded ? "Delete this added task" : "Remove this task (clears it blank for export)";
         const deleteCell = `<button type="button" class="plain task-delete-btn" data-task-row="${task.row}" title="${deleteTitle}">&times;</button>`;
-        return `<tr class="task-row${isAdded ? " task-row-added" : ""}" draggable="true" data-task-row="${task.row}">
+        const isDuplicate = task.driver && duplicateDriverIds.has(task.driver.id);
+        const duplicateFlag = isDuplicate ? `<span class="task-driver-duplicate-flag" title="This driver has more than one task today">&#9888;</span>` : "";
+        return `<tr class="task-row${isAdded ? " task-row-added" : ""}${isDuplicate ? " task-row-duplicate" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
           <td><input type="text" class="task-code-input" data-task-row="${task.row}" value="${escapeAttr(task.code)}" /></td>
           <td>${task.kind}</td>
           <td><input type="time" class="task-start-input" data-task-row="${task.row}" value="${timeVal}" /></td>
-          <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${driverLabel}</button></td>
+          <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${duplicateFlag}${driverLabel}</button></td>
           <td class="task-delete-cell">${deleteCell}</td>
         </tr>`;
       }).join("");
     taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th><th></th></tr>${rows}`;
+
+    if (!duplicates.length) {
+      taskDuplicateWarning.style.display = "none";
+      taskDuplicateWarning.innerHTML = "";
+    } else {
+      taskDuplicateWarning.style.display = "block";
+      const names = duplicates.map((d) => `${escapeAttr(d.driver.name)} (${d.count} tasks)`).join(", ");
+      taskDuplicateWarning.innerHTML = `&#9888; Same driver on more than one task today: ${names}. Reassign one of them before you export.`;
+    }
 
     const removed = day.removedTasks || [];
     if (!removed.length) {
@@ -1564,6 +1601,7 @@
     closeDriverPicker();
     renderTaskView(dateKey);
     renderRosterGrid();
+    renderAllDaysTable();
   });
 
   function onDaySelectChange() {
