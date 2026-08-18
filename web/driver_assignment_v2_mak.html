@@ -1233,10 +1233,10 @@
   }
 
   // One click instead of clicking Add Task once per unassigned driver by hand: appends one blank
-  // reserve-shaped row PER driver the last Generate left unassigned, pre-assigning each one to
-  // its own driver directly (same setTaskDriver() path a manual pick would use, so the Roster
-  // grid updates too) -- code and start are left blank for the supervisor to fill in, same as a
-  // single Add Task always has been.
+  // reserve-shaped row for each driver the last Generate left unassigned -- code, start, AND
+  // driver are all left blank so the supervisor picks who goes on each row themselves via the
+  // normal driver picker, same as a single Add Task always has been. This only decides HOW MANY
+  // rows to add, not who fills them.
   addReserveForUnassignedBtn.addEventListener("click", () => {
     if (!livePlan) return;
     const dateKey = daySelect.value;
@@ -1244,13 +1244,12 @@
     const result = livePlan.results[dateKey];
     const unassignedDrivers = result ? result.unassignedDrivers.slice() : [];
     if (!day || !unassignedDrivers.length) return;
-    unassignedDrivers.forEach((driver) => {
+    unassignedDrivers.forEach(() => {
       const row = livePlan.nextFreeRow[dateKey]++;
       const task = { row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null };
       day.tasks.push(task);
-      setTaskDriver(dateKey, task, driver);
     });
-    result.unassignedDrivers = []; // they each have a task now -- keeps the Result table's count honest
+    result.unassignedDrivers = []; // they each have a blank row waiting now -- keeps the Result table's count honest
     renderTaskView(dateKey);
     renderRosterGrid();
     renderAllDaysTable();
