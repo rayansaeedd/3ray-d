@@ -156,6 +156,11 @@
   #taskViewTable tr.task-row-added:hover { background: #D2E8FB; }
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
+  .removed-tasks-list { margin-top: 12px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f3d6d6; border-radius: 8px; }
+  .removed-tasks-title { font-size: 12px; font-weight: 700; color: #8a4b4b; margin-bottom: 6px; }
+  .removed-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 13px; }
+  .removed-task-row + .removed-task-row { border-top: 1px solid #f3d6d6; }
+  .removed-task-code { font-weight: 700; }
   .driver-picker-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
   .driver-picker-list { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
   .driver-picker-list-item {
@@ -307,12 +312,13 @@
 
   <div class="card" id="taskViewCard" style="display:none;">
     <h2>6. Task Program (selected day)</h2>
-    <div class="note">Click a driver's name to reassign that task through a searchable list, or type directly into Code/Start to fix a task by hand. "Add Task" appends a blank reserve-shaped row (same as v1's manufactured reserve duty used to be, except now you fill it in -- or leave it blank) for a driver with nothing safe to give them. Rows added this way are highlighted light blue so they're easy to tell apart from the original file's own tasks.</div>
+    <div class="note">Click a driver's name to reassign that task through a searchable list, or type directly into Code/Start to fix a task by hand. "Add Task" appends a blank reserve-shaped row (same as v1's manufactured reserve duty used to be, except now you fill it in -- or leave it blank) for a driver with nothing safe to give them. Rows added this way are highlighted light blue so they're easy to tell apart from the original file's own tasks. Every row -- added or original -- has a &times; to remove it: for an added row this deletes it outright, for an original row it clears its Code/Driver blank for export (the real spreadsheet row itself is never deleted) and moves it to the "Removed tasks" list below, where you can Restore it any time before you export.</div>
     <div class="generate-row" style="margin-top:10px;">
       <button type="button" class="plain" id="addTaskBtn">Add Task</button>
       <button type="button" class="plain" id="addReserveForUnassignedBtn" disabled>Add Reserve Task for Every Unassigned Driver</button>
     </div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table" id="taskViewTable"></table></div>
+    <div id="removedTasksList" class="removed-tasks-list" style="display:none;"></div>
   </div>
 
   <div class="card" id="rosterGridCard" style="display:none;">
@@ -454,6 +460,7 @@
   const taskViewTable = document.getElementById("taskViewTable");
   const addTaskBtn = document.getElementById("addTaskBtn");
   const addReserveForUnassignedBtn = document.getElementById("addReserveForUnassignedBtn");
+  const removedTasksList = document.getElementById("removedTasksList");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
@@ -1210,13 +1217,12 @@
         // already uses to decide which rows need their style cloned from a real task row on
         // export; here it's just a visual flag so it's obvious at a glance in the UI too.
         const isAdded = origCodes[task.row] === undefined;
-        // Delete only ever applies to a row Add Task created this session -- a real row from the
-        // original file always stays (there's no such thing as "removing" a real trip's row from
-        // the exported file; the surgical patcher only ever edits cell values in place, never
-        // deletes/shifts rows), so the button simply doesn't exist for those rows at all.
-        const deleteCell = isAdded
-          ? `<button type="button" class="plain task-delete-btn" data-task-row="${task.row}" title="Delete this added task">&times;</button>`
-          : "";
+        // Every row gets a remove button now -- an added row deletes outright (deleteTaskRow()
+        // below), an original row instead blanks its Code/Driver for export and moves to the
+        // "Removed tasks" list (removeOriginalTaskRow() below), since the surgical patcher only
+        // ever edits cell values in place and never deletes/shifts a real spreadsheet row.
+        const deleteTitle = isAdded ? "Delete this added task" : "Remove this task (clears it blank for export)";
+        const deleteCell = `<button type="button" class="plain task-delete-btn" data-task-row="${task.row}" title="${deleteTitle}">&times;</button>`;
         return `<tr class="task-row${isAdded ? " task-row-added" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
@@ -1228,6 +1234,19 @@
         </tr>`;
       }).join("");
     taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th><th></th></tr>${rows}`;
+
+    const removed = day.removedTasks || [];
+    if (!removed.length) {
+      removedTasksList.style.display = "none";
+      removedTasksList.innerHTML = "";
+    } else {
+      removedTasksList.style.display = "block";
+      removedTasksList.innerHTML = `<div class="removed-tasks-title">Removed tasks (blanked for export, row untouched in the real file) -- Restore brings one back:</div>` +
+        removed.map((entry) => `<div class="removed-task-row">
+          <span class="removed-task-code">${escapeAttr(entry.originalCode || "(blank code)")}${entry.originalDriverName ? ` -- was ${escapeAttr(entry.originalDriverName)}` : ""}</span>
+          <button type="button" class="plain removed-task-restore-btn" data-task-row="${entry.task.row}">Restore</button>
+        </div>`).join("");
+    }
   }
 
   taskViewTable.addEventListener("change", (e) => {
@@ -1274,10 +1293,13 @@
     openDriverPicker(daySelect.value, parseInt(btn.dataset.taskRow, 10));
   });
 
-  // Delete only ever targets a row Add Task (single or bulk) created this session -- see the
-  // isAdded comment above, the button simply isn't rendered for a real original row. Clears the
-  // driver's roster cell first (same as picking "clear" in the driver picker would) so deleting
-  // an already-assigned added task doesn't leave a stale roster entry behind.
+  // Every row's remove button lands here. An added row (Add Task/bulk-reserve, this session
+  // only) deletes outright -- there's nothing to preserve, re-adding it is one click away. An
+  // original row can't actually be deleted (the surgical patcher only ever edits cell values in
+  // place, never deletes/shifts a real spreadsheet row) so it's blanked instead: Code and Driver
+  // both cleared, which is what actually lands in the exported file, and the task is moved into
+  // day.removedTasks -- kept there (not just discarded) so buildLivePatches() still visits it to
+  // emit the blanking patches, AND so Restore can bring the exact original code/driver back.
   taskViewTable.addEventListener("click", async (e) => {
     const btn = e.target.closest(".task-delete-btn");
     if (!btn) return;
@@ -1287,17 +1309,61 @@
     const idx = day.tasks.findIndex((t) => t.row === row);
     if (idx === -1) return;
     const task = day.tasks[idx];
+    const origCodes = livePlan.originalTaskCodes[dateKey] || {};
+    const isAdded = origCodes[row] === undefined;
     const label = task.code ? `"${task.code}"` : "this blank task";
     const driverNote = task.driver ? ` -- currently assigned to ${task.driver.name}` : "";
-    const ok = await confirmEdit(`Delete ${label}${driverNote}? This can't be undone.`);
-    if (!ok) return;
-    if (task.driver) setTaskDriver(dateKey, task, null);
-    day.tasks.splice(idx, 1);
+
+    if (isAdded) {
+      const ok = await confirmEdit(`Delete ${label}${driverNote}? This can't be undone.`);
+      if (!ok) return;
+      if (task.driver) setTaskDriver(dateKey, task, null);
+      day.tasks.splice(idx, 1);
+      setDayStatus(`Deleted ${label}.`);
+    } else {
+      const ok = await confirmEdit(`Remove ${label} from the Task Program${driverNote}? Its Code and Driver cells will be cleared blank when you export -- the row itself stays in the real file untouched, and you can Restore it any time before you export.`);
+      if (!ok) return;
+      const originalDriver = task.driver;
+      const originalCode = task.code;
+      if (task.driver) setTaskDriver(dateKey, task, null);
+      task.code = "";
+      day.tasks.splice(idx, 1);
+      day.removedTasks = day.removedTasks || [];
+      day.removedTasks.push({ task, originalCode, originalDriverId: originalDriver ? originalDriver.id : null, originalDriverName: originalDriver ? originalDriver.name : null });
+      setDayStatus(`Removed ${label} -- it'll export blank; Restore it any time from the list below.`);
+    }
     renderTaskView(dateKey);
     renderRosterGrid();
     renderAllDaysTable();
     updateAddReserveForUnassignedBtn(dateKey);
-    setDayStatus(`Deleted ${label}.`);
+  });
+
+  // Restores a previously-removed original task exactly as it was: same code, same driver (if it
+  // had one), reinserted at the end of the day's working order (same place Add Task always lands
+  // a row -- there's no reliable "original position" to restore into once drag-and-drop has been
+  // used, so this keeps the rule simple and consistent).
+  removedTasksList.addEventListener("click", (e) => {
+    const btn = e.target.closest(".removed-task-restore-btn");
+    if (!btn) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const row = parseInt(btn.dataset.taskRow, 10);
+    const list = day.removedTasks || [];
+    const entryIdx = list.findIndex((entry) => entry.task.row === row);
+    if (entryIdx === -1) return;
+    const entry = list[entryIdx];
+    list.splice(entryIdx, 1);
+    entry.task.code = entry.originalCode;
+    day.tasks.push(entry.task);
+    if (entry.originalDriverId) {
+      const driver = livePlan.rosterData.drivers.find((d) => d.id === entry.originalDriverId);
+      if (driver) setTaskDriver(dateKey, entry.task, driver);
+    }
+    renderTaskView(dateKey);
+    renderRosterGrid();
+    renderAllDaysTable();
+    updateAddReserveForUnassignedBtn(dateKey);
+    setDayStatus(`Restored ${entry.originalCode ? `"${entry.originalCode}"` : "the task"}.`);
   });
 
   // --- Drag-to-reorder: moves a task up/down within its day's own working order -------------
@@ -1642,7 +1708,13 @@
     for (const day of livePlan.taskDays) {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
-      for (const task of day.tasks) {
+      // Removed original tasks aren't in day.tasks anymore (see the removedTasks handler above),
+      // but their Code/Driver still need to be patched blank on export -- they're already blank
+      // on the task object itself (task.code = "", task.driver = null), so folding them into the
+      // same loop just works: the diff against origCodes below naturally produces a blanking
+      // patch for them.
+      const removedTasks = (day.removedTasks || []).map((entry) => entry.task);
+      for (const task of day.tasks.concat(removedTasks)) {
         const isNewRow = origCodes[task.row] === undefined;
         if (isNewRow || origCodes[task.row] !== task.code) {
           const patch = { row: task.row, col: day.taskCol, value: task.code };
