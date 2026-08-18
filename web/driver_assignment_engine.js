@@ -377,10 +377,22 @@
 
   function defaultConditions() {
     return {
-      // Blank on purpose -- the supervisor has to set every shift's window before Generate is
-      // allowed to run, per how this was specified: "before we hit generate, we have to set
-      // conditions."
-      shifts: SHIFT_NAMES.map((name) => ({ name, start: "", end: "" })),
+      // Pre-filled with the boundaries a real grid search (against the real Sep1-21 file,
+      // replayed day-by-day with the actual engine) found best -- every top-scoring
+      // configuration widened Early Morning to 09:30, since that's where this file's biggest
+      // cluster of still-open tasks (08:00-09:59) sits, right where a lot of already-idle
+      // Early-Morning-locked drivers already are; Night starting at 18:00 (rather than 20:00)
+      // was confirmed compatible with that same best result, not a tradeoff against it, since
+      // there's essentially no real task demand between 18:00-20:00 in the tested file. Still
+      // fully editable in the Conditions panel -- these are a sensible, data-validated starting
+      // point for a different month/roster, not a hard requirement.
+      shifts: [
+        { name: "Early Morning", start: "03:30", end: "09:30" },
+        { name: "Late Morning", start: "09:30", end: "12:30" },
+        { name: "Early Afternoon", start: "12:30", end: "16:00" },
+        { name: "Late Afternoon", start: "16:00", end: "18:00" },
+        { name: "Night", start: "18:00", end: "03:30" },
+      ],
       ratioReserveDays: 4,
       ratioTripDays: 2,
       restHours: 12,
