@@ -806,6 +806,46 @@
     return byDriver;
   }
 
+  // How many consecutive days (starting at, and including, `dateKey`) a driver is marked
+  // AVAILABLE for, up to their next real recorded day off -- or null if no day off has actually
+  // been recorded anywhere ahead in the loaded range yet, meaning this driver's current work
+  // stretch might continue past what's visible and there's no confirmed tail to time a
+  // transition against. Deliberately conservative: running off the end of the loaded file is
+  // NOT treated as if it were a real break, since that would just be an artifact of how much
+  // data happens to be uploaded, not the driver's actual schedule. Used to gate WHEN a driver
+  // becomes eligible for their first cross-shift borrow in a stretch -- see
+  // assignWithConditions's borrow-widening step below.
+  function buildRemainingWorkDaysIndex(lookaheadDays, rosterData) {
+    const sortedDays = lookaheadDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+    const byDriver = {};
+    rosterData.drivers.forEach((driver) => {
+      const perDate = {};
+      let counter = null; // null until a real break has been confirmed somewhere ahead
+      for (let i = sortedDays.length - 1; i >= 0; i--) {
+        const dateKey = sortedDays[i].dateKey;
+        if (!isAvailable(driver.statusByDateKey[dateKey])) {
+          counter = 0; // this day itself is the break
+        } else if (counter != null) {
+          counter += 1;
+        }
+        perDate[dateKey] = counter;
+      }
+      byDriver[driver.id] = perDate;
+    });
+    return byDriver;
+  }
+
+  // A first-time cross-shift borrow is only offered once a driver is down to their last TWO
+  // working days before a real, confirmed day off -- "do not make this change in the middle of
+  // his working days... on the fourth day it would be a normal shift for him, then on the fifth
+  // and sixth day we can move him" -- so the changeover lands at the tail of a work stretch,
+  // never in the middle of it, and the driver comes back from rest already settled into whatever
+  // shift they end up in. Once a borrow chain has actually started (lastBorrowedStartMin is set),
+  // it's free to continue day to day without re-checking this -- by construction that can only
+  // ever be within the same tail, since MAX_FORWARD_BORROW_STEP_MIN and the rest-time/direction
+  // rules already bound how far and how long a single borrow chain can run.
+  const MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW = 2;
+
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment, lookaheadTaskDays) {
     const state = rotationState || {};
     const rules = specialRules || [];
@@ -814,13 +854,15 @@
     // Defaults to `taskDays` itself -- v1's existing call (the whole month in one go) already IS
     // the full lookahead range, so this costs it nothing; only v2's day-by-day Generate needs to
     // pass its own wider range explicitly to see beyond the single day it's generating.
-    const futureFixedShiftByDriver = buildFutureFixedShiftIndex(lookaheadTaskDays || taskDays, conditions);
+    const lookaheadDays = lookaheadTaskDays || taskDays;
+    const futureFixedShiftByDriver = buildFutureFixedShiftIndex(lookaheadDays, conditions);
     const nextFixedShiftAfter = (driverId, afterDateKey) => {
       const list = futureFixedShiftByDriver[driverId];
       if (!list) return null;
       const hit = list.find((entry) => entry.dateKey > afterDateKey);
       return hit ? hit.shiftIdx : null;
     };
+    const remainingWorkDaysByDriver = buildRemainingWorkDaysIndex(lookaheadDays, rosterData);
 
     const perDay = taskDays.map((day) => {
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
@@ -906,12 +948,26 @@
           const priorShiftIdx = shiftIdx - 1;
           const priorShiftPool = (byShift[priorShiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
           const rested = restFilter(priorShiftPool, task);
-          pool = rested.filter((d) => {
+          const capped = rested.filter((d) => {
             const st = state[d.id];
             const anchor = st.lastBorrowedStartMin != null ? st.lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
             if (anchor == null) return false;
             return task.startMin >= anchor && task.startMin - anchor <= MAX_FORWARD_BORROW_STEP_MIN;
           });
+          // Prefer starting a driver's FIRST borrow of a stretch only near the tail of their real
+          // work days (see MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW above) -- but this is a
+          // preference, not a hard rule, matching the same "skip the ideal rather than leave the
+          // task unfilled" shape already used elsewhere: if nobody near their tail is available,
+          // fall back to any rested, capped candidate regardless of timing. A driver already
+          // mid-chain (lastBorrowedStartMin already set) is never re-gated here -- the chain's own
+          // cap and direction rules already bound how far and how long it can run.
+          const nearTail = capped.filter((d) => {
+            const st = state[d.id];
+            if (st.lastBorrowedStartMin != null) return true;
+            const remaining = remainingWorkDaysByDriver[d.id] && remainingWorkDaysByDriver[d.id][day.dateKey];
+            return remaining != null && remaining <= MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW;
+          });
+          pool = nearTail.length ? nearTail : capped;
           usedBorrow = pool.length > 0;
         }
 
@@ -1241,6 +1297,7 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
+    buildRemainingWorkDaysIndex,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
