@@ -608,11 +608,11 @@
   // was tried and removed -- once a fixed target became unreachable for part of the roster (real
   // task supply skews toward reserve some days), the exclusion just had to keep getting widened
   // and second-guessed. A soft nudge plus "don't repeat yesterday's kind" (isRepeatingLastKind
-  // below) is simpler and matches the real spread better -- but "soft" only ever applies to the
-  // OVERALL ratio staying flexible; a genuine 3-in-a-row streak of the same kind (RRR or TTT) is
-  // hard-blocked regardless (see wouldBeThirdConsecutiveKind, applied in restFilter), since that's
-  // not a ratio question at all -- it's about a real driver never going three straight days
-  // without a trip actually triggering their weekly driving hours.
+  // below) is simpler and matches the real spread better. A genuine 3-in-a-row streak of the same
+  // kind (RRR or TTT) is preferred against even more strongly (see wouldBeThirdConsecutiveKind,
+  // applied in assignWithConditions's candidate cascade) -- but like everything else here, it's a
+  // preference, not a hard rule: "if there is no other choice than giving a driver three
+  // consecutive days as a reserve, we can do it... we will not keep these drivers with no job."
   function ratioPreference(driverState, targetReserveFrac, wantKind) {
     const totalReserve = driverState.cumulativeReserve || 0;
     const totalTrip = driverState.cumulativeTrip || 0;
@@ -635,18 +635,19 @@
     return kinds[kinds.length - 1] === wantKind;
   }
 
-  // isRepeatingLastKind above is only ever a SOFT preference -- if every remaining candidate
-  // already did the same kind yesterday, the pool falls back to allowing it anyway, which is
-  // exactly how a real run could still drift into RRRRRT or RRRTTT even though the ratio itself
-  // stayed on target. Confirmed unacceptable directly: "reserve reserve reserve / trip trip trip"
-  // and "reserve reserve reserve reserve reserve trip" are NOT okay -- the real requirement is a
+  // isRepeatingLastKind above only ever looks one day back -- a candidate pool could still drift
+  // through RRRRRT or RRRTTT one single-day repeat at a time even though the ratio itself stayed
+  // on target. Confirmed unacceptable directly: "reserve reserve reserve / trip trip trip" and
+  // "reserve reserve reserve reserve reserve trip" are NOT okay -- the real requirement is a
   // genuine mix (RTRTRT ideally, RTRRTR at worst if a perfect alternation can't be reached), tied
   // to real weekly driving-hour rules that need a trip to actually trigger periodically rather
-  // than a driver sitting on reserve for days running. This is the HARD version: a driver who
-  // already did the SAME kind for their last two consecutive real duties is excluded outright
-  // from a third one in a row -- same "skip rather than force it" shape as rest-time and the
-  // other hard filters in restFilter below, so a task can still end up left unassigned rather
-  // than ever manufacturing a 3-in-a-row streak.
+  // than a driver sitting on reserve for days running. This is checked as a STRONGER preference
+  // than isRepeatingLastKind (see the candidate cascade in assignWithConditions: try full
+  // alternation first, then "one repeat but not a third in a row," and only fall back to allowing
+  // an actual 3-in-a-row when every other candidate has been exhausted) -- explicitly NOT a hard
+  // exclusion: "if there is no other choice than giving a driver three consecutive days as a
+  // reserve, we can do it... we will not keep these drivers with no job." A driver already idle
+  // that day because of this preference matters more than the streak itself.
   function wouldBeThirdConsecutiveKind(driverState, wantKind) {
     const kinds = driverState.recentKinds || [];
     if (kinds.length < 2) return false;
@@ -868,10 +869,6 @@
         const taskShiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const nextFixed = taskShiftIdx != null ? nextFixedShiftAfter(d.id, day.dateKey) : null;
         if (nextFixed != null && nextFixed < taskShiftIdx) return false;
-        // Hard cap: never a driver's third consecutive reserve OR third consecutive trip -- see
-        // wouldBeThirdConsecutiveKind above.
-        const wantKind = task.kind === "reserve" ? "reserve" : "trip";
-        if (wouldBeThirdConsecutiveKind(st, wantKind)) return false;
         return true;
       });
 
@@ -922,11 +919,21 @@
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
-        // Prefer whoever didn't just do this same kind yesterday -- "make it a mix, one day
-        // reserve one day trip" -- but only when that's actually possible; if literally everyone
-        // left would be repeating, don't leave the task unfilled over it.
+        // Priority cascade toward a real mix, not just an on-target ratio -- confirmed directly:
+        // "reserve reserve reserve / trip trip trip" is NOT acceptable, but "if there is no other
+        // choice than giving a driver three consecutive days as a reserve, we can do it... we will
+        // not keep these drivers with no job." So this is a PREFERENCE ladder, not a hard rule:
+        // 1) best -- full alternation, nobody repeats yesterday's kind (RTRTRT).
+        // 2) fallback -- a single repeat is fine as long as it wouldn't be a THIRD in a row
+        //    (RTRRTR) -- notRepeating is always a subset of this (repeating yesterday's kind is a
+        //    precondition for a third-in-a-row, so anyone who avoided a repeat automatically
+        //    avoided a streak too).
+        // 3) last resort -- if literally every remaining candidate would be creating a 3rd
+        //    consecutive same-kind duty, allow it anyway rather than leave the task unassigned (and
+        //    that driver with nothing that day) purely to protect the mix.
         const notRepeating = pool.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
-        const finalPool = notRepeating.length ? notRepeating : pool;
+        const notThirdConsecutive = pool.filter((d) => !wouldBeThirdConsecutiveKind(state[d.id], wantKind));
+        const finalPool = notRepeating.length ? notRepeating : (notThirdConsecutive.length ? notThirdConsecutive : pool);
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
