@@ -11,7 +11,7 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260818b"></script>
+<script src="driver_assignment_engine.js?v=20260818c"></script>
 <script src="xlsx_surgical_patch.js?v=20260818"></script>
 <style>
   :root {
@@ -1850,7 +1850,12 @@
     // though only this day gets generated right now -- a brand-new driver's very first shift lock
     // should already reflect the month's real shape, not whatever this single day happens to need.
     const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
-    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment);
+    // Also passes the WHOLE loaded range as the lookahead so a fresh assignment on this one day
+    // never gets stranded ahead of a real, already-fixed pre-existing duty on a LATER day this
+    // session hasn't generated yet (see buildFutureFixedShiftIndex in engine.js) -- without this,
+    // v2's per-day Generate would only ever see today's single-day taskDays array and have no way
+    // to know a future day already has a real answer waiting.
+    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment, livePlan.taskDays);
     const dayResult = result.perDay[0];
     const newWrites = {};
     dayResult.assignments.forEach(({ task, driver }) => {

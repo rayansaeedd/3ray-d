@@ -742,11 +742,50 @@
   // large just to fill a gap. Fairness keeps the soft-nudge shape from the real-data rebuild
   // (prefer whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
   // reintroduced.
-  function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment) {
+  // A driver's real, already-fixed pre-existing duties (see resolveExistingTaskAssignments) are
+  // ground truth this engine never rewrites -- but they're also evidence the engine should look
+  // AHEAD at, not just behind. Without this, a driver whose own locked shift naturally rotates
+  // forward (the ordinary 2-week shiftLockWeeks cycle, not even a borrow) can get freshly assigned
+  // into a later shift on day N, one or two days before a real pre-existing entry already fixes
+  // them back into an EARLIER shift on day M > N -- a visible backward drop the engine created by
+  // assigning into a spot it had no way to know was about to be contradicted by already-real data.
+  // Confirmed directly against a real file: a driver's own lock rotated Early Morning -> Late
+  // Morning right on schedule, filled two ordinary Late-Morning tasks, and the very next day's
+  // ALREADY-EXISTING answer (present in the file before this session ever opened it) put her back
+  // in Early Morning -- the rotation model had no visibility into that fixed future at all.
+  // Builds driverId -> chronologically-sorted list of every pre-existing duty's {dateKey, shiftIdx}
+  // across `lookaheadDays` (the WHOLE loaded range, not just the day(s) being generated right now --
+  // v1 already passes the whole month as its `taskDays`, so this is free there; v2's per-day
+  // Generate passes its own separate lookahead range explicitly, see assignWithConditions below).
+  function buildFutureFixedShiftIndex(lookaheadDays, conditions) {
+    const byDriver = {};
+    lookaheadDays.forEach((day) => {
+      day.tasks.forEach((task) => {
+        if (!task.originalDriverRawText || !task.driver) return;
+        const idx = classifyShiftForMinutes(conditions, task.startMin);
+        if (idx == null) return;
+        (byDriver[task.driver.id] = byDriver[task.driver.id] || []).push({ dateKey: day.dateKey, shiftIdx: idx });
+      });
+    });
+    Object.values(byDriver).forEach((list) => list.sort((a, b) => a.dateKey.localeCompare(b.dateKey)));
+    return byDriver;
+  }
+
+  function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment, lookaheadTaskDays) {
     const state = rotationState || {};
     const rules = specialRules || [];
     const targetReserveFrac = conditions.ratioReserveDays / (conditions.ratioReserveDays + conditions.ratioTripDays);
     const cycleLen = conditions.shifts.length;
+    // Defaults to `taskDays` itself -- v1's existing call (the whole month in one go) already IS
+    // the full lookahead range, so this costs it nothing; only v2's day-by-day Generate needs to
+    // pass its own wider range explicitly to see beyond the single day it's generating.
+    const futureFixedShiftByDriver = buildFutureFixedShiftIndex(lookaheadTaskDays || taskDays, conditions);
+    const nextFixedShiftAfter = (driverId, afterDateKey) => {
+      const list = futureFixedShiftByDriver[driverId];
+      if (!list) return null;
+      const hit = list.find((entry) => entry.dateKey > afterDateKey);
+      return hit ? hit.shiftIdx : null;
+    };
 
     const perDay = taskDays.map((day) => {
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
@@ -783,9 +822,19 @@
       const restFilter = (list, task) => list.filter((d) => {
         if (isExcludedBySpecialRule(d, task, rules)) return false;
         const st = state[d.id];
-        if (st.lastDutyEndMin == null) return true;
-        const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
-        return gap >= conditions.restHours * 60;
+        if (st.lastDutyEndMin != null) {
+          const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
+          if (gap < conditions.restHours * 60) return false;
+        }
+        // Don't hand this driver a fresh assignment today if a real, already-fixed pre-existing
+        // duty on a later date would make it look like they got sent backward -- see
+        // buildFutureFixedShiftIndex above. Same "skip rather than force it" philosophy as the
+        // forward-borrow cap: if this is the only thing ruling every candidate out, the task is
+        // left unassigned rather than manufacturing a jump we already know is coming.
+        const taskShiftIdx = classifyShiftForMinutes(conditions, task.startMin);
+        const nextFixed = taskShiftIdx != null ? nextFixedShiftAfter(d.id, day.dateKey) : null;
+        if (nextFixed != null && nextFixed < taskShiftIdx) return false;
+        return true;
       });
 
       // A task that already has a real answer -- either resolved from the original file's own
@@ -1146,7 +1195,7 @@
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
-    computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment,
+    computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
