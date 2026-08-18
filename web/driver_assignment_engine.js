@@ -65,9 +65,11 @@
   // "R" anywhere in the letters after the duration means Reserve (however many letters follow --
   // R/RB/RK/RA/... are all still Reserve, the letter is a station/sequence detail we don't need
   // to interpret). "S" (and no "R") means Sweep, the track-inspection run. Anything else is a
-  // real trip.
+  // real trip. The route-digit group is OPTIONAL -- confirmed directly against a real file: most
+  // reserve codes carry one ("0700/7RA"), but a reserve slot with no real route to attach to
+  // sometimes has none at all ("1100/RA") -- both are real, both mean the same thing.
   function classifyCode(code) {
-    const m = /^(\d{3,4})\/(\d{1,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    const m = /^(\d{3,4})\/(\d{0,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
     if (!m) return "trip";
     const suffix = m[3].toUpperCase();
     if (suffix.includes("R")) return "reserve";
@@ -80,7 +82,7 @@
   // "trip" kind codes (reserve/sweep codes use R/S for that same position to mean something
   // else entirely, handled by classifyCode above).
   function classifyDestination(code) {
-    const m = /^(\d{3,4})\/(\d{1,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    const m = /^(\d{3,4})\/(\d{0,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
     if (!m) return null;
     const first = m[3][0].toUpperCase();
     if (first === "L") return "MAK";
@@ -273,7 +275,7 @@
         const taskCell = ws.getRow(r).getCell(tasksCell.col);
         const raw = displayValue(taskCell);
         const code = typeof raw === "string" ? raw.trim() : null;
-        if (code && /^\d{3,4}\/\d{1,2}[A-Za-z]{1,3}$/.test(code)) {
+        if (code && /^\d{3,4}\/\d{0,2}[A-Za-z]{1,3}$/.test(code)) {
           const startMin = startCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(startCell.col))) : null;
           const endMin = endCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(endCell.col))) : null;
           tasks.push({
@@ -710,6 +712,77 @@
       });
     }
     return result;
+  }
+
+  // Real reserve codes carry a route digit before the letters ("0700/7RA") -- confirmed as the
+  // convention to use for newly-created ones, matching how the overwhelming majority of real
+  // reserve tasks are already written (a small minority use no digit at all, e.g. "1100/RA", but
+  // that's the exception, not the rule to build new ones on).
+  const RESERVE_ROUTE_DIGIT = "7";
+  // Fixed slot order at a single sign-in time -- confirmed directly: "sign in time 7am, you can
+  // add 4 R task as max: 0700/R, 0700/RA, 0700/RB, 0700/RC." Never more than 4 at one time.
+  const RESERVE_SUFFIXES = ["R", "RA", "RB", "RC"];
+  const MAX_RESERVE_SLOTS_PER_TIME = RESERVE_SUFFIXES.length;
+
+  // We don't want to leave a driver with no job -- for every driver Generate left unassigned,
+  // proposes a brand-new reserve task {code, startMin, kind, destination, driver} to add to the
+  // day, rather than a blank row the supervisor has to fill in by hand. Two rules, both confirmed
+  // directly:
+  // 1) A sign-in time never gets more than 4 reserve slots (R, RA, RB, RC, in that fixed order).
+  // 2) New reserve slots go on sign-in times that ALREADY exist somewhere in the day's real Task
+  //    Program (trip or reserve alike) -- never an invented time -- and only within the driver's
+  //    OWN currently-locked shift, so a reserve duty always mirrors a genuine operational start
+  //    time for that shift, never a random hour. A shift with no real sign-in time at all that
+  //    day falls back to the shift's own configured start time.
+  // "Fair" distribution: always fills whichever eligible time currently has the FEWEST reserve
+  // slots first, never stacking new ones onto an already-busier time while a thinner one sits
+  // open -- confirmed directly: "3 at 8am, 4 at 5am, 3 at 10am... seems fair" vs "5 at 8am, 1 at
+  // 9am, 2 at 10am, 1 at 12pm... does not seem fair." A driver whose own shift has every real
+  // time already at the 4-slot cap is reported back in `stillUnassigned` rather than silently
+  // dropped or forced onto an invented time.
+  function buildReserveTasksForUnassignedDrivers(day, unassignedDrivers, conditions, rotationState) {
+    const timesByShift = conditions.shifts.map(() => new Set());
+    day.tasks.forEach((t) => {
+      if (t.startMin == null) return;
+      const idx = classifyShiftForMinutes(conditions, t.startMin);
+      if (idx != null) timesByShift[idx].add(t.startMin);
+    });
+
+    const reserveCountByTime = {};
+    const usedSuffixesByTime = {};
+    day.tasks.forEach((t) => {
+      if (t.kind !== "reserve" || t.startMin == null) return;
+      reserveCountByTime[t.startMin] = (reserveCountByTime[t.startMin] || 0) + 1;
+      const m = /^\d{3,4}\/\d{0,2}([A-Za-z]{1,3})$/.exec(t.code);
+      if (m) (usedSuffixesByTime[t.startMin] = usedSuffixesByTime[t.startMin] || new Set()).add(m[1].toUpperCase());
+    });
+
+    const created = [];
+    const stillUnassigned = [];
+
+    unassignedDrivers.forEach((driver) => {
+      const st = rotationState[driver.id];
+      const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+      let candidateTimes = ownIdx != null ? Array.from(timesByShift[ownIdx]) : [];
+      if (!candidateTimes.length && ownIdx != null) {
+        const fallback = parseHHMM(conditions.shifts[ownIdx].start);
+        if (fallback != null) candidateTimes = [fallback];
+      }
+      const eligible = candidateTimes.filter((t) => (reserveCountByTime[t] || 0) < MAX_RESERVE_SLOTS_PER_TIME);
+      if (!eligible.length) { stillUnassigned.push(driver); return; }
+      // Thinnest time first; ties broken chronologically for determinism.
+      eligible.sort((a, b) => (reserveCountByTime[a] || 0) - (reserveCountByTime[b] || 0) || a - b);
+      const chosenTime = eligible[0];
+      const used = usedSuffixesByTime[chosenTime] || new Set();
+      const suffix = RESERVE_SUFFIXES.find((s) => !used.has(s));
+      if (!suffix) { stillUnassigned.push(driver); return; } // guarded by the count filter above, but stay safe
+      const code = `${minutesToHHMM(chosenTime).replace(":", "")}/${RESERVE_ROUTE_DIGIT}${suffix}`;
+      created.push({ code, startMin: chosenTime, kind: "reserve", destination: null, driver });
+      reserveCountByTime[chosenTime] = (reserveCountByTime[chosenTime] || 0) + 1;
+      (usedSuffixesByTime[chosenTime] = used).add(suffix);
+    });
+
+    return { created, stillUnassigned };
   }
 
   // A driver's rotation-state update after being assigned one task -- extracted out of the
@@ -1297,7 +1370,7 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
-    buildRemainingWorkDaysIndex,
+    buildRemainingWorkDaysIndex, buildReserveTasksForUnassignedDrivers,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,

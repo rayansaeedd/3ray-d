@@ -11,7 +11,7 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260818g"></script>
+<script src="driver_assignment_engine.js?v=20260818h"></script>
 <script src="xlsx_surgical_patch.js?v=20260818"></script>
 <style>
   :root {
@@ -940,7 +940,7 @@
       // grid for that day BECAUSE of this UI (Generate or a driver reassignment), as opposed to a
       // genuine original leave code or a supervisor's own direct hand-edit of that cell. Lets a
       // re-Generate safely undo only its own (or a reassignment's) prior writes before re-running.
-      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalRosterValues };
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalRosterValues, lastGeneratedRotationState: {} };
       dayWorkflow.style.display = "block";
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
@@ -1673,11 +1673,16 @@
     addReserveForUnassignedBtn.disabled = count === 0;
   }
 
-  // One click instead of clicking Add Task once per unassigned driver by hand: appends one blank
-  // reserve-shaped row for each driver the last Generate left unassigned -- code, start, AND
-  // driver are all left blank so the supervisor picks who goes on each row themselves via the
-  // normal driver picker, same as a single Add Task always has been. This only decides HOW MANY
-  // rows to add, not who fills them.
+  // One click instead of clicking Add Task once per unassigned driver by hand: appends a REAL
+  // reserve task, already coded and assigned, for every driver the last Generate left
+  // unassigned -- "we don't want to leave a driver with no task... we can do that by adding a
+  // reserved task to the task file." Confirmed convention: at most 4 reserve slots per sign-in
+  // time (R, RA, RB, RC), each new slot pegged to a sign-in time that ALREADY exists somewhere in
+  // the day's real Task Program, within the driver's OWN locked shift -- never an invented time --
+  // and distributed to keep the spread fair (fill the thinnest real time first, never stack onto
+  // a busier one while a thinner one has room). See buildReserveTasksForUnassignedDrivers in
+  // engine.js for the actual placement logic; this handler just turns its proposals into real
+  // task rows and wires each one to its driver exactly like a manual reassignment would.
   addReserveForUnassignedBtn.addEventListener("click", () => {
     if (!livePlan) return;
     const dateKey = daySelect.value;
@@ -1685,18 +1690,25 @@
     const result = livePlan.results[dateKey];
     const unassignedDrivers = result ? result.unassignedDrivers.slice() : [];
     if (!day || !unassignedDrivers.length) return;
-    unassignedDrivers.forEach(() => {
+    // lastGeneratedRotationState (not computeReadOnlyRotationState()) -- it's the one that
+    // actually knows which shift each of these currently-unassigned drivers is locked to, since
+    // it just went through Generate's own cold-start seeding for every available driver.
+    const rotationState = livePlan.lastGeneratedRotationState || {};
+    const { created, stillUnassigned } = E.buildReserveTasksForUnassignedDrivers(day, unassignedDrivers, conditions, rotationState);
+    created.forEach(({ code, startMin, kind, destination, driver }) => {
       const row = livePlan.nextFreeRow[dateKey]++;
-      const task = { row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null };
+      const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null };
       day.tasks.push(task);
+      setTaskDriver(dateKey, task, driver);
     });
-    result.unassignedDrivers = []; // they each have a blank row waiting now -- keeps the Result table's count honest
+    result.unassignedDrivers = stillUnassigned; // only genuinely un-placeable drivers remain flagged
     renderTaskView(dateKey);
     renderRosterGrid();
     renderAllDaysTable();
     renderDayResultTable(dateKey);
     updateAddReserveForUnassignedBtn(dateKey);
-    setDayStatus(`Added ${unassignedDrivers.length} reserve task${unassignedDrivers.length === 1 ? "" : "s"}, one per unassigned driver.`);
+    const stillNote = stillUnassigned.length ? ` (${stillUnassigned.length} driver${stillUnassigned.length === 1 ? "" : "s"} couldn't get a slot -- every real sign-in time in their shift is already at the 4-slot cap)` : "";
+    setDayStatus(`Added ${created.length} reserve task${created.length === 1 ? "" : "s"}, one per unassigned driver, already coded and assigned.${stillNote}`);
   });
 
   // --- Driver-search picker: shared modal, reused for every task's Driver button ---------------
@@ -1870,6 +1882,13 @@
     livePlan.engineWrites[dateKey] = newWrites;
     livePlan.results[dateKey] = dayResult;
     livePlan.dayStatus[dateKey] = "generated";
+    // Unlike computeReadOnlyRotationState() (rebuilt only from SAVED days' actual assignments --
+    // a driver left genuinely unassigned never gets an entry there, by design, since they never
+    // received a task to replay), THIS rotationState just went through assignWithConditions's own
+    // cold-start seeding loop, which anchors a shift for every AVAILABLE driver that day whether
+    // or not they ended up with a task. Stashing it here is what lets "Add Reserve Task for Every
+    // Unassigned Driver" below know which shift an unassigned driver is actually locked to.
+    livePlan.lastGeneratedRotationState = rotationState;
   }
 
   dayGenerateBtn.addEventListener("click", async () => {
