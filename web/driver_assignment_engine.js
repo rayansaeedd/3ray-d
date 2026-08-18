@@ -608,7 +608,11 @@
   // was tried and removed -- once a fixed target became unreachable for part of the roster (real
   // task supply skews toward reserve some days), the exclusion just had to keep getting widened
   // and second-guessed. A soft nudge plus "don't repeat yesterday's kind" (isRepeatingLastKind
-  // below) is simpler and matches the real spread better.
+  // below) is simpler and matches the real spread better -- but "soft" only ever applies to the
+  // OVERALL ratio staying flexible; a genuine 3-in-a-row streak of the same kind (RRR or TTT) is
+  // hard-blocked regardless (see wouldBeThirdConsecutiveKind, applied in restFilter), since that's
+  // not a ratio question at all -- it's about a real driver never going three straight days
+  // without a trip actually triggering their weekly driving hours.
   function ratioPreference(driverState, targetReserveFrac, wantKind) {
     const totalReserve = driverState.cumulativeReserve || 0;
     const totalTrip = driverState.cumulativeTrip || 0;
@@ -629,6 +633,24 @@
     const kinds = driverState.recentKinds || [];
     if (!kinds.length) return false;
     return kinds[kinds.length - 1] === wantKind;
+  }
+
+  // isRepeatingLastKind above is only ever a SOFT preference -- if every remaining candidate
+  // already did the same kind yesterday, the pool falls back to allowing it anyway, which is
+  // exactly how a real run could still drift into RRRRRT or RRRTTT even though the ratio itself
+  // stayed on target. Confirmed unacceptable directly: "reserve reserve reserve / trip trip trip"
+  // and "reserve reserve reserve reserve reserve trip" are NOT okay -- the real requirement is a
+  // genuine mix (RTRTRT ideally, RTRRTR at worst if a perfect alternation can't be reached), tied
+  // to real weekly driving-hour rules that need a trip to actually trigger periodically rather
+  // than a driver sitting on reserve for days running. This is the HARD version: a driver who
+  // already did the SAME kind for their last two consecutive real duties is excluded outright
+  // from a third one in a row -- same "skip rather than force it" shape as rest-time and the
+  // other hard filters in restFilter below, so a task can still end up left unassigned rather
+  // than ever manufacturing a 3-in-a-row streak.
+  function wouldBeThirdConsecutiveKind(driverState, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    if (kinds.length < 2) return false;
+    return kinds[kinds.length - 1] === wantKind && kinds[kinds.length - 2] === wantKind;
   }
 
   // rotationState: { [driverId]: { lastDutyEndDateKey, lastDutyEndMin, recentKinds: [],
@@ -846,6 +868,10 @@
         const taskShiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const nextFixed = taskShiftIdx != null ? nextFixedShiftAfter(d.id, day.dateKey) : null;
         if (nextFixed != null && nextFixed < taskShiftIdx) return false;
+        // Hard cap: never a driver's third consecutive reserve OR third consecutive trip -- see
+        // wouldBeThirdConsecutiveKind above.
+        const wantKind = task.kind === "reserve" ? "reserve" : "trip";
+        if (wouldBeThirdConsecutiveKind(st, wantKind)) return false;
         return true;
       });
 
