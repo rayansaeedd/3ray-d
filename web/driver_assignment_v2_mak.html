@@ -1179,9 +1179,12 @@
     }
     task.driver = newDriver || null;
     if (newDriver) {
-      const code = E.stripCodeForRoster(task.code);
-      newDriver.statusByDateKey[dateKey] = code;
-      writes[newDriver.id] = code;
+      // Writes the FULL task code (letter suffix and all) into the roster cell -- unlike v1 and a
+      // real completed roster (which never carries the suffix), the supervisor wants this
+      // engine's own Roster grid to show exactly what the Task Program shows, so a code's
+      // trip/reserve/sweep nature is visible right in the roster without cross-checking.
+      newDriver.statusByDateKey[dateKey] = task.code;
+      writes[newDriver.id] = task.code;
     }
   }
 
@@ -1542,9 +1545,9 @@
       if (t) t.driver = driver;
       // Writes the Roster grid's cell too -- Generate is what keeps both views consistent; after
       // this, the two grids are independently editable (no ongoing auto-sync back the other way).
-      const code = E.stripCodeForRoster(task.code);
-      driver.statusByDateKey[dateKey] = code;
-      newWrites[driver.id] = code;
+      // Full code, suffix and all -- matches setTaskDriver()'s own write below.
+      driver.statusByDateKey[dateKey] = task.code;
+      newWrites[driver.id] = task.code;
     });
     livePlan.engineWrites[dateKey] = newWrites;
     livePlan.results[dateKey] = dayResult;
