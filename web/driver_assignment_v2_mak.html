@@ -810,10 +810,15 @@
       // last real task row (confirmed against real files: 80+ blank rows follow the last real
       // task on every day-sheet, so this never needs true spreadsheet row-insertion). Falls back
       // to a safely-high row for a day with zero real tasks at all, since there's no task row to
-      // anchor off of.
+      // anchor off of. lastRealTaskRow[dateKey] is kept separately (not derived from nextFreeRow,
+      // which keeps incrementing as more tasks get added) -- it's the template row Download reads
+      // a real task row's own style from, so an Add-Task row's exported cells look like the rest
+      // of that same sheet instead of carrying a blank spacer row's default styling.
       const nextFreeRow = {};
+      const lastRealTaskRow = {};
       taskDays.forEach((day) => {
         const maxRow = day.tasks.reduce((m, t) => Math.max(m, t.row), 0);
+        lastRealTaskRow[day.dateKey] = maxRow;
         nextFreeRow[day.dateKey] = maxRow > 0 ? maxRow + 1 : 200;
       });
       // Snapshots of the ORIGINAL parsed values, taken once here before any edit happens --
@@ -834,7 +839,7 @@
       // grid for that day BECAUSE of this UI (Generate or a driver reassignment), as opposed to a
       // genuine original leave code or a supervisor's own direct hand-edit of that cell. Lets a
       // re-Generate safely undo only its own (or a reassignment's) prior writes before re-running.
-      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, originalTaskCodes, originalRosterValues };
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalRosterValues };
       dayWorkflow.style.display = "block";
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
@@ -1276,20 +1281,48 @@
   // untouched cell in the whole date range. A task's own code cell is patched whenever it's a
   // brand-new row (Add Task -- origCode is undefined) or hand-edited; the NAME cell is always
   // included since blanking it back out (an Unassign) needs writing too, not just filling it in.
-  function buildLivePatches() {
+  // A row Add Task creates has no counterpart in originalTaskCodes at all (never parsed from the
+  // original file), which is exactly the signal used here to also clone that day's last REAL task
+  // row's style onto the new row's Code/Name cells -- so it reads as a genuine part of the sheet
+  // once exported, not a plain blank spacer row's default styling. Cloning happens once per
+  // (sheet, column) and is reused for every Add-Task row on that same day.
+  async function buildLivePatches() {
     const rosterPatches = { 0: [] };
     const taskPatches = {};
-    livePlan.taskDays.forEach((day) => {
+    const taskZip = await JSZip.loadAsync(taskArrayBuffer.slice(0));
+    const templateStyleCache = {};
+    async function templateStyleIndex(day, col) {
+      const cacheKey = day.sheetIndex + ":" + col;
+      if (!(cacheKey in templateStyleCache)) {
+        const templateRow = livePlan.lastRealTaskRow[day.dateKey];
+        templateStyleCache[cacheKey] = templateRow
+          ? await XlsxSurgicalPatch.getCellStyleIndex(taskZip, day.sheetIndex, templateRow, col)
+          : null;
+      }
+      return templateStyleCache[cacheKey];
+    }
+
+    for (const day of livePlan.taskDays) {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
-      day.tasks.forEach((task) => {
-        const origCode = origCodes[task.row];
-        if (origCode === undefined || origCode !== task.code) {
-          taskPatches[day.sheetIndex].push({ row: task.row, col: day.taskCol, value: task.code });
+      for (const task of day.tasks) {
+        const isNewRow = origCodes[task.row] === undefined;
+        if (isNewRow || origCodes[task.row] !== task.code) {
+          const patch = { row: task.row, col: day.taskCol, value: task.code };
+          if (isNewRow) {
+            const styleIndex = await templateStyleIndex(day, day.taskCol);
+            if (styleIndex != null) patch.styleIndex = styleIndex;
+          }
+          taskPatches[day.sheetIndex].push(patch);
         }
-        taskPatches[day.sheetIndex].push({ row: task.row, col: day.nameCol, value: task.driver ? E.formatDriverForTaskCell(task.driver) : "" });
-      });
-    });
+        const namePatch = { row: task.row, col: day.nameCol, value: task.driver ? E.formatDriverForTaskCell(task.driver) : "" };
+        if (isNewRow) {
+          const styleIndex = await templateStyleIndex(day, day.nameCol);
+          if (styleIndex != null) namePatch.styleIndex = styleIndex;
+        }
+        taskPatches[day.sheetIndex].push(namePatch);
+      }
+    }
     livePlan.rosterData.drivers.forEach((driver) => {
       livePlan.taskDays.forEach((day) => {
         const current = driver.statusByDateKey[day.dateKey] || "";
@@ -1306,7 +1339,7 @@
     if (!livePlan) return;
     try {
       setStatus("Building the Task Program file...");
-      const { taskPatches } = buildLivePatches();
+      const { taskPatches } = await buildLivePatches();
       const buf = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
       setStatus("Downloaded the current Task Program.");
@@ -1320,7 +1353,7 @@
     if (!livePlan) return;
     try {
       setStatus("Building the Roster file...");
-      const { rosterPatches } = buildLivePatches();
+      const { rosterPatches } = await buildLivePatches();
       const buf = await XlsxSurgicalPatch.applyCellPatches(rosterArrayBuffer, rosterPatches);
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), rosterFileName);
       setStatus("Downloaded the current Roster.");

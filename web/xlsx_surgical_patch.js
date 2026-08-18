@@ -249,6 +249,23 @@
     return xml.slice(0, m.index) + newCellXml + xml.slice(m.index + m[0].length);
   }
 
+  // Reads the existing style index (the `s="N"` attribute) of one cell, or null if the cell
+  // either doesn't exist yet or carries no explicit style -- used to clone a real task row's
+  // look (font, borders, alignment) onto a brand-new row a supervisor adds by hand, so it reads
+  // as part of the same sheet instead of the plain default styling an untouched blank row has.
+  async function getCellStyleIndex(zip, sheetIndex, row, col) {
+    const sheetParts = await getSheetPartNames(zip);
+    const partName = sheetParts[sheetIndex];
+    if (!partName) return null;
+    const xml = await zip.file(partName).async("string");
+    const address = cellAddress(row, col);
+    const re = new RegExp(`<c r="${address}"([^>]*?)(?:/>|>[\\s\\S]*?</c>)`);
+    const m = re.exec(xml);
+    if (!m) return null;
+    const styleMatch = m[1].match(/\ss="(\d+)"/);
+    return styleMatch ? parseInt(styleMatch[1], 10) : null;
+  }
+
   // Resolves ExcelJS-style worksheet order (0-based, matching workbook.worksheets[i]) to the
   // actual xl/worksheets/sheetN.xml part name for each sheet -- via workbook.xml's <sheets>
   // order and xl/_rels/workbook.xml.rels, not by assuming sheet1.xml is always worksheets[0]
@@ -344,12 +361,16 @@
   }
 
   // patchesBySheetIndex: { [sheetIndex]: [{ row, col, value } | { row, col, flag: true } |
-  // { row, col, value, shiftIdx }, ...] }
+  // { row, col, value, shiftIdx } | { row, col, value, styleIndex }, ...] }
   // A `flag: true` entry is style-only -- it recolors the cell (to whichever candidate color
   // pickIdleFlagColor() finds unused in this specific file) without touching whatever value is
   // already there (used to mark an available-but-unused driver's day cell). A `shiftIdx` entry
   // writes the value AND recolors the cell to that shift's color (0-4, matching SHIFT_NAMES
   // order in driver_assignment_engine.js), so a supervisor can see each day's shift at a glance.
+  // A `styleIndex` entry writes the value with that EXACT style index (from getCellStyleIndex()),
+  // rather than either preserving whatever style the target cell already had or looking one up by
+  // shift/flag -- used to make a brand-new row a supervisor added by hand carry the same
+  // font/border/alignment as a real task row elsewhere on the same sheet.
   // Returns a new ArrayBuffer for the patched .xlsx -- every part not named in patchesBySheetIndex
   // (plus xl/styles.xml, only if a flag or shiftIdx patch is actually present) is carried through
   // by JSZip unchanged.
@@ -404,6 +425,8 @@
         } else if (patch.shiftIdx != null) {
           const styleIndex = await getShiftStyleIndex(patch.shiftIdx);
           xml = patchCellValueAndStyleInSheetXml(xml, address, patch.value, styleIndex);
+        } else if (patch.styleIndex != null) {
+          xml = patchCellValueAndStyleInSheetXml(xml, address, patch.value, patch.styleIndex);
         } else {
           xml = patchCellInSheetXml(xml, address, patch.value);
         }
@@ -426,6 +449,6 @@
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
     patchCellInSheetXml, patchCellStyleInSheetXml, patchCellValueAndStyleInSheetXml, ensureFillStyle,
     pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES, pickShiftColors, SHIFT_FLAG_ARGB_CANDIDATES,
-    getDrawingPartNames, findPassengerMarkedRows,
+    getDrawingPartNames, findPassengerMarkedRows, getCellStyleIndex,
   };
 });
