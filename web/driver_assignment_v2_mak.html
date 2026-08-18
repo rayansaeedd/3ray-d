@@ -947,8 +947,7 @@
       renderDaySelector();
       renderAllDaysTable();
       renderRosterGrid();
-      renderShiftDemandPanel();
-      onDaySelectChange();
+      onDaySelectChange(); // also renders the shift demand panel, via renderTaskView
       setStatus(`Loaded ${taskDays.length} day(s) for review. Pick a day above and click Generate.`);
     } catch (err) {
       console.error(err);
@@ -1417,6 +1416,15 @@
   function renderTaskView(dateKey) {
     if (!livePlan) { taskViewCard.style.display = "none"; return; }
     taskViewCard.style.display = "block";
+    // Every mutation that can change a task's shift classification (Add Task, a Start-time edit,
+    // a code edit, delete/restore, swap, driver reassignment, Generate) already re-renders through
+    // here -- the one true chokepoint after any change to a day's task array -- so this keeps the
+    // "learned from the whole loaded Task Program" panel live against all of them, not just the
+    // snapshot taken at initial Load. The seeding math itself was never stale (Generate always
+    // recomputes computeShiftSeedAssignment fresh from the CURRENT livePlan.taskDays on every
+    // call, never a cached value) -- this just keeps what the supervisor SEES in sync with that
+    // same live computation.
+    renderShiftDemandPanel();
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     if (!day) return;
     const origCodes = livePlan.originalTaskCodes[dateKey] || {};
