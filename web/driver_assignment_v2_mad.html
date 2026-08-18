@@ -145,6 +145,13 @@
   .driver-picker-name { flex: 1; }
   .driver-picker-shift { font-size: 11px; color: #666; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
   .driver-picker-shift.unknown { font-style: italic; color: #999; }
+  .driver-picker-filter-row { display: flex; gap: 6px; }
+  .driver-picker-filter-btn {
+    flex: 1; padding: 7px 10px; border: 1.5px solid var(--border); border-radius: 6px;
+    background: #fff; font-size: 12px; font-weight: 700; cursor: pointer; color: #555;
+  }
+  .driver-picker-filter-btn.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .driver-picker-empty { padding: 10px; font-size: 12px; color: #888; font-style: italic; text-align: center; }
 </style>
 </head>
 <body>
@@ -291,6 +298,10 @@
       <span>Assign driver</span>
       <button type="button" id="driverPickerClose" class="driver-picker-close">&times;</button>
     </div>
+    <div class="driver-picker-filter-row" id="driverPickerFilterRow">
+      <button type="button" class="driver-picker-filter-btn" data-filter="all">All</button>
+      <button type="button" class="driver-picker-filter-btn" data-filter="unassigned">Unassigned</button>
+    </div>
     <input type="text" id="driverPickerSearch" class="driver-picker-search" placeholder="Type a name or ID..." />
     <div id="driverPickerList" class="driver-picker-list"></div>
   </div>
@@ -379,6 +390,7 @@
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
   const driverPickerClose = document.getElementById("driverPickerClose");
+  const driverPickerFilterRow = document.getElementById("driverPickerFilterRow");
 
   let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
   let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
@@ -1044,6 +1056,23 @@
   let activePickerTask = null; // { dateKey, row }
   let pickerRotationState = null; // snapshot used only to look up each driver's last-week shift
   let pickerLastWeekDate = null;
+  let pickerFilterMode = "all"; // "all" | "unassigned"
+
+  // Drivers who are genuinely available that day (not on leave/vacation/training, per the roster's
+  // own status) AND don't already have a task assigned that day -- the exact same "free to give
+  // something to" set Generate itself would consider, surfaced here as a one-click filter so a
+  // supervisor reassigning a task can jump straight to whoever still needs one ("I know the driver
+  // that has no assigned task so I can put them").
+  function getUnassignedDriverIds(dateKey) {
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    if (!day) return new Set();
+    const assignedIds = new Set(day.tasks.filter((t) => t.driver).map((t) => t.driver.id));
+    return new Set(
+      livePlan.rosterData.drivers
+        .filter((d) => E.isAvailable(d.statusByDateKey[dateKey]) && !assignedIds.has(d.id))
+        .map((d) => d.id)
+    );
+  }
 
   // The exact same rotationState recipe generateDay() uses (replay of this session's saved days,
   // falling back to cross-month memory for anyone not covered) -- read-only here, just to look up
@@ -1066,13 +1095,24 @@
     return `<span class="driver-picker-shift"><span class="shift-swatch" style="background:${SHIFT_COLORS[idx]};"></span>last week: ${escapeAttr(conditions.shifts[idx].name)}</span>`;
   }
 
+  function renderDriverPickerFilterButtons() {
+    driverPickerFilterRow.querySelectorAll(".driver-picker-filter-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.filter === pickerFilterMode);
+    });
+  }
+
   function renderDriverPickerList(query) {
     const q = query.trim().toUpperCase();
+    const unassignedIds = pickerFilterMode === "unassigned" ? getUnassignedDriverIds(activePickerTask.dateKey) : null;
     const list = livePlan.rosterData.drivers
       .filter((d) => !q || d.name.toUpperCase().includes(q) || d.id.includes(q))
+      .filter((d) => !unassignedIds || unassignedIds.has(d.id))
       .sort((a, b) => a.name.localeCompare(b.name));
     const items = [`<div class="driver-picker-list-item" data-clear="1"><em>-- Unassign --</em></div>`]
       .concat(list.map((d) => `<div class="driver-picker-list-item" data-driver-id="${d.id}"><span class="driver-picker-name">${escapeAttr(d.name)} (${d.id})</span>${lastWeekShiftBadge(d.id)}</div>`));
+    if (!list.length) {
+      items.push(`<div class="driver-picker-empty">No drivers match${pickerFilterMode === "unassigned" ? " -- everyone available today already has a task" : ""}.</div>`);
+    }
     driverPickerList.innerHTML = items.join("");
   }
 
@@ -1081,7 +1121,9 @@
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     pickerRotationState = computeReadOnlyRotationState();
     pickerLastWeekDate = day ? E.addDays(day.date, -7) : null;
+    pickerFilterMode = "all";
     driverPickerSearch.value = "";
+    renderDriverPickerFilterButtons();
     renderDriverPickerList("");
     driverPickerOverlay.style.display = "flex";
     driverPickerSearch.focus();
@@ -1095,6 +1137,13 @@
   driverPickerSearch.addEventListener("input", () => renderDriverPickerList(driverPickerSearch.value));
   driverPickerClose.addEventListener("click", closeDriverPicker);
   driverPickerOverlay.addEventListener("click", (e) => { if (e.target === driverPickerOverlay) closeDriverPicker(); });
+  driverPickerFilterRow.addEventListener("click", (e) => {
+    const btn = e.target.closest(".driver-picker-filter-btn");
+    if (!btn) return;
+    pickerFilterMode = btn.dataset.filter;
+    renderDriverPickerFilterButtons();
+    renderDriverPickerList(driverPickerSearch.value);
+  });
   driverPickerList.addEventListener("click", (e) => {
     const item = e.target.closest(".driver-picker-list-item");
     if (!item || !activePickerTask) return;
