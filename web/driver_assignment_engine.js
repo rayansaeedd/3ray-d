@@ -667,22 +667,52 @@
     if (st.recentKinds.length > capLen) st.recentKinds.shift();
     if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
     else st.cumulativeTrip = (st.cumulativeTrip || 0) + 1;
+
+    // A task whose own shift sits AFTER the driver's currently locked shift is a cross-shift
+    // borrow (see the forward-only borrow logic in assignWithConditions) -- track the latest one
+    // so a FUTURE borrow attempt for this same driver only has to step a bounded amount further
+    // forward from here, never snap back to an earlier time than they've already been given.
+    // Detected structurally (this task's actual shift vs. the driver's own locked shift for this
+    // date) rather than passed in as a flag, so it's picked up identically whether the
+    // assignment came from live Generate, replaying saved days, or a completed month's real
+    // Task Program (resolveExistingTaskAssignments) -- any of those can be how a driver ends up
+    // with a real duty outside their own locked shift.
+    const taskShiftIdx = classifyShiftForMinutes(conditions, task.startMin);
+    const ownShiftIdx = computeShiftIndexForDriver(st, conditions, day.date);
+    if (taskShiftIdx != null && ownShiftIdx != null && taskShiftIdx > ownShiftIdx) {
+      st.lastBorrowedStartMin = task.startMin;
+    }
     return wantKind;
   }
+
+  // Cap on how much LATER (in minutes) a single day's cross-shift borrow can push a driver
+  // relative to their own last borrowed start time (or their locked shift's own configured start
+  // time, the first time they're ever borrowed) -- keeps a forward transition a gradual, smooth
+  // ramp across several days instead of one jarring jump. Confirmed directly: "if you wanna
+  // borrow take into consideration a smooth transition always... if not, we are sticking with our
+  // rules" -- if a single day's necessary step exceeds this, the borrow simply doesn't happen
+  // that day; it's never forced or widened further to make it fit.
+  const MAX_FORWARD_BORROW_STEP_MIN = 120;
 
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
   // turned out not to cluster into clean bands) because v2's day-by-day human review closes the
   // gap that finding was actually about -- a supervisor now looks at every single day before it
   // counts, so the risk of a rigid lock producing an unreviewed mistake no longer applies the
   // same way, and the supervisor explicitly wants the familiar 2-week rotation back. A driver's
-  // locked shift is a HARD boundary, never crossed: a task only ever considers drivers locked
-  // into its own shift for the whole shiftLockWeeks stretch -- confirmed directly ("make them
-  // stuck on one shift for two weeks... the morning stay morning... do not switch him and put
-  // him on early afternoon"). There is no adjacent-shift fallback; if nobody rested is left in a
-  // task's own shift, the task is left unassigned for the supervisor to fix by hand, same as
-  // every other unfillable case -- no manufactured reserve duty, no crossing into a neighboring
-  // shift band either. Fairness keeps the soft-nudge shape from the real-data rebuild (prefer
-  // whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
+  // locked shift is the strong default: a task first tries only drivers locked into its own shift
+  // for the whole shiftLockWeeks stretch. If (and only if) nobody rested is left there, it may
+  // borrow from the shift immediately BEFORE it in the fixed chain (Early Morning -> Late Morning
+  // -> Early Afternoon -> Late Afternoon -> Night) -- never the shift after, never further than
+  // one step, and never a driver who took real time off (Night can't wrap around to lend into
+  // Early Morning: shiftIdx 0 has no shift before it to borrow from). Confirmed directly: "he can
+  // go forward in time. He cannot go back in time... if you wanna borrow take into consideration
+  // a smooth transition." A borrowed driver's start time must also be a bounded forward step from
+  // wherever their own clock currently sits (see MAX_FORWARD_BORROW_STEP_MIN and
+  // recordAssignment's lastBorrowedStartMin tracking) -- if nobody in that pool clears BOTH
+  // rest-time and the smooth-step check either, the task is left unassigned for the supervisor to
+  // fix by hand, same as every other unfillable case -- no manufactured reserve duty, no jump too
+  // large just to fill a gap. Fairness keeps the soft-nudge shape from the real-data rebuild
+  // (prefer whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
   // reintroduced.
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment) {
     const state = rotationState || {};
@@ -750,11 +780,28 @@
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
 
-        // Hard rule, never crossed: only a driver locked into this task's own shift is ever
-        // considered, for the whole shiftLockWeeks stretch -- no adjacent-shift fallback. If
-        // nobody rested is left in-shift, the task is left unassigned for the supervisor to
-        // handle by hand, same as every other unfillable case.
-        const pool = restFilter(inShift, task);
+        // Own locked shift tried first, rest-time never violated.
+        let pool = restFilter(inShift, task);
+        let usedBorrow = false;
+
+        // Only widen once the driver's own locked shift has nobody rested left in it -- to the
+        // ONE shift immediately before this one in the fixed chain, and only those candidates
+        // whose next assignment would be a smooth, bounded step forward from wherever their own
+        // clock currently sits (never a jump larger than MAX_FORWARD_BORROW_STEP_MIN, never
+        // earlier than that anchor). shiftIdx 0 (Early Morning) has no shift before it to borrow
+        // from at all.
+        if (!pool.length && shiftIdx != null && shiftIdx > 0) {
+          const priorShiftIdx = shiftIdx - 1;
+          const priorShiftPool = (byShift[priorShiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
+          const rested = restFilter(priorShiftPool, task);
+          pool = rested.filter((d) => {
+            const st = state[d.id];
+            const anchor = st.lastBorrowedStartMin != null ? st.lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
+            if (anchor == null) return false;
+            return task.startMin >= anchor && task.startMin - anchor <= MAX_FORWARD_BORROW_STEP_MIN;
+          });
+          usedBorrow = pool.length > 0;
+        }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
 
@@ -768,11 +815,18 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did.
+        // hard quota did. When the candidate came from the forward-borrow widening above, break
+        // ties toward whoever needs the SMALLEST forward step -- keeps the transition as gradual
+        // as possible for everyone involved.
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
-          return scoreB - scoreA;
+          const ratioDiff = scoreB - scoreA;
+          if (ratioDiff !== 0 || !usedBorrow) return ratioDiff;
+          const priorShiftIdx = shiftIdx - 1;
+          const anchorA = state[a.id].lastBorrowedStartMin != null ? state[a.id].lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
+          const anchorB = state[b.id].lastBorrowedStartMin != null ? state[b.id].lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
+          return (task.startMin - anchorA) - (task.startMin - anchorB);
         });
         const chosen = finalPool[0];
 
