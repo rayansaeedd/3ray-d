@@ -161,6 +161,14 @@
   }
   .driver-picker-filter-btn.active { background: var(--ink); color: #fff; border-color: var(--ink); }
   .driver-picker-empty { padding: 10px; font-size: 12px; color: #888; font-style: italic; text-align: center; }
+  .roster-cell-picker-modal { max-width: 320px; }
+  .roster-cell-picker-list { display: flex; flex-direction: column; gap: 6px; }
+  .roster-cell-picker-btn {
+    padding: 10px 14px; border: 1.5px solid var(--border); border-radius: 8px; background: #fff;
+    font-size: 13px; font-weight: 700; text-align: left; cursor: pointer;
+  }
+  .roster-cell-picker-btn:hover { background: #f0f1f4; }
+  .roster-cell-picker-hint { font-weight: 400; font-size: 11px; color: #888; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -297,7 +305,7 @@
 
   <div class="card" id="rosterGridCard" style="display:none;">
     <h2>7. Roster (editable)</h2>
-    <div class="note">Type directly into any cell to fix it by hand -- this grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
+    <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
 </main>
@@ -314,6 +322,24 @@
     </div>
     <input type="text" id="driverPickerSearch" class="driver-picker-search" placeholder="Type a name or ID..." />
     <div id="driverPickerList" class="driver-picker-list"></div>
+  </div>
+</div>
+
+<div id="rosterCellPickerOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal roster-cell-picker-modal">
+    <div class="driver-picker-header">
+      <span>Set this cell</span>
+      <button type="button" id="rosterCellPickerClose" class="driver-picker-close">&times;</button>
+    </div>
+    <div class="roster-cell-picker-list" id="rosterCellPickerList">
+      <button type="button" class="roster-cell-picker-btn" data-value="V">V</button>
+      <button type="button" class="roster-cell-picker-btn" data-value="VR">VR</button>
+      <button type="button" class="roster-cell-picker-btn" data-value="O">O</button>
+      <button type="button" class="roster-cell-picker-btn" data-value="E">E</button>
+      <button type="button" class="roster-cell-picker-btn" data-value="A0">A0</button>
+      <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Task <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
+      <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Training <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
+    </div>
   </div>
 </div>
 
@@ -393,6 +419,9 @@
   const grantMonthBtn = document.getElementById("grantMonthBtn");
   const rosterGridCard = document.getElementById("rosterGridCard");
   const rosterGridTable = document.getElementById("rosterGridTable");
+  const rosterCellPickerOverlay = document.getElementById("rosterCellPickerOverlay");
+  const rosterCellPickerList = document.getElementById("rosterCellPickerList");
+  const rosterCellPickerClose = document.getElementById("rosterCellPickerClose");
   const taskViewCard = document.getElementById("taskViewCard");
   const taskViewTable = document.getElementById("taskViewTable");
   const addTaskBtn = document.getElementById("addTaskBtn");
@@ -972,6 +1001,52 @@
     const driver = livePlan.rosterData.drivers.find((d) => d.id === t.dataset.rosterDriver);
     if (!driver) return;
     driver.statusByDateKey[t.dataset.rosterDate] = t.value.trim();
+  });
+
+  // --- Roster cell quick-pick: click any cell for a one-tap leave/absence code -------------
+  // Doesn't replace direct typing (the cell is still a plain editable input underneath) --
+  // this is a shortcut layered on top for the fixed codes, so a supervisor isn't retyping the
+  // same handful of letters over and over. Task and Training have no fixed value to offer (a
+  // real task/training number varies every time), so those two entries are pass-through: they
+  // just close the menu and hand focus back to the cell for typing it in directly.
+  let activeRosterCell = null; // { driverId, dateKey }
+
+  function openRosterCellPicker(driverId, dateKey) {
+    activeRosterCell = { driverId, dateKey };
+    rosterCellPickerOverlay.style.display = "flex";
+  }
+  function closeRosterCellPicker() {
+    rosterCellPickerOverlay.style.display = "none";
+    activeRosterCell = null;
+  }
+
+  rosterGridTable.addEventListener("click", (e) => {
+    const input = e.target.closest("input[data-roster-driver]");
+    if (!input) return;
+    openRosterCellPicker(input.dataset.rosterDriver, input.dataset.rosterDate);
+  });
+  // Typing directly dismisses the menu rather than leaving it sitting over the cell -- covers
+  // exactly the Task/Training case, where the next thing the supervisor does is type a number.
+  rosterGridTable.addEventListener("input", () => { if (activeRosterCell) closeRosterCellPicker(); });
+
+  rosterCellPickerClose.addEventListener("click", closeRosterCellPicker);
+  rosterCellPickerOverlay.addEventListener("click", (e) => { if (e.target === rosterCellPickerOverlay) closeRosterCellPicker(); });
+  rosterCellPickerList.addEventListener("click", (e) => {
+    const btn = e.target.closest(".roster-cell-picker-btn");
+    if (!btn || !activeRosterCell) return;
+    const { driverId, dateKey } = activeRosterCell;
+    if (btn.dataset.noop) {
+      closeRosterCellPicker();
+      const input = rosterGridTable.querySelector(`input[data-roster-driver="${driverId}"][data-roster-date="${dateKey}"]`);
+      if (input) input.focus();
+      return;
+    }
+    const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
+    if (driver) {
+      driver.statusByDateKey[dateKey] = btn.dataset.value;
+      renderRosterGrid();
+    }
+    closeRosterCellPicker();
   });
 
   // Shared by the driver picker and by a task-code hand-edit that needs to keep an already
