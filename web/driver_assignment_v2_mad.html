@@ -967,24 +967,41 @@
 
   taskViewTable.addEventListener("change", (e) => {
     const t = e.target;
+    if (!t.classList.contains("task-code-input")) return;
     const row = parseInt(t.dataset.taskRow, 10);
     if (!row) return;
     const dateKey = daySelect.value;
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     const task = day.tasks.find((x) => x.row === row);
     if (!task) return;
-    if (t.classList.contains("task-code-input")) {
-      task.code = t.value.trim();
-      task.kind = E.classifyCode(task.code);
-      task.destination = E.classifyDestination(task.code);
-      if (task.driver) setTaskDriver(dateKey, task, task.driver); // re-syncs the Roster cell to the new code
-      renderTaskView(dateKey);
-      renderRosterGrid();
-    } else if (t.classList.contains("task-start-input")) {
-      task.startMin = E.parseHHMM(t.value);
-      renderTaskView(dateKey); // re-sort by the new start time
-    }
+    task.code = t.value.trim();
+    task.kind = E.classifyCode(task.code);
+    task.destination = E.classifyDestination(task.code);
+    if (task.driver) setTaskDriver(dateKey, task, task.driver); // re-syncs the Roster cell to the new code
+    renderTaskView(dateKey);
+    renderRosterGrid();
   });
+
+  // <input type="time"> fires its own 'change' the instant ANY segment (hour or minute) forms a
+  // complete, valid time -- even mid-edit, well before the supervisor actually finished -- e.g.
+  // retyping just the hour of an already-complete time commits immediately, with no chance to
+  // also fix the minute first. Confirmed as real, disruptive default behavior, not something this
+  // app was doing wrong. Committing on 'blur' instead means nothing happens until the field
+  // actually loses focus -- clicking the picker's own Done, tapping elsewhere, or tabbing away --
+  // matching how every other editable cell in this app already behaves. 'blur' doesn't bubble, so
+  // this has to listen during the CAPTURE phase (the trailing `true`) to catch it via delegation.
+  taskViewTable.addEventListener("blur", (e) => {
+    const t = e.target;
+    if (!t.classList || !t.classList.contains("task-start-input")) return;
+    const row = parseInt(t.dataset.taskRow, 10);
+    if (!row) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const task = day.tasks.find((x) => x.row === row);
+    if (!task) return;
+    task.startMin = E.parseHHMM(t.value);
+    renderTaskView(dateKey); // re-sort by the new start time
+  }, true);
 
   taskViewTable.addEventListener("click", (e) => {
     const btn = e.target.closest(".task-driver-btn");
