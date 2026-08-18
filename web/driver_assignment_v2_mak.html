@@ -123,8 +123,12 @@
   .roster-grid-table { white-space: nowrap; }
   .roster-grid-table th, .roster-grid-table td { padding: 3px 4px; }
   .roster-grid-table td.roster-driver-name { text-align: left; font-weight: 700; font-size: 11px; background: #f7f8fa; position: sticky; left: 0; }
-  .roster-grid-table th.roster-col-selected, .roster-grid-table td.roster-col-selected { background: #eafaf7; }
-  .roster-grid-table input { width: 68px; font-size: 11px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; text-align: center; }
+  .roster-grid-table th.roster-col-selected { background: #eafaf7; }
+  /* The selected-day marker lives on the input itself (an outline, not a td background) so it
+     stays visible over a shift-colored cell instead of being hidden behind the input's own
+     opaque background. */
+  .roster-grid-table td.roster-col-selected input { outline: 2px solid var(--ink); outline-offset: -1px; }
+  .roster-grid-table input { width: 68px; font-size: 11px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; text-align: center; background: #fff; }
   .roster-grid-table input:focus { outline: 2px solid var(--ink); }
 
   #taskViewTable input[type=text] { width: 110px; font-size: 12px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
@@ -894,6 +898,18 @@
     rosterGridCard.style.display = "block";
     const dateKeys = livePlan.taskDays.map((d) => d.dateKey);
     const selectedDateKey = daySelect.value;
+
+    // driverId -> that day's assigned task, one pass per day rather than a per-cell scan --
+    // colors the cell by the actual task's own shift (classified from its real start time),
+    // whatever put the driver there (Generate, a driver-picker reassignment, or Add Task), never
+    // a leave code or a purely hand-typed cell value with no task behind it at all.
+    const taskByDriverPerDate = {};
+    livePlan.taskDays.forEach((day) => {
+      const map = {};
+      day.tasks.forEach((t) => { if (t.driver) map[t.driver.id] = t; });
+      taskByDriverPerDate[day.dateKey] = map;
+    });
+
     const headerCells = dateKeys.map((dk) =>
       `<th class="${dk === selectedDateKey ? "roster-col-selected" : ""}">${dk.slice(5)}</th>`
     ).join("");
@@ -904,7 +920,13 @@
         const cells = dateKeys.map((dk) => {
           const val = driver.statusByDateKey[dk] || "";
           const selected = dk === selectedDateKey ? "roster-col-selected" : "";
-          return `<td class="${selected}"><input type="text" data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
+          const task = taskByDriverPerDate[dk][driver.id];
+          let inputStyle = "";
+          if (task) {
+            const shiftIdx = E.classifyShiftForMinutes(conditions, task.startMin);
+            if (shiftIdx != null) inputStyle = ` style="background:${SHIFT_COLORS[shiftIdx]};"`;
+          }
+          return `<td class="${selected}"><input type="text"${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
         }).join("");
         return `<tr><td class="roster-driver-name">${driver.name}</td>${cells}</tr>`;
       }).join("");
