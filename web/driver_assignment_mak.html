@@ -6,8 +6,13 @@
 <title>Driver Task Assignment — Makkah Station</title>
 <script src="vendor/exceljs.min.js"></script>
 <script src="vendor/jszip.min.js"></script>
-<script src="driver_assignment_engine.js"></script>
-<script src="xlsx_surgical_patch.js"></script>
+<!-- The ?v=YYYYMMDD on these two is a cache-buster: browsers (mobile ones especially) can keep
+     serving an old cached copy of a plain filename even after a new version is deployed, which
+     silently leaves someone running stale engine/patcher code. Bump this date whenever
+     driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
+     them (both stations, v1 and v2). -->
+<script src="driver_assignment_engine.js?v=20260818"></script>
+<script src="xlsx_surgical_patch.js?v=20260818"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
