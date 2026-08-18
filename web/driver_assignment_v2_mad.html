@@ -123,8 +123,16 @@
   .roster-grid-table { white-space: nowrap; }
   .roster-grid-table th, .roster-grid-table td { padding: 3px 4px; }
   .roster-grid-table td.roster-driver-name { text-align: left; font-weight: 700; font-size: 11px; background: #f7f8fa; position: sticky; left: 0; }
-  .roster-name-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; }
+  .roster-name-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; cursor: pointer; }
   .roster-name-swatch-unknown { background: #ddd; }
+  .roster-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 11px; color: #555; margin-top: 6px; }
+  .roster-legend-item { display: flex; align-items: center; }
+  .roster-swatch-info-modal { max-width: 320px; }
+  .roster-swatch-info-row { padding: 8px 0; border-top: 1px solid #eee; }
+  .roster-swatch-info-row:first-child { border-top: none; }
+  .roster-swatch-info-label { font-weight: 700; font-size: 11px; color: #666; margin-bottom: 3px; }
+  .roster-swatch-info-value { font-size: 12px; display: flex; align-items: center; }
+  .roster-swatch-info-breakdown { font-size: 11px; color: #666; margin-top: 3px; }
   .roster-grid-table th.roster-col-selected { background: #eafaf7; }
   /* The selected-day marker lives on the input itself (an outline, not a td background) so it
      stays visible over a shift-colored cell instead of being hidden behind the input's own
@@ -307,7 +315,8 @@
 
   <div class="card" id="rosterGridCard" style="display:none;">
     <h2>7. Roster (editable)</h2>
-    <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. The dot next to each driver's name shows their shift a week before the selected day (gray means no record). This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
+    <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. The dot next to each driver's name shows their shift a week before the selected day (gray means no record) -- click it for that driver's shift last week, the week before, and a reserve/trip breakdown. This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
+    <div class="roster-legend" id="rosterShiftLegend"></div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
 </main>
@@ -342,6 +351,16 @@
       <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Task <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
       <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Training <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
     </div>
+  </div>
+</div>
+
+<div id="rosterSwatchInfoOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal roster-swatch-info-modal">
+    <div class="driver-picker-header">
+      <span id="rosterSwatchInfoTitle">Shift history</span>
+      <button type="button" id="rosterSwatchInfoClose" class="driver-picker-close">&times;</button>
+    </div>
+    <div id="rosterSwatchInfoContent"></div>
   </div>
 </div>
 
@@ -424,6 +443,11 @@
   const rosterCellPickerOverlay = document.getElementById("rosterCellPickerOverlay");
   const rosterCellPickerList = document.getElementById("rosterCellPickerList");
   const rosterCellPickerClose = document.getElementById("rosterCellPickerClose");
+  const rosterShiftLegend = document.getElementById("rosterShiftLegend");
+  const rosterSwatchInfoOverlay = document.getElementById("rosterSwatchInfoOverlay");
+  const rosterSwatchInfoTitle = document.getElementById("rosterSwatchInfoTitle");
+  const rosterSwatchInfoContent = document.getElementById("rosterSwatchInfoContent");
+  const rosterSwatchInfoClose = document.getElementById("rosterSwatchInfoClose");
   const taskViewCard = document.getElementById("taskViewCard");
   const taskViewTable = document.getElementById("taskViewTable");
   const addTaskBtn = document.getElementById("addTaskBtn");
@@ -982,12 +1006,19 @@
     const gridRotationState = computeReadOnlyRotationState();
     const gridLastWeekDate = selectedDay ? E.addDays(selectedDay.date, -7) : null;
     function lastWeekSwatch(driverId) {
-      if (!gridLastWeekDate) return "";
+      if (!gridLastWeekDate) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No shift on record for last week"></span>`;
       const st = gridRotationState[driverId];
       const idx = st ? E.computeShiftIndexForDriver(st, conditions, gridLastWeekDate) : null;
-      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" title="No shift on record for last week"></span>`;
-      return `<span class="roster-name-swatch shift-swatch" style="background:${SHIFT_COLORS[idx]};" title="Last week: ${escapeAttr(conditions.shifts[idx].name)}"></span>`;
+      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No shift on record for last week -- click for details"></span>`;
+      return `<span class="roster-name-swatch shift-swatch" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[idx]};" title="Last week: ${escapeAttr(conditions.shifts[idx].name)} -- click for details"></span>`;
     }
+
+    // Legend: which color goes with which shift, so the supervisor never has to guess -- reads
+    // the same conditions.shifts/SHIFT_COLORS pairing every other shift-color indicator on this
+    // page already uses.
+    rosterShiftLegend.innerHTML = conditions.shifts.map((s, i) =>
+      `<span class="roster-legend-item"><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${escapeAttr(s.name)}</span>`
+    ).join("");
 
     const headerCells = dateKeys.map((dk) =>
       `<th class="${dk === selectedDateKey ? "roster-col-selected" : ""}">${dk.slice(5)}</th>`
@@ -1065,6 +1096,71 @@
     }
     closeRosterCellPicker();
   });
+
+  // --- Roster name swatch: click for a small "why this color" info window -------------------
+  // The dot itself only has room for one color, but the supervisor asked to see more: last
+  // week's shift AND the week before it (so a rotation trend is visible at a glance), plus how
+  // many reserve vs trip tasks that driver actually worked last week. The shift values reuse the
+  // exact same rotation-state lookup the dot's own color already comes from; the reserve/trip
+  // breakdown is tallied fresh from this session's own loaded days (real per-day task data, not
+  // an estimate) for the 7 days ending the day before the selected day -- if none of those dates
+  // are in the currently loaded range, the breakdown says so instead of showing a misleading 0/0.
+  function openRosterSwatchInfo(driverId) {
+    if (!livePlan) return;
+    const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
+    const selectedDay = livePlan.taskDays.find((d) => d.dateKey === daySelect.value);
+    if (!driver || !selectedDay) return;
+    const state = computeReadOnlyRotationState();
+    const st = state[driverId];
+
+    function shiftLabelHtml(refDate) {
+      const idx = st ? E.computeShiftIndexForDriver(st, conditions, refDate) : null;
+      if (idx == null) return `<span style="color:#999; font-style:italic;">no shift on record</span>`;
+      return `<span class="shift-swatch" style="background:${SHIFT_COLORS[idx]};"></span>${escapeAttr(conditions.shifts[idx].name)}`;
+    }
+
+    const week1Start = E.addDays(selectedDay.date, -7);
+    const week1End = E.addDays(selectedDay.date, -1);
+    const week2Start = E.addDays(selectedDay.date, -14);
+    const week1StartKey = E.dateKey(week1Start);
+    const week1EndKey = E.dateKey(week1End);
+
+    let reserveCount = 0, tripCount = 0, coveredDays = 0;
+    livePlan.taskDays.forEach((day) => {
+      if (day.dateKey < week1StartKey || day.dateKey > week1EndKey) return;
+      coveredDays++;
+      day.tasks.forEach((t) => {
+        if (!t.driver || t.driver.id !== driverId) return;
+        if (t.kind === "reserve") reserveCount++; else tripCount++;
+      });
+    });
+    const breakdownHtml = coveredDays > 0
+      ? `<div class="roster-swatch-info-breakdown">${reserveCount} reserve, ${tripCount} trip</div>`
+      : `<div class="roster-swatch-info-breakdown" style="font-style:italic;">no day-by-day record in this session's loaded range</div>`;
+
+    rosterSwatchInfoTitle.textContent = driver.name;
+    rosterSwatchInfoContent.innerHTML = `
+      <div class="roster-swatch-info-row">
+        <div class="roster-swatch-info-label">Last week (${week1StartKey} to ${week1EndKey})</div>
+        <div class="roster-swatch-info-value">${shiftLabelHtml(week1Start)}</div>
+        ${breakdownHtml}
+      </div>
+      <div class="roster-swatch-info-row">
+        <div class="roster-swatch-info-label">Week before that</div>
+        <div class="roster-swatch-info-value">${shiftLabelHtml(week2Start)}</div>
+      </div>
+    `;
+    rosterSwatchInfoOverlay.style.display = "flex";
+  }
+  function closeRosterSwatchInfo() { rosterSwatchInfoOverlay.style.display = "none"; }
+
+  rosterGridTable.addEventListener("click", (e) => {
+    const swatch = e.target.closest(".roster-name-swatch[data-driver-id]");
+    if (!swatch) return;
+    openRosterSwatchInfo(swatch.dataset.driverId);
+  });
+  rosterSwatchInfoClose.addEventListener("click", closeRosterSwatchInfo);
+  rosterSwatchInfoOverlay.addEventListener("click", (e) => { if (e.target === rosterSwatchInfoOverlay) closeRosterSwatchInfo(); });
 
   // Shared by the driver picker and by a task-code hand-edit that needs to keep an already
   // -assigned driver's Roster cell matching the new code -- reassigns (or clears) one task's
