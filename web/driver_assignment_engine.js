@@ -479,11 +479,36 @@
     return counts;
   }
 
+  // Same as computeShiftDemand, but only counting tasks that still genuinely need a driver --
+  // excludes any task whose NAME cell already had a real pre-existing answer in the original file
+  // (see resolveExistingTaskAssignments/task.originalDriverRawText). This is the shape that
+  // actually matters for seeding: a real, already-partly-staffed month can have a shift whose
+  // TOTAL volume looks modest only because most of it is already covered by real pre-existing
+  // assignments, while the REMAINING open gaps in that exact shift are the overwhelming majority
+  // of what's left to fill (confirmed directly: one real September's Early Morning was 20% of
+  // total demand but 62% of what was still genuinely open). Seeding against total demand in that
+  // case starves the shift that actually needs the most new locked drivers. For a genuinely blank
+  // month (nothing has a pre-existing answer at all) this returns exactly the same counts as
+  // computeShiftDemand -- no behavior change there.
+  function computeOpenShiftDemand(taskDays, conditions) {
+    const counts = conditions.shifts.map(() => 0);
+    taskDays.forEach((day) => {
+      day.tasks.forEach((task) => {
+        if (task.originalDriverRawText) return;
+        const idx = classifyShiftForMinutes(conditions, task.startMin);
+        if (idx != null) counts[idx]++;
+      });
+    });
+    return counts;
+  }
+
   // Precomputes a one-time driverId -> shiftIndex map for the WHOLE roster, sized to match the
-  // month's real demand shape from computeShiftDemand above, instead of assignWithConditions's
-  // old per-day "spread by position in today's available list" (which spreads evenly regardless
-  // of demand). Only ever consulted for a driver's FIRST-EVER shift lock -- anyone carried over
-  // from real saved/granted history keeps that real anchor untouched, this is purely for someone
+  // shape of what's still genuinely OPEN (computeOpenShiftDemand above, not the whole month's
+  // total demand -- a shift that's mostly already staffed for real shouldn't soak up seed slots
+  // its remaining gaps don't need), instead of assignWithConditions's old per-day "spread by
+  // position in today's available list" (which spreads evenly regardless of demand). Only ever
+  // consulted for a driver's FIRST-EVER shift lock -- anyone carried over from real saved/granted
+  // history keeps that real anchor untouched, this is purely for someone
   // who's never been anchored before.
   //
   // Uses the same divisor method real seat-apportionment uses (D'Hondt/Jefferson): walk the
@@ -500,7 +525,7 @@
   // seeded drivers), which doesn't just make that shift's tasks unlikely to fill -- with nobody
   // ever locked into it, they become permanently unfillable, every single time they occur.
   function computeShiftSeedAssignment(rosterData, taskDays, conditions) {
-    const demand = computeShiftDemand(taskDays, conditions);
+    const demand = computeOpenShiftDemand(taskDays, conditions);
     const n = conditions.shifts.length;
     const totalDemand = demand.reduce((a, b) => a + b, 0);
     // No task data to learn a shape from at all -- fall back to the plain even split this engine
@@ -1118,7 +1143,7 @@
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
-    computeShiftDemand, computeShiftSeedAssignment,
+    computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,

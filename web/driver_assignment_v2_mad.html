@@ -971,6 +971,8 @@
   function renderShiftDemandPanel() {
     const demand = E.computeShiftDemand(livePlan.taskDays, conditions);
     const totalDemand = demand.reduce((a, b) => a + b, 0);
+    const openDemand = E.computeOpenShiftDemand(livePlan.taskDays, conditions);
+    const totalOpenDemand = openDemand.reduce((a, b) => a + b, 0);
     const seedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
     const seedCounts = conditions.shifts.map(() => 0);
     Object.values(seedAssignment).forEach((idx) => seedCounts[idx]++);
@@ -978,20 +980,23 @@
 
     const rows = conditions.shifts.map((s, i) => {
       const pct = totalDemand > 0 ? Math.round((demand[i] / totalDemand) * 100) : 0;
+      const openPct = totalOpenDemand > 0 ? Math.round((openDemand[i] / totalOpenDemand) * 100) : 0;
       return `<tr>
         <td><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${escapeAttr(s.name)}</td>
         <td class="num">${demand[i]}</td>
         <td class="num">${pct}%</td>
+        <td class="num">${openDemand[i]}</td>
+        <td class="num">${openPct}%</td>
         <td class="num">${seedCounts[i]}</td>
       </tr>`;
     }).join("");
     shiftDemandPanel.innerHTML = `
       <div class="shift-demand-title">This range's task load by shift (learned from the whole loaded Task Program, not just one day)</div>
       <table class="shift-demand-table">
-        <tr><th>Shift</th><th class="num">Tasks</th><th class="num">Share</th><th class="num">Drivers seeded</th></tr>
+        <tr><th>Shift</th><th class="num">Total tasks</th><th class="num">Total share</th><th class="num">Still open</th><th class="num">Open share</th><th class="num">Drivers seeded</th></tr>
         ${rows}
       </table>
-      <div class="note" style="margin-top:6px; margin-bottom:0;">"Drivers seeded" is how many of the ${totalDrivers} roster drivers a brand-new (never-before-locked) driver's FIRST shift lock will land in, matched to this shape -- a driver already carried over from saved/granted history keeps their real shift untouched.</div>
+      <div class="note" style="margin-top:6px; margin-bottom:0;">A shift's "total" count includes tasks that already had a real driver in the original file (nothing to do with this session) -- "still open" is what actually needs a driver, and that's what "Drivers seeded" is sized against, not the total. In a real, already-partly-staffed month these two can differ a lot: a shift can carry a small total share but most of what's LEFT to fill, if the rest of its tasks were already answered before this session started. "Drivers seeded" is how many of the ${totalDrivers} roster drivers a brand-new (never-before-locked) driver's FIRST shift lock will land in -- a driver already carried over from saved/granted history keeps their real shift untouched.</div>
     `;
   }
 
