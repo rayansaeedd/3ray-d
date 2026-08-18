@@ -650,6 +650,12 @@
       const taskDays = E.parseTaskProgram(taskWorkbook, startDate, endDate);
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file for this date range.");
       await markPassengerLegs(taskDays, taskArrayBuffer);
+      // If this Task Program is a real, already-partly-staffed month (not a blank one), every
+      // task whose NAME cell already resolves to a real driver gets recognized here so Generate
+      // never reconsiders it -- see resolveExistingTaskAssignments in engine.js. buildPatches
+      // below only ever writes what THIS run's own day.assignments contains, so once
+      // assignWithConditions correctly excludes an already-answered task, it's never touched.
+      E.resolveExistingTaskAssignments(taskDays, taskWorkbook, rosterData);
 
       // rotationState carries each driver's shift-lock anchor, last duty end time, and recent
       // reserve/trip history forward -- assignWithConditions mutates it in place and hands back

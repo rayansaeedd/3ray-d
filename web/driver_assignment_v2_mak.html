@@ -732,25 +732,8 @@
   // least one other task, which made a first attempt at Roster-based matching genuinely
   // misattribute at least one driver's history to someone else entirely. No Roster upload is
   // needed for this at all -- the Task Program alone carries who did what, its real kind, and its
-  // real start/end time.
-  function readResolvedCell(cell) {
-    let v = cell.value;
-    if (v && typeof v === "object" && !(v instanceof Date) && "result" in v) {
-      v = v.result;
-      if (v && typeof v === "object" && "error" in v) return null;
-    }
-    return v;
-  }
-
-  function parseResolvedNameCell(text) {
-    const s = String(text);
-    const idMatch = /(\d{5,8})/.exec(s);
-    if (!idMatch) return null;
-    const id = idMatch[1];
-    const afterId = s.slice(idMatch.index + id.length).replace(/^[\s-]+/, "");
-    const name = afterId.replace(/\d+\s*$/, "").trim();
-    return { id, name: name || null };
-  }
+  // real start/end time. readResolvedCell/parseResolvedNameCell now live in engine.js (E.*),
+  // shared with resolveExistingTaskAssignments -- same resolution logic, two different uses.
 
   // No endDate -- processes every day-sheet this file actually has, whatever range that turns out
   // to be, rather than assuming a fixed month length.
@@ -766,9 +749,9 @@
       const ws = taskWb.worksheets[day.sheetIndex];
       day.tasks.forEach((task) => {
         totalTasks++;
-        const nameVal = readResolvedCell(ws.getRow(task.row).getCell(day.nameCol));
+        const nameVal = E.readResolvedCell(ws.getRow(task.row).getCell(day.nameCol));
         if (nameVal == null || String(nameVal).trim() === "") return;
-        const parsed = parseResolvedNameCell(nameVal);
+        const parsed = E.parseResolvedNameCell(nameVal);
         if (!parsed) return;
         resolvedTasks++;
         if (parsed.name && !namesById[parsed.id]) namesById[parsed.id] = parsed.name;
@@ -909,7 +892,14 @@
       const taskDays = E.parseTaskProgram(taskWorkbook, startDate, endDate);
       if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in the Task Program file for this date range.");
       await markPassengerLegs(taskDays, taskArrayBuffer);
-      taskDays.forEach((day) => { day.tasks.forEach((t) => { t.driver = null; }); });
+      // If this Task Program is a real, already-partly-staffed month (not a blank one), every
+      // task whose NAME cell already resolves to a real driver gets recognized right here, before
+      // anything else touches task.driver -- see resolveExistingTaskAssignments in engine.js. The
+      // reset just below only clears a task that has NO such pre-existing real content at all, so
+      // an already-answered row is never treated as open by Generate, and the Task view shows its
+      // real name from the very first render instead of "-- unassigned --".
+      E.resolveExistingTaskAssignments(taskDays, taskWorkbook, rosterData);
+      taskDays.forEach((day) => { day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; }); });
       // Seeds the initial display order by start time, once -- from here on, day.tasks's own
       // array order IS the display order (dragging a row reorders this array directly; see the
       // drag handlers below), so a hand-edited Start time no longer silently re-shuffles a row a
@@ -1430,7 +1420,13 @@
 
     const rows = day.tasks
       .map((task, index) => {
-        const driverLabel = task.driver ? escapeAttr(task.driver.name) : "-- unassigned --";
+        // Rare fallback: the original file already had a real name here but it didn't match any
+        // roster driver by ID (e.g. someone not in this station's roster upload) -- shown as-is
+        // rather than "-- unassigned --", since there IS a real answer, just not one this app can
+        // fully resolve to a Driver object. Still click-to-reassign like any other row.
+        const driverLabel = task.driver
+          ? escapeAttr(task.driver.name)
+          : (task.originalDriverRawText ? escapeAttr(task.originalDriverRawText) : "-- unassigned --");
         const timeVal = task.startMin != null ? E.minutesToHHMM(task.startMin) : "";
         // A row with no entry in the ORIGINAL snapshot at all was never in the real file --
         // Add Task (single or bulk) created it this session. Same signal buildLivePatches()
@@ -1834,7 +1830,9 @@
     Object.keys(memoryRotationState).forEach((id) => {
       if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
-    day.tasks.forEach((t) => { t.driver = null; });
+    // A task with a real pre-existing answer (originalDriverRawText) is never reset here -- its
+    // driver, whatever it resolved to at load, stays exactly as-is across every re-Generate.
+    day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; });
     // Demand comes from the WHOLE loaded range (livePlan.taskDays), not just this one day, even
     // though only this day gets generated right now -- a brand-new driver's very first shift lock
     // should already reflect the month's real shape, not whatever this single day happens to need.
@@ -1960,12 +1958,30 @@
           }
           taskPatches[day.sheetIndex].push(patch);
         }
-        const namePatch = { row: task.row, col: day.nameCol, value: task.driver ? E.formatDriverForTaskCell(task.driver) : "" };
-        if (isNewRow) {
-          const styleIndex = await templateStyleIndex(day, day.nameCol);
-          if (styleIndex != null) namePatch.styleIndex = styleIndex;
+        // A row that already had a real answer in the original file (task.originalDriverRawText)
+        // only gets a name patch if it now points to a DIFFERENT resolved driver than before --
+        // a deliberate reassignment. Left untouched, it's never patched at all, which is what
+        // keeps a real, already-answered row's exact original bytes intact on export instead of
+        // this always writing task.driver-or-blank over it (that was overwriting every
+        // already-answered row with an empty string the moment its day got Generated, since
+        // task.driver only ever reflected THIS session's own engine writes before this task's
+        // pre-existing NAME cell was read at load). A genuinely blank row still only gets patched
+        // if something (Generate or a hand edit) actually gave it a driver.
+        const currentDriverId = task.driver ? task.driver.id : null;
+        const nameChanged = task.originalDriverRawText
+          ? currentDriverId !== (task.originalDriverId || null)
+          : !!task.driver;
+        // A genuinely new (Add Task) row always gets patched regardless of value, same as the
+        // code column above -- it needs its style cloned from a real task row even while still
+        // blank, so it looks like the rest of the sheet from the moment it's added.
+        if (isNewRow || nameChanged) {
+          const namePatch = { row: task.row, col: day.nameCol, value: task.driver ? E.formatDriverForTaskCell(task.driver) : "" };
+          if (isNewRow) {
+            const styleIndex = await templateStyleIndex(day, day.nameCol);
+            if (styleIndex != null) namePatch.styleIndex = styleIndex;
+          }
+          taskPatches[day.sheetIndex].push(namePatch);
         }
-        taskPatches[day.sheetIndex].push(namePatch);
       }
     }
     livePlan.rosterData.drivers.forEach((driver) => {

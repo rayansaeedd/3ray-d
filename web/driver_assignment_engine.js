@@ -290,6 +290,55 @@
     return days;
   }
 
+  // A completed/partially-completed Task Program's NAME cell resolves to a real driver as
+  // "<possible 'T- ' prefix><ID>-<NAME><phone, no separator>" (a VLOOKUP result, same format
+  // formatDriverForTaskCell below writes). Reading that directly -- rather than only ever
+  // trusting this engine's own in-memory task.driver -- is what lets a supervisor drop a REAL,
+  // already-partly-staffed month (not a blank one) and have every already-answered task
+  // recognized and left alone, instead of silently treated as open.
+  function readResolvedCell(cell) {
+    let v = cell.value;
+    if (v && typeof v === "object" && !(v instanceof Date) && "result" in v) {
+      v = v.result;
+      if (v && typeof v === "object" && "error" in v) return null;
+    }
+    return v;
+  }
+
+  function parseResolvedNameCell(text) {
+    const s = String(text);
+    const idMatch = /(\d{5,8})/.exec(s);
+    if (!idMatch) return null;
+    const id = idMatch[1];
+    const afterId = s.slice(idMatch.index + id.length).replace(/^[\s-]+/, "");
+    const name = afterId.replace(/\d+\s*$/, "").trim();
+    return { id, name: name || null };
+  }
+
+  // Reads every task's EXISTING NAME cell straight from the workbook and, for any that already
+  // has real content, records it on the task itself: task.originalDriverRawText (the raw resolved
+  // text, whether or not it matches a roster driver -- the "there is already a real answer here,
+  // don't touch it" signal) and task.originalDriverId + task.driver (only set when that content
+  // resolves to an id actually present in rosterData -- lets the UI show the real name and lets
+  // rest-time/rotation history correctly count it). A task with nothing in its NAME cell gets
+  // neither set, and is untouched -- exactly the same as before this function existed. Called once
+  // right after parseTaskProgram, before anything else (Generate, the UI) ever looks at task.driver.
+  function resolveExistingTaskAssignments(taskDays, taskWorkbook, rosterData) {
+    taskDays.forEach((day) => {
+      const ws = taskWorkbook.worksheets[day.sheetIndex];
+      day.tasks.forEach((task) => {
+        const raw = readResolvedCell(ws.getRow(task.row).getCell(day.nameCol));
+        if (raw == null || String(raw).trim() === "") return;
+        task.originalDriverRawText = String(raw);
+        const parsed = parseResolvedNameCell(raw);
+        if (!parsed) return;
+        task.originalDriverId = parsed.id;
+        const driver = rosterData.drivers.find((d) => d.id === parsed.id);
+        if (driver) task.driver = driver;
+      });
+    });
+  }
+
   function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -681,13 +730,21 @@
         return gap >= conditions.restHours * 60;
       });
 
+      // A task that already has a real answer -- either resolved from the original file's own
+      // NAME cell (see resolveExistingTaskAssignments) or already given a driver by something
+      // else this run -- is never reconsidered here. Without this, a real, already-answered task
+      // from a partially-completed month would look identical to a genuinely open one and could
+      // get silently reassigned to someone else entirely (a real, confirmed corruption risk when
+      // the uploaded Task Program isn't a blank month).
+      const workableTasks = day.tasks.filter((t) => !t.driver && !t.originalDriverRawText);
+
       // Policy: trip (and sweep) tasks are filled before reserve tasks whenever the day's
       // driver pool runs short -- "make priority to the trip tasks... a reserve task can have
       // no driver assigned... make sure the trip task always filled." Processing every
       // non-reserve task first, reserve tasks last, is what makes a scarce driver pool exhaust
       // itself on reserve tasks rather than on trips. Only the processing order changes here --
       // day.tasks itself (and its row/col patch targets) is untouched.
-      const orderedTasks = day.tasks.filter((t) => t.kind !== "reserve").concat(spreadReserveTasks(day.tasks.filter((t) => t.kind === "reserve")));
+      const orderedTasks = workableTasks.filter((t) => t.kind !== "reserve").concat(spreadReserveTasks(workableTasks.filter((t) => t.kind === "reserve")));
 
       orderedTasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
@@ -1008,6 +1065,7 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeShiftSeedAssignment,
+    readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
