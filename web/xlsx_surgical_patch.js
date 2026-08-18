@@ -67,34 +67,54 @@
   }
 
   // Inserts a cell that has no existing <c> element at all (a genuinely untouched, unstyled
-  // cell) into its row at the correct ascending-column position -- a fallback for completeness;
-  // every cell this engine actually targets in practice already exists (even blank ones) because
-  // real spreadsheets apply borders/fills to whole ranges, which forces the cell element to
-  // exist even when empty.
+  // cell) into its row at the correct ascending-column position. Handles three shapes a target
+  // row can be in: a normal <row r="N" ...>...cells...</row>, a self-closing <row r="N" .../>
+  // (formatting/height set but zero cells -- e.g. a blank row that still got a row height), or
+  // no <row> element at all for that row number (a genuinely untouched row -- real spreadsheets
+  // don't write XML for rows with nothing on them at all, which real Task Program files do have
+  // stretches of well past the last real task row). The last case builds a fresh <row> and
+  // splices it into <sheetData> in ascending row-number order, same position Excel itself would
+  // keep it in.
   function insertCellIntoRow(xml, address, value, styleAttr) {
     const addrMatch = /^([A-Z]+)(\d+)$/.exec(address);
     const colLetters = addrMatch[1];
     const rowNum = addrMatch[2];
     const targetCol = colLetterToNumber(colLetters);
-
-    const rowRe = new RegExp(`<row r="${rowNum}"([^>]*)>([\\s\\S]*?)</row>`);
-    const rowMatch = rowRe.exec(xml);
-    if (!rowMatch) {
-      throw new Error(`Row ${rowNum} has no <row> element in this sheet -- cannot place a new cell at ${address}.`);
-    }
-    const rowAttrs = rowMatch[1];
-    const rowInner = rowMatch[2];
-
-    const cellRe = /<c r="([A-Z]+)\d+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g;
-    let insertPos = rowInner.length;
-    let cm;
-    while ((cm = cellRe.exec(rowInner))) {
-      if (colLetterToNumber(cm[1]) > targetCol) { insertPos = cm.index; break; }
-    }
     const newCellXml = buildCellXml(address, styleAttr || "", value);
-    const newRowInner = rowInner.slice(0, insertPos) + newCellXml + rowInner.slice(insertPos);
-    const newRow = `<row r="${rowNum}"${rowAttrs}>${newRowInner}</row>`;
-    return xml.slice(0, rowMatch.index) + newRow + xml.slice(rowMatch.index + rowMatch[0].length);
+
+    const rowRe = new RegExp(`<row r="${rowNum}"([^>]*?)(?:/>|>([\\s\\S]*?)</row>)`);
+    const rowMatch = rowRe.exec(xml);
+    if (rowMatch) {
+      const rowAttrs = rowMatch[1];
+      const rowInner = rowMatch[2] || "";
+
+      const cellRe = /<c r="([A-Z]+)\d+"[^>]*?(?:\/>|>[\s\S]*?<\/c>)/g;
+      let insertPos = rowInner.length;
+      let cm;
+      while ((cm = cellRe.exec(rowInner))) {
+        if (colLetterToNumber(cm[1]) > targetCol) { insertPos = cm.index; break; }
+      }
+      const newRowInner = rowInner.slice(0, insertPos) + newCellXml + rowInner.slice(insertPos);
+      const newRow = `<row r="${rowNum}"${rowAttrs}>${newRowInner}</row>`;
+      return xml.slice(0, rowMatch.index) + newRow + xml.slice(rowMatch.index + rowMatch[0].length);
+    }
+
+    const targetRowNum = parseInt(rowNum, 10);
+    const anyRowRe = /<row r="(\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g;
+    let insertPos = null;
+    let rm;
+    while ((rm = anyRowRe.exec(xml))) {
+      if (parseInt(rm[1], 10) > targetRowNum) { insertPos = rm.index; break; }
+    }
+    if (insertPos == null) {
+      const sheetDataCloseMatch = /<\/sheetData>/.exec(xml);
+      if (!sheetDataCloseMatch) {
+        throw new Error(`Row ${rowNum} has no <row> element and this sheet has no <sheetData> to add one to -- cannot place a new cell at ${address}.`);
+      }
+      insertPos = sheetDataCloseMatch.index;
+    }
+    const newRow = `<row r="${rowNum}">${newCellXml}</row>`;
+    return xml.slice(0, insertPos) + newRow + xml.slice(insertPos);
   }
 
   // Replaces (or, failing that, inserts) the <c r="ADDRESS"> element for one cell within a
