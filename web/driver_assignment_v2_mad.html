@@ -123,6 +123,8 @@
   .roster-grid-table { white-space: nowrap; }
   .roster-grid-table th, .roster-grid-table td { padding: 3px 4px; }
   .roster-grid-table td.roster-driver-name { text-align: left; font-weight: 700; font-size: 11px; background: #f7f8fa; position: sticky; left: 0; }
+  .roster-name-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; }
+  .roster-name-swatch-unknown { background: #ddd; }
   .roster-grid-table th.roster-col-selected { background: #eafaf7; }
   /* The selected-day marker lives on the input itself (an outline, not a td background) so it
      stays visible over a shift-colored cell instead of being hidden behind the input's own
@@ -305,7 +307,7 @@
 
   <div class="card" id="rosterGridCard" style="display:none;">
     <h2>7. Roster (editable)</h2>
-    <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
+    <div class="note">Click a cell for a quick-pick of V / VR / O / E / A0, or type directly into it to fix it by hand -- Task and Training in that menu don't insert anything, they just get out of the way so you can type the number yourself. The dot next to each driver's name shows their shift a week before the selected day (gray means no record). This grid and the Task Program view above are independently editable: a hand-edit here does not change any task's assigned driver, and vice versa, except that clicking Generate for a day (or reassigning a driver above) writes consistent values into both at once. The highlighted column is whichever day is selected above.</div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
 </main>
@@ -972,6 +974,21 @@
       taskByDriverPerDate[day.dateKey] = map;
     });
 
+    // Same "last week" definition the driver-reassignment picker's badge already uses (one week
+    // before whichever day is currently selected), computed once for the whole grid rather than
+    // per row -- reads from the same session-replay + cross-month-memory blend, so this is
+    // literally "from the memory" the supervisor loaded or has already saved this session.
+    const selectedDay = livePlan.taskDays.find((d) => d.dateKey === selectedDateKey);
+    const gridRotationState = computeReadOnlyRotationState();
+    const gridLastWeekDate = selectedDay ? E.addDays(selectedDay.date, -7) : null;
+    function lastWeekSwatch(driverId) {
+      if (!gridLastWeekDate) return "";
+      const st = gridRotationState[driverId];
+      const idx = st ? E.computeShiftIndexForDriver(st, conditions, gridLastWeekDate) : null;
+      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" title="No shift on record for last week"></span>`;
+      return `<span class="roster-name-swatch shift-swatch" style="background:${SHIFT_COLORS[idx]};" title="Last week: ${escapeAttr(conditions.shifts[idx].name)}"></span>`;
+    }
+
     const headerCells = dateKeys.map((dk) =>
       `<th class="${dk === selectedDateKey ? "roster-col-selected" : ""}">${dk.slice(5)}</th>`
     ).join("");
@@ -990,7 +1007,7 @@
           }
           return `<td class="${selected}"><input type="text"${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
         }).join("");
-        return `<tr><td class="roster-driver-name">${driver.name}</td>${cells}</tr>`;
+        return `<tr><td class="roster-driver-name">${lastWeekSwatch(driver.id)}${driver.name}</td>${cells}</tr>`;
       }).join("");
     rosterGridTable.innerHTML = `<tr><th>Driver</th>${headerCells}</tr>${rows}`;
   }
