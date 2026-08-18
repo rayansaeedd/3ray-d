@@ -412,14 +412,6 @@
     return ((driverState.shiftAnchorIndex + blocksElapsed) % n + n) % n;
   }
 
-  // Circular distance between two shift indexes around the fixed 5-shift rotation order, used
-  // only to rank adjacent-shift fallback candidates (never a hard filter).
-  function shiftDistance(a, b, cycleLen) {
-    if (a == null) return cycleLen;
-    const diff = Math.abs(a - b);
-    return Math.min(diff, cycleLen - diff);
-  }
-
   function minutesBetween(dateKeyA, minA, dateKeyB, minB) {
     const dA = new Date(dateKeyA + "T00:00:00");
     const dB = new Date(dateKeyB + "T00:00:00");
@@ -563,14 +555,15 @@
   // gap that finding was actually about -- a supervisor now looks at every single day before it
   // counts, so the risk of a rigid lock producing an unreviewed mistake no longer applies the
   // same way, and the supervisor explicitly wants the familiar 2-week rotation back. A driver's
-  // locked shift is an ELIGIBILITY preference, never a hard quota: a task first tries only
-  // drivers locked into its own shift, then -- only if that's empty after rest-time filtering --
-  // widens to the immediately adjacent shift(s) in the fixed rotation order and no further ("I
-  // don't want a big spread between shifts... I don't wanna see this"). If even that can't
-  // produce a rested candidate, the task is left unassigned for the supervisor to fix by hand,
-  // same as every other unfillable case -- no manufactured reserve duty, no further widening.
-  // Fairness keeps the soft-nudge shape from the real-data rebuild (prefer whoever's behind on
-  // ratio, prefer not repeating yesterday's kind) -- no hard quota was reintroduced.
+  // locked shift is a HARD boundary, never crossed: a task only ever considers drivers locked
+  // into its own shift for the whole shiftLockWeeks stretch -- confirmed directly ("make them
+  // stuck on one shift for two weeks... the morning stay morning... do not switch him and put
+  // him on early afternoon"). There is no adjacent-shift fallback; if nobody rested is left in a
+  // task's own shift, the task is left unassigned for the supervisor to fix by hand, same as
+  // every other unfillable case -- no manufactured reserve duty, no crossing into a neighboring
+  // shift band either. Fairness keeps the soft-nudge shape from the real-data rebuild (prefer
+  // whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
+  // reintroduced.
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
     const state = rotationState || {};
     const rules = specialRules || [];
@@ -625,22 +618,11 @@
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
 
-        // Hard rule: never violated, even if it leaves this task unfilled. Own locked shift
-        // tried first.
-        let pool = restFilter(inShift, task);
-        let usedAdjacent = false;
-
-        // Only widen once the driver's own locked shift has nobody rested left in it -- to the
-        // immediately adjacent shift(s) only (bounds-checked, no wraparound past Early Morning or
-        // past Night).
-        if (!pool.length && shiftIdx != null) {
-          const adjacentPool = [shiftIdx - 1, shiftIdx + 1]
-            .filter((i) => i >= 0 && i < cycleLen)
-            .flatMap((i) => byShift[i] || [])
-            .filter((d) => !usedDriverIds.has(d.id));
-          pool = restFilter(adjacentPool, task);
-          usedAdjacent = true;
-        }
+        // Hard rule, never crossed: only a driver locked into this task's own shift is ever
+        // considered, for the whole shiftLockWeeks stretch -- no adjacent-shift fallback. If
+        // nobody rested is left in-shift, the task is left unassigned for the supervisor to
+        // handle by hand, same as every other unfillable case.
+        const pool = restFilter(inShift, task);
 
         if (!pool.length) { unassignedTasks.push(task); return; }
 
@@ -654,17 +636,11 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did. When the candidate came from the adjacent-shift widening above, break
-        // ties toward whoever's own locked shift sits closest to this task's shift, so the
-        // relaxation degrades gracefully instead of picking arbitrarily.
+        // hard quota did.
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
-          const ratioDiff = scoreB - scoreA;
-          if (ratioDiff !== 0 || !usedAdjacent) return ratioDiff;
-          const distA = shiftDistance(computeShiftIndexForDriver(state[a.id], conditions, day.date), shiftIdx, cycleLen);
-          const distB = shiftDistance(computeShiftIndexForDriver(state[b.id], conditions, day.date), shiftIdx, cycleLen);
-          return distA - distB;
+          return scoreB - scoreA;
         });
         const chosen = finalPool[0];
 
@@ -955,7 +931,7 @@
     dateKey, addDays, isAvailable, classifyCode, classifyDestination, stripCodeForRoster,
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
-    classifyShiftForMinutes, computeShiftIndexForDriver, shiftDistance, assignWithConditions,
+    classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
