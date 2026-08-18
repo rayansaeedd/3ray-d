@@ -412,6 +412,77 @@
     return ((driverState.shiftAnchorIndex + blocksElapsed) % n + n) % n;
   }
 
+  // Total task volume per shift across every day in `taskDays` (a whole loaded month, not just
+  // one day) -- confirmed directly: task demand is nowhere near evenly split across the 5 shifts
+  // in a real month (one real September ran 34% Early Afternoon vs 2% Night), so a cold-start
+  // scheme that spreads drivers evenly across shifts regardless of this shape locks far too many
+  // drivers into the light shifts and far too few into the heavy ones -- exactly what was
+  // producing the bulk of a real run's unassigned tasks. This is the demand side of the fix;
+  // computeShiftSeedAssignment (below) turns it into an actual per-driver shift assignment.
+  function computeShiftDemand(taskDays, conditions) {
+    const counts = conditions.shifts.map(() => 0);
+    taskDays.forEach((day) => {
+      day.tasks.forEach((task) => {
+        const idx = classifyShiftForMinutes(conditions, task.startMin);
+        if (idx != null) counts[idx]++;
+      });
+    });
+    return counts;
+  }
+
+  // Precomputes a one-time driverId -> shiftIndex map for the WHOLE roster, sized to match the
+  // month's real demand shape from computeShiftDemand above, instead of assignWithConditions's
+  // old per-day "spread by position in today's available list" (which spreads evenly regardless
+  // of demand). Only ever consulted for a driver's FIRST-EVER shift lock -- anyone carried over
+  // from real saved/granted history keeps that real anchor untouched, this is purely for someone
+  // who's never been anchored before.
+  //
+  // Uses the same divisor method real seat-apportionment uses (D'Hondt/Jefferson): walk the
+  // roster in a fixed, deterministic order (sorted by id, so re-running against the same files
+  // always produces the same assignment) and hand each driver in turn to whichever shift is
+  // currently furthest below its share of the demand -- highest share-per-(alreadySeeded+1).
+  // This keeps the cumulative mix tracking the real shape at every prefix length, not just once
+  // every driver's been placed, and naturally seeds nobody into a shift with zero real demand.
+  //
+  // Before that proportional pass, though: any shift with SOME real demand -- even a small,
+  // occasional amount -- gets one driver locked into it first, as long as there are enough
+  // drivers to go around. Pure proportional rounding can otherwise send a low-share shift's seed
+  // count all the way to zero (confirmed directly: a shift with ~9% of demand rounded to 0 of 6
+  // seeded drivers), which doesn't just make that shift's tasks unlikely to fill -- with nobody
+  // ever locked into it, they become permanently unfillable, every single time they occur.
+  function computeShiftSeedAssignment(rosterData, taskDays, conditions) {
+    const demand = computeShiftDemand(taskDays, conditions);
+    const n = conditions.shifts.length;
+    const totalDemand = demand.reduce((a, b) => a + b, 0);
+    // No task data to learn a shape from at all -- fall back to the plain even split this engine
+    // used before this feature existed, rather than pretending to know a distribution.
+    const shares = totalDemand > 0 ? demand.map((c) => c / totalDemand) : demand.map(() => 1 / n);
+
+    const assignment = {};
+    const seededCount = new Array(n).fill(0);
+    const sortedDrivers = rosterData.drivers.slice().sort((a, b) => String(a.id).localeCompare(String(b.id)));
+
+    let nextDriver = 0;
+    const shiftsWithDemand = shares.map((s, i) => i).filter((i) => shares[i] > 0);
+    for (const shiftIdx of shiftsWithDemand) {
+      if (nextDriver >= sortedDrivers.length) break; // roster too small to floor every shift -- proportional pass below still covers the rest
+      assignment[sortedDrivers[nextDriver].id] = shiftIdx;
+      seededCount[shiftIdx] = 1;
+      nextDriver++;
+    }
+
+    for (; nextDriver < sortedDrivers.length; nextDriver++) {
+      let bestIdx = 0, bestScore = -Infinity;
+      for (let i = 0; i < n; i++) {
+        const score = shares[i] / (seededCount[i] + 1);
+        if (score > bestScore) { bestScore = score; bestIdx = i; }
+      }
+      assignment[sortedDrivers[nextDriver].id] = bestIdx;
+      seededCount[bestIdx]++;
+    }
+    return assignment;
+  }
+
   function minutesBetween(dateKeyA, minA, dateKeyB, minB) {
     const dA = new Date(dateKeyA + "T00:00:00");
     const dB = new Date(dateKeyB + "T00:00:00");
@@ -564,7 +635,7 @@
   // shift band either. Fairness keeps the soft-nudge shape from the real-data rebuild (prefer
   // whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
   // reintroduced.
-  function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules) {
+  function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment) {
     const state = rotationState || {};
     const rules = specialRules || [];
     const targetReserveFrac = conditions.ratioReserveDays / (conditions.ratioReserveDays + conditions.ratioTripDays);
@@ -574,17 +645,21 @@
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
 
       // A driver with no rotation state at all yet (first time seen, this run or a previous one)
-      // gets spread across the 5 shifts by their position in today's available list, rather than
-      // everyone defaulting to the same shift. A driver who already has state but no anchor (e.g.
-      // loaded from a memory file granted back when shift-lock was removed) is anchored here too,
-      // instead of staying permanently unclassifiable.
+      // gets locked into a shift per shiftSeedAssignment -- precomputed once from the WHOLE
+      // month's real task demand (see computeShiftSeedAssignment), not an even spread by position
+      // in today's available list, so the cumulative mix of locked drivers actually matches how
+      // the work is shaped. Falls back to the old even-spread-by-position behavior if no seed
+      // assignment was supplied (keeps this an optional argument for any other caller). A driver
+      // who already has state but no anchor (e.g. loaded from a memory file granted back when
+      // shift-lock was removed) is anchored here too, instead of staying permanently unclassifiable.
       available.forEach((d, i) => {
         if (!state[d.id]) {
           state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         if (state[d.id].shiftAnchorDate == null) {
           state[d.id].shiftAnchorDate = day.dateKey;
-          state[d.id].shiftAnchorIndex = i % cycleLen;
+          const seeded = shiftSeedAssignment && shiftSeedAssignment[d.id];
+          state[d.id].shiftAnchorIndex = seeded != null ? seeded : i % cycleLen;
         }
       });
 
@@ -932,6 +1007,7 @@
     parseRoster, parseTaskProgram, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
+    computeShiftDemand, computeShiftSeedAssignment,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,

@@ -651,7 +651,11 @@
       // the same object. This run's result is NOT saved anywhere automatically; it only becomes
       // this station's granted memory for a future run if the supervisor explicitly clicks
       // "Grant" below, after reviewing the result.
-      const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState, SPECIAL_RULES);
+      // A brand-new driver's very first shift lock is seeded to match this whole run's real task
+      // demand (see computeShiftSeedAssignment) instead of an even spread across the 5 shifts --
+      // confirmed directly against a real month's data that demand is nowhere near evenly split.
+      const shiftSeedAssignment = E.computeShiftSeedAssignment(rosterData, taskDays, conditions);
+      const result = E.assignWithConditions(rosterData, taskDays, conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment);
       plan = result;
       rotationState = result.rotationState;
 

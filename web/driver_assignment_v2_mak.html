@@ -156,6 +156,11 @@
   #taskViewTable tr.task-row-added:hover { background: #D2E8FB; }
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
+  .shift-demand-panel { margin-bottom: 14px; padding: 10px 12px; background: #f4f8f6; border: 1px solid #d8ebe3; border-radius: 8px; }
+  .shift-demand-title { font-size: 12px; font-weight: 700; color: #2a6b4f; margin-bottom: 6px; }
+  .shift-demand-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .shift-demand-table th, .shift-demand-table td { padding: 3px 6px; text-align: left; }
+  .shift-demand-table td.num, .shift-demand-table th.num { text-align: right; }
   .task-duplicate-warning { margin-top: 10px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f0b8b8; border-radius: 8px; color: var(--red); font-size: 13px; font-weight: 700; }
   #rosterSwapModeBtn.active { background: #2f6fed; color: #fff; border-color: #2f6fed; }
   .roster-swap-panel { margin-top: 10px; padding: 10px 12px; background: #eef4ff; border: 1px solid #c7d9fb; border-radius: 8px; font-size: 13px; }
@@ -297,6 +302,7 @@
       <span class="status-line" id="statusLine"></span>
     </div>
     <div id="dayWorkflow" style="display:none; margin-top:18px;">
+      <div id="shiftDemandPanel" class="shift-demand-panel"></div>
       <div class="generate-row" style="margin-top:0;">
         <label class="field" style="max-width:340px;">Day
           <select id="daySelect"></select>
@@ -307,7 +313,7 @@
       </div>
       <div class="status-line" id="dayStatusLine"></div>
       <table class="summary-table" id="dayResultTable" style="margin-top:12px; display:none;"></table>
-      <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit) ruled out every driver in this task's own locked shift and the shift(s) immediately next to it, or there were simply more tasks than available drivers. "Unassigned drivers" is left genuinely blank on purpose -- no manufactured reserve duty -- for you to fix by hand (that editing comes in a later step of this build).</div>
+      <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit) ruled out every driver locked into this task's own shift for these two weeks, or there were simply more tasks than available drivers in that shift. "Unassigned drivers" is left genuinely blank on purpose -- no manufactured reserve duty -- for you to fix by hand.</div>
 
       <div class="generate-row">
         <button type="button" class="primary" id="grantMonthBtn">Grant this month's schedule</button>
@@ -454,6 +460,7 @@
   const startBtn = document.getElementById("startBtn");
   const statusLine = document.getElementById("statusLine");
   const dayWorkflow = document.getElementById("dayWorkflow");
+  const shiftDemandPanel = document.getElementById("shiftDemandPanel");
   const daySelect = document.getElementById("daySelect");
   const dayGenerateBtn = document.getElementById("dayGenerateBtn");
   const daySaveBtn = document.getElementById("daySaveBtn");
@@ -945,6 +952,7 @@
       renderDaySelector();
       renderAllDaysTable();
       renderRosterGrid();
+      renderShiftDemandPanel();
       onDaySelectChange();
       setStatus(`Loaded ${taskDays.length} day(s) for review. Pick a day above and click Generate.`);
     } catch (err) {
@@ -958,6 +966,39 @@
       startBtn.disabled = false;
     }
   });
+
+  // Shows the supervisor what the engine actually learned from the loaded Task Program before
+  // any day gets generated: total task volume per shift across the WHOLE loaded range, and how
+  // many drivers that shape will seed a brand-new driver into (see computeShiftSeedAssignment in
+  // engine.js). Purely informational -- Generate uses the same numbers under the hood regardless
+  // of whether this panel is looked at, but a supervisor who just watched a run produce a pile of
+  // unassigned Early Afternoon tasks should be able to see why at a glance.
+  function renderShiftDemandPanel() {
+    const demand = E.computeShiftDemand(livePlan.taskDays, conditions);
+    const totalDemand = demand.reduce((a, b) => a + b, 0);
+    const seedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+    const seedCounts = conditions.shifts.map(() => 0);
+    Object.values(seedAssignment).forEach((idx) => seedCounts[idx]++);
+    const totalDrivers = livePlan.rosterData.drivers.length;
+
+    const rows = conditions.shifts.map((s, i) => {
+      const pct = totalDemand > 0 ? Math.round((demand[i] / totalDemand) * 100) : 0;
+      return `<tr>
+        <td><span class="shift-swatch" style="background:${SHIFT_COLORS[i]};"></span>${escapeAttr(s.name)}</td>
+        <td class="num">${demand[i]}</td>
+        <td class="num">${pct}%</td>
+        <td class="num">${seedCounts[i]}</td>
+      </tr>`;
+    }).join("");
+    shiftDemandPanel.innerHTML = `
+      <div class="shift-demand-title">This range's task load by shift (learned from the whole loaded Task Program, not just one day)</div>
+      <table class="shift-demand-table">
+        <tr><th>Shift</th><th class="num">Tasks</th><th class="num">Share</th><th class="num">Drivers seeded</th></tr>
+        ${rows}
+      </table>
+      <div class="note" style="margin-top:6px; margin-bottom:0;">"Drivers seeded" is how many of the ${totalDrivers} roster drivers a brand-new (never-before-locked) driver's FIRST shift lock will land in, matched to this shape -- a driver already carried over from saved/granted history keeps their real shift untouched.</div>
+    `;
+  }
 
   function renderDaySelector() {
     const current = daySelect.value;
@@ -1789,7 +1830,11 @@
       if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
     day.tasks.forEach((t) => { t.driver = null; });
-    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES);
+    // Demand comes from the WHOLE loaded range (livePlan.taskDays), not just this one day, even
+    // though only this day gets generated right now -- a brand-new driver's very first shift lock
+    // should already reflect the month's real shape, not whatever this single day happens to need.
+    const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment);
     const dayResult = result.perDay[0];
     const newWrites = {};
     dayResult.assignments.forEach(({ task, driver }) => {
