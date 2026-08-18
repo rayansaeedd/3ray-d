@@ -716,8 +716,11 @@
   // ramp across several days instead of one jarring jump. Confirmed directly: "if you wanna
   // borrow take into consideration a smooth transition always... if not, we are sticking with our
   // rules" -- if a single day's necessary step exceeds this, the borrow simply doesn't happen
-  // that day; it's never forced or widened further to make it fit.
-  const MAX_FORWARD_BORROW_STEP_MIN = 120;
+  // that day; it's never forced or widened further to make it fit. Raised from 120 to 240 (4h)
+  // after the 2h cap showed zero real-world effect on the real Sep1-8 files (real gaps between
+  // adjacent shifts ran 4-6 hours wide) -- previewed as a real reviewed spreadsheet
+  // (task_sep1-8_BORROW_PREVIEW_4h_cap.xlsx) before committing, per request.
+  const MAX_FORWARD_BORROW_STEP_MIN = 240;
 
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
   // turned out not to cluster into clean bands) because v2's day-by-day human review closes the
