@@ -1715,7 +1715,18 @@
       // afterward, same as isAdded (origCodes[task.row] === undefined) already does for the
       // plain "this row didn't exist in the original file" signal.
       const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null, engineAddedReserve: true };
-      day.tasks.push(task);
+      // day.tasks's own array order is what the Task view actually shows (see renderTaskView) --
+      // pushing to the end stacked every auto-created reserve task at the bottom of the day
+      // regardless of its time, which is confusing to review. Confirmed directly: "distribute the
+      // task according to the time... if there is a task at 3 AM, put it up there in the 3 AM
+      // area... I don't wanna see it stack all of them down there." Insert it right after the
+      // last existing task at or before this same start time instead, matching the same
+      // chronological convention the day's tasks are already sorted in at load time. `row` (the
+      // real spreadsheet row this exports to) is untouched by this -- it still always lands after
+      // the last real row, same append-only, no-row-insertion approach as every other Add Task.
+      let insertAt = day.tasks.findIndex((t) => (t.startMin ?? Infinity) > startMin);
+      if (insertAt === -1) insertAt = day.tasks.length;
+      day.tasks.splice(insertAt, 0, task);
       setTaskDriver(dateKey, task, driver);
       dayResult.assignments.push({ task, driver, shiftIdx: E.classifyShiftForMinutes(conditions, startMin) });
     });
