@@ -206,6 +206,19 @@
     return v instanceof Date ? v.getUTCHours() * 60 + v.getUTCMinutes() : null;
   }
 
+  // Fallback for a task whose Start CELL is blank -- reads the time straight out of the code's own
+  // leading digits instead (e.g. "0500/7R" -> 05:00), which a real Task Program's own codes always
+  // agree with wherever a real Start cell is present too. See parseTaskProgram for why this matters.
+  function deriveStartMinFromCode(code) {
+    const m = /^(\d{3,4})\//.exec(code);
+    if (!m) return null;
+    const digits = m[1].padStart(4, "0");
+    const h = parseInt(digits.slice(0, 2), 10);
+    const mm = parseInt(digits.slice(2), 10);
+    if (h > 23 || mm > 59) return null;
+    return h * 60 + mm;
+  }
+
   // A tab's own date CELLS are inconsistent test placeholders (confirmed with the supervisor),
   // not usable -- but every real Task Program tab this engine has been tested against names
   // itself "<STATION> MMDD" (e.g. "MADINAH 0901" = September 1st), which is a reliable signal
@@ -276,7 +289,19 @@
         const raw = displayValue(taskCell);
         const code = typeof raw === "string" ? raw.trim() : null;
         if (code && /^\d{3,4}\/\d{0,2}[A-Za-z]{1,3}$/.test(code)) {
-          const startMin = startCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(startCell.col))) : null;
+          // A real Task Program leaves the Start CELL blank for reserve-type tasks (bare R/RA/RB/RC
+          // suffix codes) even though the code's own leading digits already say the intended time --
+          // confirmed directly against a real file: "0500/7A" has a real Start cell (05:00) right next
+          // to "0500/7R"/"0500/7RA" with a genuinely empty one, same leading digits. Falling through
+          // to null here was a real, serious bug: recordAssignment stores task.startMin as a driver's
+          // lastDutyStartMin/lastDutyEndMin verbatim, so a null start silently erased that driver's
+          // rest-time and same-shift-forward history from that task onward -- not a wrong time, a
+          // MISSING one, letting the very next real duty's rest-time and rule-4 checks both pass
+          // unconditionally regardless of how close together they actually were. The code's own digits
+          // are exactly as authoritative as a real Start cell (the one real counter-example available,
+          // "0500/7A", agrees with its Start cell exactly), so they're the correct fallback, not a
+          // guess.
+          const startMin = (startCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(startCell.col))) : null) ?? deriveStartMinFromCode(code);
           const endMin = endCell ? timeCellToMinutes(displayValue(ws.getRow(r).getCell(endCell.col))) : null;
           tasks.push({
             row: r, code, kind: classifyCode(code), destination: classifyDestination(code),
