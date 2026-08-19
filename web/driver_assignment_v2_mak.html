@@ -311,10 +311,11 @@
   <div class="card">
     <h2>3. Continue from previous memory (optional)</h2>
     <div class="note">Only matters if you want this run to continue a driver's shift rotation, rest-time and reserve/trip balance from an earlier granted month. Skip this to start every driver fresh -- nothing carries over unless you explicitly load it here. This is shared with v1's memory files -- a month granted from either tool can feed the other.</div>
-    <div class="date-range-row" style="margin-top:12px;">
+    <div class="date-range-row" style="margin-top:12px; align-items:flex-end;">
       <label class="field" style="max-width:340px;">Continue from a granted month
         <select id="memorySlotSelect"><option value="">Start fresh (no memory)</option></select>
       </label>
+      <button type="button" class="plain" id="memorySlotDeleteBtn" disabled title="Permanently deletes this granted month from this browser's memory -- does not affect any already-exported file">Delete this granted month</button>
     </div>
     <div class="dropzone" id="memoryDropzone" style="margin-top:14px; max-width:460px;">
       <div class="icon">&#8595;</div>
@@ -501,6 +502,7 @@
   const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
   const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
   const memorySlotSelect = document.getElementById("memorySlotSelect");
+  const memorySlotDeleteBtn = document.getElementById("memorySlotDeleteBtn");
   const memoryDropzone = document.getElementById("memoryDropzone");
   const memoryFileInput = document.getElementById("memoryFileInput");
   const memoryBrowseLink = document.getElementById("memoryBrowseLink");
@@ -614,6 +616,7 @@
     memorySlotSelect.innerHTML = `<option value="">Start fresh (no memory)</option>` +
       entries.map((e) => `<option value="${e.key}">${e.monthLabel} (granted ${new Date(e.grantedAt).toLocaleDateString()})</option>`).join("");
     if (entries.some((e) => e.key === current)) memorySlotSelect.value = current;
+    memorySlotDeleteBtn.disabled = !memorySlotSelect.value;
   }
   renderMemorySlotOptions();
   setMemoryStatus("Starting fresh -- no memory loaded.");
@@ -621,6 +624,7 @@
   memorySlotSelect.addEventListener("change", () => {
     const key = memorySlotSelect.value;
     memoryFileInput.value = "";
+    memorySlotDeleteBtn.disabled = !key;
     if (!key) {
       memoryRotationState = {};
       setMemoryStatus("Starting fresh -- no memory loaded.");
@@ -629,6 +633,26 @@
     const slot = memorySlots[key];
     memoryRotationState = JSON.parse(JSON.stringify(slot.rotationState));
     setMemoryStatus(`Continuing from granted memory: ${slot.monthLabel} (${Object.keys(memoryRotationState).length} driver${Object.keys(memoryRotationState).length === 1 ? "" : "s"}).`);
+  });
+
+  // Permanently removes a granted month from THIS browser's memory only -- the backup .xlsx
+  // downloaded at Grant time (or any copy of it) is completely untouched, so this is never the
+  // only copy of that month's real result, only this browser's stored starting point for a FUTURE
+  // month. Confirmed as a real, wanted capability: a wrong or superseded Grant currently has no way
+  // to be cleared out short of clearing the browser's storage entirely (which would also wipe every
+  // other granted month and the saved Conditions).
+  memorySlotDeleteBtn.addEventListener("click", async () => {
+    const key = memorySlotSelect.value;
+    if (!key) return;
+    const slot = memorySlots[key];
+    const ok = await confirmEdit(`Delete the granted memory for ${slot.monthLabel} (granted ${new Date(slot.grantedAt).toLocaleDateString()}) from this browser? This only removes it from this browser's memory -- any backup file you already downloaded for it is untouched. A future month currently set to continue from it will start fresh instead, unless you pick a different granted month.`);
+    if (!ok) return;
+    delete memorySlots[key];
+    saveMemorySlots(memorySlots);
+    memorySlotSelect.value = "";
+    memoryRotationState = {};
+    renderMemorySlotOptions();
+    setMemoryStatus("Starting fresh -- no memory loaded.");
   });
 
   let _confirmEditResolve = null;
@@ -906,6 +930,7 @@
       saveMemorySlots(memorySlots);
       renderMemorySlotOptions();
       memorySlotSelect.value = monthKey;
+      memorySlotDeleteBtn.disabled = false;
 
       const rosterLike = { drivers: Object.keys(result.namesById).map((id) => ({ id, name: result.namesById[id] })) };
       const rows = E.buildMemoryRows(rosterLike, result.state);
@@ -2287,6 +2312,7 @@
     saveMemorySlots(memorySlots);
     renderMemorySlotOptions();
     memorySlotSelect.value = monthKey;
+    memorySlotDeleteBtn.disabled = false;
     memoryRotationState = finalState;
     setMemoryStatus(`Continuing from granted memory: ${monthLabel} (${Object.keys(finalState).length} driver(s)).`);
 
