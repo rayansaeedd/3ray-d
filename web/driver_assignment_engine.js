@@ -836,14 +836,18 @@
   // same shift as the goal... if you need to move the driver backward, you're allowed to do it
   // for only backward one hour."
   //
-  // New rule, deliberately simple and with NO day-to-day chain state at all: a task may go to any
-  // available, rested driver (regardless of which named shift they're nominally locked into) whose
-  // OWN locked shift's configured start time sits within MAX_FORWARD_STEP_MIN minutes BEFORE the
-  // task's start time (forward -- the preferred direction, tried first) or within
-  // MAX_BACKWARD_STEP_MIN minutes AFTER it (backward -- only used if no forward candidate clears
-  // rest-time either). Always measured against the driver's real locked-shift start -- the same
-  // fixed reference every single day -- never against a previous day's outcome, so it can never
-  // compound into a week-long drift the way the old ratcheting chain did.
+  // New rule: a task that its own locked shift can't cover may go to any available, rested driver
+  // (regardless of which named shift they're nominally locked into) whose own real clock position
+  // sits within MAX_FORWARD_STEP_MIN minutes BEFORE the task's start time (forward -- the
+  // preferred direction, tried first) or within MAX_BACKWARD_STEP_MIN minutes AFTER it (backward
+  // -- only used if no forward candidate clears rest-time either). "Own real clock position" is
+  // their actual last real duty start time once they have one (continuing a genuine multi-day
+  // widening smoothly from wherever it left off), or their locked shift's configured start the
+  // first time they're ever assigned. This is a rescue tool for a genuine shortage ONLY -- see the
+  // per-task loop below, where it's applied exclusively to the widening step, never to an ordinary
+  // in-shift assignment (tried, and briefly shipped, as a universal rule -- reverted after
+  // confirmation: "did you use it... when there's a shortage you cannot cover... or just make it
+  // as a r[u]le the engine can use... I can't see it being used everywhere").
   const MAX_FORWARD_STEP_MIN = 240;
   const MAX_BACKWARD_STEP_MIN = 60;
 
@@ -977,32 +981,23 @@
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
         const windowDeltaById = {};
 
-        // Own locked shift tried first, rest-time never violated. A driver's very first-EVER
-        // assignment (lastDutyStartMin still null) has no real clock position yet to be smooth
-        // relative to, so it's exempt from the window here -- any in-shift time is fine, same as
-        // before this feature (a wide band like Night, 9.5h, would otherwise fail a genuine
-        // in-shift task on someone's very first day purely for being far from a fallback
-        // reference they have no real history to justify).
-        let pool = restFilter(inShift, task).filter((d) => {
-          const st = state[d.id];
-          if (st.lastDutyStartMin == null) return true;
-          const delta = signedMinuteDelta(st.lastDutyStartMin, task.startMin);
-          if (delta < -MAX_BACKWARD_STEP_MIN || delta > MAX_FORWARD_STEP_MIN) return false;
-          windowDeltaById[d.id] = delta;
-          return true;
-        });
+        // Own locked shift tried first, rest-time never violated -- NOT window-constrained. The
+        // window is a rescue tool for a genuine shortage, not a rule that governs every ordinary
+        // assignment: confirmed directly after briefly trying "governs every assignment, in-shift
+        // included" ("Yes, always") -- "did you use it like that [only when there's a shortage you
+        // cannot cover] or just make it as a r[u]le that the engine can use... I can't see it
+        // being used everywhere" -- reverted back to shortage-only, its original scope: a driver's
+        // own shift can put them anywhere in that shift's band, any day, with no smoothing at all.
+        let pool = restFilter(inShift, task);
 
-        // Only widen once the driver's own locked shift has nobody who clears BOTH rest-time and
-        // (once they have real history) the window -- to ANY available driver (regardless of
-        // which named shift they're nominally locked into) whose own real clock position --
-        // lastDutyStartMin if they have one, else their locked shift's configured start the first
-        // time they're ever assigned -- sits within range of this task's start time. Confirmed
-        // directly: the forward/backward window isn't just for crossing shifts -- "for the same
-        // shift only forward... with exception backward one hour if needed" applies to EVERY
-        // day-to-day change. Always measured against each candidate's real clock position, never
-        // a previous day's BORROWED outcome misread as their identity (that was the old
-        // compounding bug) -- so this can never drift further than the window itself allows on
-        // any single day, ever, whether the result stays in-shift or crosses into another.
+        // Only widen once the driver's own locked shift has nobody rested left in it at all -- to
+        // ANY available driver (regardless of which named shift they're nominally locked into)
+        // whose own real clock position -- lastDutyStartMin if they have one, else their locked
+        // shift's configured start the first time they're ever assigned -- sits within range of
+        // this task's start time (240min forward preferred, 60min backward as a last resort).
+        // Always measured against each candidate's real clock position, never a previous day's
+        // BORROWED outcome misread as their identity (that was the old compounding bug) -- so this
+        // can never drift further than the window itself allows on any single day, ever.
         if (!pool.length) {
           const otherPool = available.filter((d) => !usedDriverIds.has(d.id));
           pool = restFilter(otherPool, task).filter((d) => {
