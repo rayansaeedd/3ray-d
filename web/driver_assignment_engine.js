@@ -808,12 +808,6 @@
     const effectiveEndMin = task.endMin != null ? task.endMin : task.startMin;
     st.lastDutyEndDateKey = dutyEndDateKey(day, task.startMin, effectiveEndMin);
     st.lastDutyEndMin = effectiveEndMin;
-    // The driver's actual real clock position, updated on EVERY assignment (own-shift or
-    // widened alike) -- see MAX_FORWARD_STEP_MIN/MAX_BACKWARD_STEP_MIN below for what this
-    // feeds into. Unlike the removed lastBorrowedStartMin, this is never an inference about
-    // which shift someone is "really" locked into -- it's simply the plain fact of what time
-    // they last actually worked, the same kind of fact lastDutyEndMin already tracks for rest.
-    st.lastDutyStartMin = task.startMin;
     st.recentKinds.push(wantKind);
     if (st.recentKinds.length > capLen) st.recentKinds.shift();
     if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
@@ -821,61 +815,33 @@
     return wantKind;
   }
 
-  // Shortest SIGNED delta (in minutes, `toMin` relative to `fromMin`) around a 1440-minute clock,
-  // returned in (-720, 720]. Used to measure how far a candidate's own locked-shift start time
-  // sits from a task's start time, correctly handling a shift whose own configured start wraps
-  // past midnight (e.g. Night at 18:00 or 20:00) the same way a same-day one does. Safe here
-  // specifically because the windows this is used for (see MAX_FORWARD_STEP_MIN/
-  // MAX_BACKWARD_STEP_MIN below) are always small relative to a half-day, so there's never a
-  // genuine ambiguity about which direction is actually shorter.
-  function signedMinuteDelta(fromMin, toMin) {
-    let d = (toMin - fromMin) % 1440;
-    if (d > 720) d -= 1440;
-    if (d <= -720) d += 1440;
-    return d;
-  }
-
-  // Replaced an earlier shift-chain "borrow one adjacent shift, ratchet forward day after day"
-  // design after real Sep1-8 testing showed it producing exactly the opposite of what was asked
-  // for: drivers whose start time swung across three or four different shift bands within one
-  // week, because each individual day's step was only checked against wherever the PREVIOUS
-  // borrow had left that driver, letting the baseline itself drift arbitrarily far over a stretch
-  // (see the anchor-drift fix in rebuildRotationStateFromSavedDays) -- and separately, a whole
-  // day generated without an earlier day first being saved could reset that chain entirely,
-  // producing backward jumps and multi-shift skips the old rule could never even produce on
-  // purpose. Confirmed directly as the replacement: "cancel the borrowing from the shift and go
-  // back to the four hour cap... moving forward only between shift and also moving forward in the
-  // same shift as the goal... if you need to move the driver backward, you're allowed to do it
-  // for only backward one hour."
-  //
-  // New rule: a task that its own locked shift can't cover may go to any available, rested driver
-  // (regardless of which named shift they're nominally locked into) whose own real clock position
-  // sits within MAX_FORWARD_STEP_MIN minutes BEFORE the task's start time (forward -- the
-  // preferred direction, tried first) or within MAX_BACKWARD_STEP_MIN minutes AFTER it (backward
-  // -- only used if no forward candidate clears rest-time either). "Own real clock position" is
-  // their actual last real duty start time once they have one (continuing a genuine multi-day
-  // widening smoothly from wherever it left off), or their locked shift's configured start the
-  // first time they're ever assigned. This is a rescue tool for a genuine shortage ONLY -- see the
-  // per-task loop below, where it's applied exclusively to the widening step, never to an ordinary
-  // in-shift assignment (tried, and briefly shipped, as a universal rule -- reverted after
-  // confirmation: "did you use it... when there's a shortage you cannot cover... or just make it
-  // as a r[u]le the engine can use... I can't see it being used everywhere").
-  const MAX_FORWARD_STEP_MIN = 240;
-  const MAX_BACKWARD_STEP_MIN = 60;
-
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
   // turned out not to cluster into clean bands) because v2's day-by-day human review closes the
   // gap that finding was actually about -- a supervisor now looks at every single day before it
   // counts, so the risk of a rigid lock producing an unreviewed mistake no longer applies the
   // same way, and the supervisor explicitly wants the familiar 2-week rotation back. A driver's
   // locked shift is the strong default: a task first tries only drivers locked into its own shift
-  // for the whole shiftLockWeeks stretch. If (and only if) nobody rested is left there, it may
-  // widen to any driver within the forward/backward window described above -- if nobody clears
-  // BOTH rest-time and that window either, the task is left unassigned for the supervisor to fix
-  // by hand, same as every other unfillable case -- no manufactured reserve duty, no jump too
-  // large just to fill a gap. Fairness keeps the soft-nudge shape from the real-data rebuild
-  // (prefer whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
-  // reintroduced.
+  // for the whole shiftLockWeeks stretch (see computeShiftIndexForDriver -- advances exactly one
+  // shift in the fixed chain per elapsed shiftLockWeeks period, compounding cleanly over multiple
+  // periods; "the shift rotation should always meet the condition setting... if it's set to two
+  // weeks then this driver's shift will be the same for two weeks then you can move him to the
+  // next shift in a row... one shift up... from the safety department, the sleep cycle of the
+  // driver [is what this protects]").
+  //
+  // If (and only if) nobody rested is left in a task's own shift, it may widen to EXACTLY the one
+  // shift immediately before it in the fixed chain -- never further, never the shift after, no
+  // minute-based distance math at all (an earlier design capped this by real clock-time distance
+  // instead of shift identity; replaced after the shift bands themselves were narrowed to three
+  // per period, since a fixed few-hour time cap could then reach a full two shifts forward under
+  // the narrower bands, contradicting the actual rule). Confirmed directly: "you can borrow a
+  // driver from his shift, but only from the next shift... if he's in early morning, you can put
+  // him in morning, that's it. You cannot put him in late morning or early afternoon. You can go
+  // one shift up only" -- and no backward case at all this time ("remove backward entirely").
+  // shiftIdx 0 (Early Morning) has no shift before it to borrow from at all. If nobody in that one
+  // prior shift is rested either, the task is left unassigned for the supervisor to fix by hand,
+  // same as every other unfillable case -- no manufactured reserve duty, no jump too large just to
+  // fill a gap. Fairness keeps the soft-nudge shape from the real-data rebuild (prefer whoever's
+  // behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was reintroduced.
   // A driver's real, already-fixed pre-existing duties (see resolveExistingTaskAssignments) are
   // ground truth this engine never rewrites -- but they're also evidence the engine should look
   // AHEAD at, not just behind. Without this, a driver whose own locked shift naturally rotates
@@ -935,7 +901,7 @@
       // shift-lock was removed) is anchored here too, instead of staying permanently unclassifiable.
       available.forEach((d, i) => {
         if (!state[d.id]) {
-          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         if (state[d.id].shiftAnchorDate == null) {
           state[d.id].shiftAnchorDate = day.dateKey;
@@ -991,37 +957,17 @@
       orderedTasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
-        const windowDeltaById = {};
 
-        // Own locked shift tried first, rest-time never violated -- NOT window-constrained. The
-        // window is a rescue tool for a genuine shortage, not a rule that governs every ordinary
-        // assignment: confirmed directly after briefly trying "governs every assignment, in-shift
-        // included" ("Yes, always") -- "did you use it like that [only when there's a shortage you
-        // cannot cover] or just make it as a r[u]le that the engine can use... I can't see it
-        // being used everywhere" -- reverted back to shortage-only, its original scope: a driver's
-        // own shift can put them anywhere in that shift's band, any day, with no smoothing at all.
+        // Own locked shift tried first, rest-time never violated.
         let pool = restFilter(inShift, task);
 
-        // Only widen once the driver's own locked shift has nobody rested left in it at all -- to
-        // ANY available driver (regardless of which named shift they're nominally locked into)
-        // whose own real clock position -- lastDutyStartMin if they have one, else their locked
-        // shift's configured start the first time they're ever assigned -- sits within range of
-        // this task's start time (240min forward preferred, 60min backward as a last resort).
-        // Always measured against each candidate's real clock position, never a previous day's
-        // BORROWED outcome misread as their identity (that was the old compounding bug) -- so this
-        // can never drift further than the window itself allows on any single day, ever.
-        if (!pool.length) {
-          const otherPool = available.filter((d) => !usedDriverIds.has(d.id));
-          pool = restFilter(otherPool, task).filter((d) => {
-            const st = state[d.id];
-            const ref = st.lastDutyStartMin != null ? st.lastDutyStartMin
-              : (() => { const idx = computeShiftIndexForDriver(st, conditions, day.date); return idx != null ? parseHHMM(conditions.shifts[idx].start) : null; })();
-            if (ref == null) return false;
-            const delta = signedMinuteDelta(ref, task.startMin);
-            if (delta < -MAX_BACKWARD_STEP_MIN || delta > MAX_FORWARD_STEP_MIN) return false;
-            windowDeltaById[d.id] = delta;
-            return true;
-          });
+        // Only widen once the driver's own locked shift has nobody rested left in it -- to
+        // EXACTLY the one shift immediately before this one in the fixed chain, never further,
+        // never the shift after, never a minute-based distance check. shiftIdx 0 (Early Morning)
+        // has no shift before it to borrow from at all.
+        if (!pool.length && shiftIdx != null && shiftIdx > 0) {
+          const priorShiftPool = (byShift[shiftIdx - 1] || []).filter((d) => !usedDriverIds.has(d.id));
+          pool = restFilter(priorShiftPool, task);
         }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
@@ -1046,19 +992,11 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did. Ties break toward the FORWARD direction first (the preferred one, per
-        // every candidate's own windowDeltaById entry -- every survivor of the window filter
-        // above has one), then toward whoever needs the smallest step either way -- keeps the
-        // transition as gradual as possible for everyone involved, in-shift or widened alike.
+        // hard quota did.
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
-          const ratioDiff = scoreB - scoreA;
-          if (ratioDiff !== 0) return ratioDiff;
-          // A first-ever-assignment candidate (see above) has no windowDeltaById entry at all --
-          // treat that as the best possible rank (0), since there's no window violation to weigh.
-          const rank = (id) => { const d = windowDeltaById[id]; if (d == null) return 0; return d >= 0 ? d : 100000 - d; };
-          return rank(a.id) - rank(b.id);
+          return scoreB - scoreA;
         });
         const chosen = finalPool[0];
 
@@ -1137,7 +1075,7 @@
         if (!state[task.driver.id]) {
           const seeded = shiftSeedAssignment && shiftSeedAssignment[task.driver.id];
           const shiftIdx = seeded != null ? seeded : classifyShiftForMinutes(conditions, task.startMin);
-          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         recordAssignment(state, day, task, task.driver, conditions);
       });
@@ -1249,7 +1187,6 @@
         shiftAnchorIndex: st.shiftAnchorIndex != null ? st.shiftAnchorIndex : null,
         lastDutyEndDateKey: st.lastDutyEndDateKey || null,
         lastDutyEndTime: st.lastDutyEndMin != null ? minutesToHHMM(st.lastDutyEndMin) : null,
-        lastDutyStartTime: st.lastDutyStartMin != null ? minutesToHHMM(st.lastDutyStartMin) : null,
         recentKinds: (st.recentKinds || []).join(","),
         cumulativeReserve: st.cumulativeReserve || 0,
         cumulativeTrip: st.cumulativeTrip || 0,
@@ -1282,11 +1219,6 @@
     const cumTripCell = findHeaderCell(ws, "Cumulative Trip", 20);
     const anchorDateCell = findHeaderCell(ws, "Shift Anchor Date", 20);
     const anchorIdxCell = findHeaderCell(ws, "Shift Anchor Index", 20);
-    // Same "optional, older file still loads" treatment -- added when the forward/backward
-    // window widened to cover same-shift assignments too, not just cross-shift ones. A missing
-    // value just means that driver's next task isn't window-constrained until they get a fresh
-    // real assignment (same graceful degradation as a missing shift anchor above).
-    const lastStartTimeCell = findHeaderCell(ws, "Last Duty Start Time", 20);
 
     const readAdjacent = (cell) => {
       if (!cell) return null;
@@ -1313,13 +1245,11 @@
       const cumTripVal = cumTripCell ? displayValue(row.getCell(cumTripCell.col)) : null;
       const anchorDateVal = anchorDateCell ? displayValue(row.getCell(anchorDateCell.col)) : null;
       const anchorIdxVal = anchorIdxCell ? displayValue(row.getCell(anchorIdxCell.col)) : null;
-      const lastStartTimeVal = lastStartTimeCell ? displayValue(row.getCell(lastStartTimeCell.col)) : null;
       rotationState[id] = {
         shiftAnchorDate: anchorDateVal != null && anchorDateVal !== "" ? String(anchorDateVal).trim() : null,
         shiftAnchorIndex: anchorIdxVal != null && anchorIdxVal !== "" ? parseInt(anchorIdxVal, 10) : null,
         lastDutyEndDateKey: lastEndDateVal != null && lastEndDateVal !== "" ? String(lastEndDateVal).trim() : null,
         lastDutyEndMin: lastEndTimeVal != null && lastEndTimeVal !== "" ? parseHHMM(String(lastEndTimeVal).trim()) : null,
-        lastDutyStartMin: lastStartTimeVal != null && lastStartTimeVal !== "" ? parseHHMM(String(lastStartTimeVal).trim()) : null,
         recentKinds: recentKindsVal != null && recentKindsVal !== "" ? String(recentKindsVal).split(",").map((s) => s.trim()).filter(Boolean) : [],
         cumulativeReserve: cumReserveVal != null && cumReserveVal !== "" ? parseInt(cumReserveVal, 10) : 0,
         cumulativeTrip: cumTripVal != null && cumTripVal !== "" ? parseInt(cumTripVal, 10) : 0,
