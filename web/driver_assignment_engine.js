@@ -808,11 +808,66 @@
     const effectiveEndMin = task.endMin != null ? task.endMin : task.startMin;
     st.lastDutyEndDateKey = dutyEndDateKey(day, task.startMin, effectiveEndMin);
     st.lastDutyEndMin = effectiveEndMin;
+    // The calendar day this duty was ASSIGNED for (not when it ends -- lastDutyEndDateKey can be
+    // the next day for an overnight shift) plus its own start time, used only to smooth a
+    // driver's real clock within their own current work stretch (see
+    // withinSameShiftForwardLimit below) -- deliberately separate from lastDutyEndDateKey, which
+    // exists for rest-time math and answers a different question.
+    st.lastDutyDateKey = day.dateKey;
+    st.lastDutyStartMin = task.startMin;
     st.recentKinds.push(wantKind);
     if (st.recentKinds.length > capLen) st.recentKinds.shift();
     if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
     else st.cumulativeTrip = (st.cumulativeTrip || 0) + 1;
     return wantKind;
+  }
+
+  // Shortest SIGNED delta (in minutes, `toMin` relative to `fromMin`) around a 1440-minute clock,
+  // returned in (-720, 720]. Used only for the same-shift forward-smoothing check below --
+  // correctly handles a shift whose own configured start wraps past midnight (Night) the same way
+  // a same-day one does. Safe here because the window this feeds (a max 60min backward exception,
+  // no forward cap at all) is always small relative to a half-day, so there's never a genuine
+  // ambiguity about which direction is actually shorter.
+  function signedMinuteDelta(fromMin, toMin) {
+    let d = (toMin - fromMin) % 1440;
+    if (d > 720) d -= 1440;
+    if (d <= -720) d += 1440;
+    return d;
+  }
+
+  // True if the driver was marked unavailable (a real day off) on ANY date strictly between their
+  // last recorded real duty and the day being considered now -- meaning their current work
+  // stretch has broken, so the same-shift forward-smoothing check below doesn't apply to this
+  // first day back (nothing real to be smooth relative to across a genuine rest break). Also true
+  // if there's no prior real duty recorded at all yet. Confirmed directly: "Resets after a day
+  // off... each unbroken stretch of working days is its own sequence."
+  function hadRealDayOffSince(driver, lastDutyDateKey, currentDateKey) {
+    if (!lastDutyDateKey) return true;
+    let d = addDays(new Date(lastDutyDateKey + "T00:00:00"), 1);
+    const current = new Date(currentDateKey + "T00:00:00");
+    while (d < current) {
+      if (!isAvailable(driver.statusByDateKey[dateKey(d)])) return true;
+      d = addDays(d, 1);
+    }
+    return false;
+  }
+
+  // A driver's real clock time within their OWN currently locked shift should trend forward
+  // across an unbroken work stretch, never jump back more than a small grace amount. Confirmed
+  // directly with a real 6-day example (03:00, 03:00, 03:30, 04:00, 05:00, 06:00 -- always equal
+  // or later than the day before): "I don't want to see is if he start... at 6 AM, sending him
+  // back to 3 AM. This is what I don't want to see, backward time shift." No cap on how far
+  // FORWARD a day can move (any later time within the shift is fine); backward is allowed only as
+  // a bounded last resort -- "you're allowed to move him backward in hours, half an hour or an
+  // hour, that's it, other than that leave it blank" -- so a step earlier than 60min back is
+  // rejected outright, same "leave it unassigned rather than force it" shape as every other hard
+  // rule here. Deliberately scoped to a driver's OWN shift only (see the per-task loop below) --
+  // separate from, and unrelated to, the shift-index-only widening rule.
+  const SAME_SHIFT_MAX_BACKWARD_MIN = 60;
+  function withinSameShiftForwardLimit(driver, st, day, taskStartMin) {
+    if (hadRealDayOffSince(driver, st.lastDutyDateKey, day.dateKey)) return true;
+    if (st.lastDutyStartMin == null) return true;
+    return signedMinuteDelta(st.lastDutyStartMin, taskStartMin) >= -SAME_SHIFT_MAX_BACKWARD_MIN;
   }
 
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
@@ -901,7 +956,7 @@
       // shift-lock was removed) is anchored here too, instead of staying permanently unclassifiable.
       available.forEach((d, i) => {
         if (!state[d.id]) {
-          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         if (state[d.id].shiftAnchorDate == null) {
           state[d.id].shiftAnchorDate = day.dateKey;
@@ -958,8 +1013,11 @@
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
 
-        // Own locked shift tried first, rest-time never violated.
-        let pool = restFilter(inShift, task);
+        // Own locked shift tried first, rest-time never violated, AND -- within that same shift
+        // -- never a backward step of more than SAME_SHIFT_MAX_BACKWARD_MIN from wherever this
+        // driver's real clock last was in their current work stretch (see
+        // withinSameShiftForwardLimit above).
+        let pool = restFilter(inShift, task).filter((d) => withinSameShiftForwardLimit(d, state[d.id], day, task.startMin));
 
         // Only widen once the driver's own locked shift has nobody rested left in it -- to
         // EXACTLY the one shift immediately before this one in the fixed chain, never further,
@@ -992,11 +1050,22 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did.
+        // hard quota did. Ties break toward the SMALLEST forward step within a driver's own
+        // current work stretch (0 for anyone exempt -- a fresh stretch, or a widened/first-ever
+        // candidate) -- matches the gradual, minimal-creep shape of the confirmed real example
+        // (03:00, 03:00, 03:30, 04:00, 05:00, 06:00), not just "forward is legal, jump however far".
+        const forwardStep = (d) => {
+          const st = state[d.id];
+          if (hadRealDayOffSince(d, st.lastDutyDateKey, day.dateKey) || st.lastDutyStartMin == null) return 0;
+          const delta = signedMinuteDelta(st.lastDutyStartMin, task.startMin);
+          return delta > 0 ? delta : 0;
+        };
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
-          return scoreB - scoreA;
+          const ratioDiff = scoreB - scoreA;
+          if (ratioDiff !== 0) return ratioDiff;
+          return forwardStep(a) - forwardStep(b);
         });
         const chosen = finalPool[0];
 
@@ -1075,7 +1144,7 @@
         if (!state[task.driver.id]) {
           const seeded = shiftSeedAssignment && shiftSeedAssignment[task.driver.id];
           const shiftIdx = seeded != null ? seeded : classifyShiftForMinutes(conditions, task.startMin);
-          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         recordAssignment(state, day, task, task.driver, conditions);
       });
