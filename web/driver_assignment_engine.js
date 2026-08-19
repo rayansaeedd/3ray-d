@@ -1153,6 +1153,70 @@
     return state;
   }
 
+  // Self-check, not a filter: by the time this runs, every assignment it looks at has already
+  // happened (Generate, a hand-edit, whatever) -- it can only report a violation, never prevent
+  // one. Built after a real, still-unexplained case where a supervisor's actual browser run
+  // produced a driver bouncing between shift bands and a 9-hour backward jump within the same
+  // shift, on files that (checked directly) had none of the known causes -- no pre-existing data,
+  // no leftover cross-month memory, matching Conditions, a genuine day-by-day Generate+Save. That
+  // left no way to tell, after the fact, which specific Generate call produced the bad assignment
+  // or why. This exists so the NEXT time something like it happens, it's caught the moment it
+  // happens, with the exact driver/date/rule, instead of being reconstructed days later from an
+  // exported file with no trace back to its cause.
+  //
+  // Re-derives shift-lock and same-shift-forward eligibility using the exact same helpers the real
+  // assignment loop uses (computeShiftIndexForDriver, withinSameShiftForwardLimit, recordAssignment)
+  // -- not a separate reimplementation that could disagree with the real logic -- and checks every
+  // task in `days` that has a driver and isn't a pre-existing real answer (originalDriverRawText),
+  // in chronological order. `rotationState` supplies each driver's shift anchor (shiftAnchorDate/
+  // shiftAnchorIndex) only; last-duty/streak bookkeeping is replayed fresh across just `days` so the
+  // check is self-consistent regardless of what came before this range. A driver with no anchor at
+  // all in `rotationState` is skipped for the shift-lock check (nothing to compare against) rather
+  // than false-flagged.
+  function auditRotationRules(days, conditions, rotationState) {
+    const violations = [];
+    const orderedDays = days.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+    const state = {};
+    Object.keys(rotationState || {}).forEach((id) => {
+      const src = rotationState[id];
+      state[id] = {
+        shiftAnchorDate: src.shiftAnchorDate || null, shiftAnchorIndex: src.shiftAnchorIndex != null ? src.shiftAnchorIndex : null,
+        lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null,
+        recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0,
+      };
+    });
+
+    orderedDays.forEach((day) => {
+      (day.tasks || []).forEach((task) => {
+        if (!task.driver || task.originalDriverRawText) return;
+        const driver = task.driver;
+        if (!state[driver.id]) {
+          state[driver.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+        }
+        const st = state[driver.id];
+        const taskIdx = classifyShiftForMinutes(conditions, task.startMin);
+        const lockIdx = computeShiftIndexForDriver(st, conditions, day.date);
+
+        if (lockIdx != null && taskIdx != null && taskIdx !== lockIdx) {
+          if (taskIdx !== lockIdx + 1) {
+            violations.push({
+              driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "shift-lock",
+              detail: `assigned into "${conditions.shifts[taskIdx].name}" (${minutesToHHMM(task.startMin)}) while locked into "${conditions.shifts[lockIdx].name}" -- neither their own shift nor exactly one shift up`,
+            });
+          }
+        } else if (lockIdx != null && taskIdx === lockIdx && !withinSameShiftForwardLimit(driver, st, day, task.startMin)) {
+          violations.push({
+            driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "same-shift-forward",
+            detail: `own-shift start time ${minutesToHHMM(task.startMin)} is more than ${SAME_SHIFT_MAX_BACKWARD_MIN}min earlier than their last duty (${minutesToHHMM(st.lastDutyStartMin)} on ${st.lastDutyDateKey}), with no real day off in between`,
+          });
+        }
+        recordAssignment(state, day, task, driver, conditions);
+      });
+    });
+
+    return violations;
+  }
+
   // Per-driver, per-week breakdown of shift + trip/reserve/sweep counts for a generated run --
   // the reference the supervisor asked for so a following month's Generate can be run with an
   // eye on fairness (whoever got more trips this run can deliberately get more reserve next
@@ -1381,7 +1445,7 @@
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
     buildReserveTasksForUnassignedDrivers,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
-    recordAssignment, rebuildRotationStateFromSavedDays,
+    recordAssignment, rebuildRotationStateFromSavedDays, auditRotationRules,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,

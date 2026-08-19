@@ -11,7 +11,7 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260819g"></script>
+<script src="driver_assignment_engine.js?v=20260819h"></script>
 <script src="xlsx_surgical_patch.js?v=20260819a"></script>
 <style>
   :root {
@@ -1989,7 +1989,16 @@
       const reserveNote = reserveFill.createdCount
         ? ` Added ${reserveFill.createdCount} reserve task${reserveFill.createdCount === 1 ? "" : "s"} automatically for driver${reserveFill.createdCount === 1 ? "" : "s"} this left unassigned -- look for the light-blue highlight in the Task view and Roster grid below.`
         : "";
-      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}`);
+      // Self-check right after Generate, not just at Grant time -- catches a rule-1/rule-4
+      // violation the moment it happens, with the exact driver/date, instead of only being
+      // discoverable later in an exported file with no trace back to which Generate produced it.
+      const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+      const violations = E.auditRotationRules([day], conditions, livePlan.lastGeneratedRotationState);
+      const violationNote = violations.length
+        ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} in this day's result: ` +
+          violations.map((v) => `${v.driverName} -- ${v.detail}`).join(" | ")
+        : "";
+      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}${violationNote}`, !!violations.length);
     } catch (err) {
       console.error(err);
       setDayStatus("Could not generate this day: " + err.message, true);
@@ -2196,6 +2205,23 @@
     Object.keys(memoryRotationState).forEach((id) => {
       if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
+
+    // Last-chance self-check across the WHOLE saved range before this becomes the official record
+    // -- catches anything the per-day check at Generate time might have missed (e.g. a hand-edit
+    // made after Generate, or a day generated before this check existed). Doesn't block outright --
+    // per this whole page's philosophy, a real edge case the supervisor needs to override by hand
+    // is possible -- but it does require an explicit "grant anyway" past a clear list of exactly
+    // what and who, rather than finalizing silently.
+    const savedDays = livePlan.taskDays.filter((d) => savedKeys.includes(d.dateKey));
+    const violations = E.auditRotationRules(savedDays, conditions, finalState);
+    if (violations.length) {
+      const list = violations.slice(0, 8).map((v) => `${v.dateKey} -- ${v.driverName}: ${v.detail}`).join("\n");
+      const more = violations.length > 8 ? `\n...and ${violations.length - 8} more.` : "";
+      const proceedAnyway = await confirmEdit(
+        `${violations.length} rule violation${violations.length === 1 ? "" : "s"} found across the saved days you're about to Grant:\n${list}${more}\nGrant anyway?`
+      );
+      if (!proceedAnyway) return;
+    }
     const grantedAt = new Date().toISOString();
     memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(finalState)) };
     saveMemorySlots(memorySlots);
