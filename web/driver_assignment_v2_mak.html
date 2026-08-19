@@ -11,7 +11,7 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260818h"></script>
+<script src="driver_assignment_engine.js?v=20260819a"></script>
 <script src="xlsx_surgical_patch.js?v=20260818"></script>
 <style>
   :root {
@@ -1772,7 +1772,8 @@
   // recent shift ("I want to know the other driver what was his shift on the last week").
   function computeReadOnlyRotationState() {
     const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
-    const state = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
+    const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+    const state = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
     Object.keys(memoryRotationState).forEach((id) => {
       if (!state[id]) state[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
@@ -1881,7 +1882,17 @@
     });
 
     const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
-    const rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
+    // Demand comes from the WHOLE loaded range (livePlan.taskDays), not just this one day, even
+    // though only this day gets generated right now -- a brand-new driver's very first shift lock
+    // should already reflect the month's real shape, not whatever this single day happens to need.
+    // Computed BEFORE the replay below and passed into it too, so a first-seen driver's locked
+    // shift always comes from this same real-demand seed, exactly like a live cold-start would --
+    // never guessed from whatever task the replay happens to see first, which could itself have
+    // been a cross-shift borrow (see rebuildRotationStateFromSavedDays in engine.js for the bug
+    // this fixed: a borrowed task silently became a driver's new "real" baseline, letting later
+    // borrows creep further from it day after day instead of staying one genuine step).
+    const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+    const rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
     // Any driver not already covered by this session's own saved history starts from the
     // cross-month memory loaded in section 3 instead of cold, same idea as v1's memory carry-over.
     Object.keys(memoryRotationState).forEach((id) => {
@@ -1890,10 +1901,6 @@
     // A task with a real pre-existing answer (originalDriverRawText) is never reset here -- its
     // driver, whatever it resolved to at load, stays exactly as-is across every re-Generate.
     day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; });
-    // Demand comes from the WHOLE loaded range (livePlan.taskDays), not just this one day, even
-    // though only this day gets generated right now -- a brand-new driver's very first shift lock
-    // should already reflect the month's real shape, not whatever this single day happens to need.
-    const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
     // Also passes the WHOLE loaded range as the lookahead so a fresh assignment on this one day
     // never gets stranded ahead of a real, already-fixed pre-existing duty on a LATER day this
     // session hasn't generated yet (see buildFutureFixedShiftIndex in engine.js) -- without this,
@@ -2147,7 +2154,8 @@
     );
     if (!ok) return;
 
-    const finalState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions);
+    const grantShiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+    const finalState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, grantShiftSeedAssignment);
     Object.keys(memoryRotationState).forEach((id) => {
       if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });

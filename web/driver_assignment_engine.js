@@ -1122,7 +1122,27 @@
   // this replay has and a live Generate's blind, position-based spread doesn't need to guess at.
   // A driver who was available but genuinely got nothing that day isn't seeded here at all; they
   // get seeded fresh, correctly, by the live Generate call itself when THEIR day comes up.
-  function rebuildRotationStateFromSavedDays(days, savedDateKeys, conditions) {
+  // shiftSeedAssignment (optional but should always be passed by v2): the SAME whole-month,
+  // demand-shaped seed a live Generate's own cold-start uses (see assignWithConditions, "gets
+  // locked into a shift per shiftSeedAssignment... not an even spread"). Previously this replay
+  // guessed a first-seen driver's locked shift from whatever task they actually happened to do
+  // that day -- which silently adopted a CROSS-SHIFT BORROW as if it were their real locked
+  // shift, the moment that borrow happened to be the first thing this replay ever saw for them.
+  // From then on every later day's Generate treated the borrowed shift as their genuine baseline,
+  // and the next time THAT shift ran short, borrowed them one more real step forward from the
+  // wrong starting point -- each individual step still looked like "just one shift," but the
+  // baseline itself crept across the whole week. Confirmed against real Sep1-8 data: drivers
+  // ending up spread across three or four different shift bands in a single week, not the smooth
+  // single-step transition intended. A live Generate never has this problem -- it seeds a driver's
+  // anchor from shiftSeedAssignment the moment they're first AVAILABLE, before any task of theirs
+  // is even considered, so a borrowed task can never retroactively redefine their baseline. This
+  // now does the identical thing: a first-seen driver's anchor always comes from
+  // shiftSeedAssignment when it's available, exactly matching what a live cold-start would have
+  // given them, regardless of which task (real or engine-borrowed) this replay happens to see
+  // first. Falls back to the observed task's own shift only if this driver has no seed entry at
+  // all (defensive -- shiftSeedAssignment is built from the whole roster, so this shouldn't
+  // normally happen).
+  function rebuildRotationStateFromSavedDays(days, savedDateKeys, conditions, shiftSeedAssignment) {
     const state = {};
     const savedSet = new Set(savedDateKeys);
     const orderedDays = days
@@ -1134,7 +1154,8 @@
       (day.tasks || []).forEach((task) => {
         if (!task.driver) return;
         if (!state[task.driver.id]) {
-          const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
+          const seeded = shiftSeedAssignment && shiftSeedAssignment[task.driver.id];
+          const shiftIdx = seeded != null ? seeded : classifyShiftForMinutes(conditions, task.startMin);
           state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         recordAssignment(state, day, task, task.driver, conditions);
