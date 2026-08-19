@@ -800,35 +800,46 @@
     if (st.recentKinds.length > capLen) st.recentKinds.shift();
     if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
     else st.cumulativeTrip = (st.cumulativeTrip || 0) + 1;
-
-    // A task whose own shift sits AFTER the driver's currently locked shift is a cross-shift
-    // borrow (see the forward-only borrow logic in assignWithConditions) -- track the latest one
-    // so a FUTURE borrow attempt for this same driver only has to step a bounded amount further
-    // forward from here, never snap back to an earlier time than they've already been given.
-    // Detected structurally (this task's actual shift vs. the driver's own locked shift for this
-    // date) rather than passed in as a flag, so it's picked up identically whether the
-    // assignment came from live Generate, replaying saved days, or a completed month's real
-    // Task Program (resolveExistingTaskAssignments) -- any of those can be how a driver ends up
-    // with a real duty outside their own locked shift.
-    const taskShiftIdx = classifyShiftForMinutes(conditions, task.startMin);
-    const ownShiftIdx = computeShiftIndexForDriver(st, conditions, day.date);
-    if (taskShiftIdx != null && ownShiftIdx != null && taskShiftIdx > ownShiftIdx) {
-      st.lastBorrowedStartMin = task.startMin;
-    }
     return wantKind;
   }
 
-  // Cap on how much LATER (in minutes) a single day's cross-shift borrow can push a driver
-  // relative to their own last borrowed start time (or their locked shift's own configured start
-  // time, the first time they're ever borrowed) -- keeps a forward transition a gradual, smooth
-  // ramp across several days instead of one jarring jump. Confirmed directly: "if you wanna
-  // borrow take into consideration a smooth transition always... if not, we are sticking with our
-  // rules" -- if a single day's necessary step exceeds this, the borrow simply doesn't happen
-  // that day; it's never forced or widened further to make it fit. Raised from 120 to 240 (4h)
-  // after the 2h cap showed zero real-world effect on the real Sep1-8 files (real gaps between
-  // adjacent shifts ran 4-6 hours wide) -- previewed as a real reviewed spreadsheet
-  // (task_sep1-8_BORROW_PREVIEW_4h_cap.xlsx) before committing, per request.
-  const MAX_FORWARD_BORROW_STEP_MIN = 240;
+  // Shortest SIGNED delta (in minutes, `toMin` relative to `fromMin`) around a 1440-minute clock,
+  // returned in (-720, 720]. Used to measure how far a candidate's own locked-shift start time
+  // sits from a task's start time, correctly handling a shift whose own configured start wraps
+  // past midnight (e.g. Night at 18:00 or 20:00) the same way a same-day one does. Safe here
+  // specifically because the windows this is used for (see MAX_FORWARD_STEP_MIN/
+  // MAX_BACKWARD_STEP_MIN below) are always small relative to a half-day, so there's never a
+  // genuine ambiguity about which direction is actually shorter.
+  function signedMinuteDelta(fromMin, toMin) {
+    let d = (toMin - fromMin) % 1440;
+    if (d > 720) d -= 1440;
+    if (d <= -720) d += 1440;
+    return d;
+  }
+
+  // Replaced an earlier shift-chain "borrow one adjacent shift, ratchet forward day after day"
+  // design after real Sep1-8 testing showed it producing exactly the opposite of what was asked
+  // for: drivers whose start time swung across three or four different shift bands within one
+  // week, because each individual day's step was only checked against wherever the PREVIOUS
+  // borrow had left that driver, letting the baseline itself drift arbitrarily far over a stretch
+  // (see the anchor-drift fix in rebuildRotationStateFromSavedDays) -- and separately, a whole
+  // day generated without an earlier day first being saved could reset that chain entirely,
+  // producing backward jumps and multi-shift skips the old rule could never even produce on
+  // purpose. Confirmed directly as the replacement: "cancel the borrowing from the shift and go
+  // back to the four hour cap... moving forward only between shift and also moving forward in the
+  // same shift as the goal... if you need to move the driver backward, you're allowed to do it
+  // for only backward one hour."
+  //
+  // New rule, deliberately simple and with NO day-to-day chain state at all: a task may go to any
+  // available, rested driver (regardless of which named shift they're nominally locked into) whose
+  // OWN locked shift's configured start time sits within MAX_FORWARD_STEP_MIN minutes BEFORE the
+  // task's start time (forward -- the preferred direction, tried first) or within
+  // MAX_BACKWARD_STEP_MIN minutes AFTER it (backward -- only used if no forward candidate clears
+  // rest-time either). Always measured against the driver's real locked-shift start -- the same
+  // fixed reference every single day -- never against a previous day's outcome, so it can never
+  // compound into a week-long drift the way the old ratcheting chain did.
+  const MAX_FORWARD_STEP_MIN = 240;
+  const MAX_BACKWARD_STEP_MIN = 60;
 
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
   // turned out not to cluster into clean bands) because v2's day-by-day human review closes the
@@ -837,16 +848,9 @@
   // same way, and the supervisor explicitly wants the familiar 2-week rotation back. A driver's
   // locked shift is the strong default: a task first tries only drivers locked into its own shift
   // for the whole shiftLockWeeks stretch. If (and only if) nobody rested is left there, it may
-  // borrow from the shift immediately BEFORE it in the fixed chain (Early Morning -> Late Morning
-  // -> Early Afternoon -> Late Afternoon -> Night) -- never the shift after, never further than
-  // one step, and never a driver who took real time off (Night can't wrap around to lend into
-  // Early Morning: shiftIdx 0 has no shift before it to borrow from). Confirmed directly: "he can
-  // go forward in time. He cannot go back in time... if you wanna borrow take into consideration
-  // a smooth transition." A borrowed driver's start time must also be a bounded forward step from
-  // wherever their own clock currently sits (see MAX_FORWARD_BORROW_STEP_MIN and
-  // recordAssignment's lastBorrowedStartMin tracking) -- if nobody in that pool clears BOTH
-  // rest-time and the smooth-step check either, the task is left unassigned for the supervisor to
-  // fix by hand, same as every other unfillable case -- no manufactured reserve duty, no jump too
+  // widen to any driver within the forward/backward window described above -- if nobody clears
+  // BOTH rest-time and that window either, the task is left unassigned for the supervisor to fix
+  // by hand, same as every other unfillable case -- no manufactured reserve duty, no jump too
   // large just to fill a gap. Fairness keeps the soft-nudge shape from the real-data rebuild
   // (prefer whoever's behind on ratio, prefer not repeating yesterday's kind) -- no hard quota was
   // reintroduced.
@@ -879,46 +883,6 @@
     return byDriver;
   }
 
-  // How many consecutive days (starting at, and including, `dateKey`) a driver is marked
-  // AVAILABLE for, up to their next real recorded day off -- or null if no day off has actually
-  // been recorded anywhere ahead in the loaded range yet, meaning this driver's current work
-  // stretch might continue past what's visible and there's no confirmed tail to time a
-  // transition against. Deliberately conservative: running off the end of the loaded file is
-  // NOT treated as if it were a real break, since that would just be an artifact of how much
-  // data happens to be uploaded, not the driver's actual schedule. Used to gate WHEN a driver
-  // becomes eligible for their first cross-shift borrow in a stretch -- see
-  // assignWithConditions's borrow-widening step below.
-  function buildRemainingWorkDaysIndex(lookaheadDays, rosterData) {
-    const sortedDays = lookaheadDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
-    const byDriver = {};
-    rosterData.drivers.forEach((driver) => {
-      const perDate = {};
-      let counter = null; // null until a real break has been confirmed somewhere ahead
-      for (let i = sortedDays.length - 1; i >= 0; i--) {
-        const dateKey = sortedDays[i].dateKey;
-        if (!isAvailable(driver.statusByDateKey[dateKey])) {
-          counter = 0; // this day itself is the break
-        } else if (counter != null) {
-          counter += 1;
-        }
-        perDate[dateKey] = counter;
-      }
-      byDriver[driver.id] = perDate;
-    });
-    return byDriver;
-  }
-
-  // A first-time cross-shift borrow is only offered once a driver is down to their last TWO
-  // working days before a real, confirmed day off -- "do not make this change in the middle of
-  // his working days... on the fourth day it would be a normal shift for him, then on the fifth
-  // and sixth day we can move him" -- so the changeover lands at the tail of a work stretch,
-  // never in the middle of it, and the driver comes back from rest already settled into whatever
-  // shift they end up in. Once a borrow chain has actually started (lastBorrowedStartMin is set),
-  // it's free to continue day to day without re-checking this -- by construction that can only
-  // ever be within the same tail, since MAX_FORWARD_BORROW_STEP_MIN and the rest-time/direction
-  // rules already bound how far and how long a single borrow chain can run.
-  const MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW = 2;
-
   function assignWithConditions(rosterData, taskDays, conditions, rotationState, specialRules, shiftSeedAssignment, lookaheadTaskDays) {
     const state = rotationState || {};
     const rules = specialRules || [];
@@ -935,7 +899,6 @@
       const hit = list.find((entry) => entry.dateKey > afterDateKey);
       return hit ? hit.shiftIdx : null;
     };
-    const remainingWorkDaysByDriver = buildRemainingWorkDaysIndex(lookaheadDays, rosterData);
 
     const perDay = taskDays.map((day) => {
       const available = rosterData.drivers.filter((d) => isAvailable(d.statusByDateKey[day.dateKey]));
@@ -1009,39 +972,30 @@
 
         // Own locked shift tried first, rest-time never violated.
         let pool = restFilter(inShift, task);
-        let usedBorrow = false;
+        let usedWindow = false;
+        const windowDeltaById = {};
 
-        // Only widen once the driver's own locked shift has nobody rested left in it -- to the
-        // ONE shift immediately before this one in the fixed chain, and only those candidates
-        // whose next assignment would be a smooth, bounded step forward from wherever their own
-        // clock currently sits (never a jump larger than MAX_FORWARD_BORROW_STEP_MIN, never
-        // earlier than that anchor). shiftIdx 0 (Early Morning) has no shift before it to borrow
-        // from at all.
-        if (!pool.length && shiftIdx != null && shiftIdx > 0) {
-          const priorShiftIdx = shiftIdx - 1;
-          const priorShiftPool = (byShift[priorShiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
-          const rested = restFilter(priorShiftPool, task);
-          const capped = rested.filter((d) => {
-            const st = state[d.id];
-            const anchor = st.lastBorrowedStartMin != null ? st.lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
-            if (anchor == null) return false;
-            return task.startMin >= anchor && task.startMin - anchor <= MAX_FORWARD_BORROW_STEP_MIN;
+        // Only widen once the driver's own locked shift has nobody rested left in it -- to ANY
+        // available driver (regardless of which named shift they're nominally locked into) whose
+        // OWN locked shift's configured start time sits within the forward/backward window of
+        // this task's start time (see MAX_FORWARD_STEP_MIN/MAX_BACKWARD_STEP_MIN above). Always
+        // measured against each candidate's real locked-shift start, never a previous day's
+        // outcome -- no chain, no ratchet, so this can never drift further than the window itself
+        // allows, on any single day, ever.
+        if (!pool.length) {
+          const otherPool = available.filter((d) => !usedDriverIds.has(d.id));
+          const rested = restFilter(otherPool, task);
+          const windowed = rested.filter((d) => {
+            const ownIdx = computeShiftIndexForDriver(state[d.id], conditions, day.date);
+            const ownStart = ownIdx != null ? parseHHMM(conditions.shifts[ownIdx].start) : null;
+            if (ownStart == null) return false;
+            const delta = signedMinuteDelta(ownStart, task.startMin);
+            if (delta < -MAX_BACKWARD_STEP_MIN || delta > MAX_FORWARD_STEP_MIN) return false;
+            windowDeltaById[d.id] = delta;
+            return true;
           });
-          // Prefer starting a driver's FIRST borrow of a stretch only near the tail of their real
-          // work days (see MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW above) -- but this is a
-          // preference, not a hard rule, matching the same "skip the ideal rather than leave the
-          // task unfilled" shape already used elsewhere: if nobody near their tail is available,
-          // fall back to any rested, capped candidate regardless of timing. A driver already
-          // mid-chain (lastBorrowedStartMin already set) is never re-gated here -- the chain's own
-          // cap and direction rules already bound how far and how long it can run.
-          const nearTail = capped.filter((d) => {
-            const st = state[d.id];
-            if (st.lastBorrowedStartMin != null) return true;
-            const remaining = remainingWorkDaysByDriver[d.id] && remainingWorkDaysByDriver[d.id][day.dateKey];
-            return remaining != null && remaining <= MAX_REMAINING_WORK_DAYS_FOR_FIRST_BORROW;
-          });
-          pool = nearTail.length ? nearTail : capped;
-          usedBorrow = pool.length > 0;
+          pool = windowed;
+          usedWindow = pool.length > 0;
         }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
@@ -1066,18 +1020,17 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did. When the candidate came from the forward-borrow widening above, break
-        // ties toward whoever needs the SMALLEST forward step -- keeps the transition as gradual
-        // as possible for everyone involved.
+        // hard quota did. When the candidate came from the forward/backward window widening
+        // above, break ties toward the FORWARD direction first (the preferred one), then toward
+        // whoever needs the smallest step either way -- keeps the transition as gradual as
+        // possible for everyone involved.
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
           const ratioDiff = scoreB - scoreA;
-          if (ratioDiff !== 0 || !usedBorrow) return ratioDiff;
-          const priorShiftIdx = shiftIdx - 1;
-          const anchorA = state[a.id].lastBorrowedStartMin != null ? state[a.id].lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
-          const anchorB = state[b.id].lastBorrowedStartMin != null ? state[b.id].lastBorrowedStartMin : parseHHMM(conditions.shifts[priorShiftIdx].start);
-          return (task.startMin - anchorA) - (task.startMin - anchorB);
+          if (ratioDiff !== 0 || !usedWindow) return ratioDiff;
+          const rank = (id) => { const d = windowDeltaById[id]; return d >= 0 ? d : 100000 - d; };
+          return rank(a.id) - rank(b.id);
         });
         const chosen = finalPool[0];
 
@@ -1391,7 +1344,7 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
-    buildRemainingWorkDaysIndex, buildReserveTasksForUnassignedDrivers,
+    buildReserveTasksForUnassignedDrivers,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     recordAssignment, rebuildRotationStateFromSavedDays,
     buildMonthlySummary,
