@@ -520,7 +520,17 @@
     const counts = conditions.shifts.map(() => 0);
     taskDays.forEach((day) => {
       day.tasks.forEach((task) => {
-        if (task.originalDriverRawText) return;
+        // Also excludes a task this engine invented on the fly as a stopgap for an otherwise-
+        // unassigned driver (engineAddedReserve, set by v2's applyReserveAutoFill) -- confirmed as
+        // a real, live feedback loop: v2 recomputes this seed fresh on every single day's Generate
+        // from the CURRENT livePlan.taskDays, and applyReserveAutoFill permanently splices its new
+        // task into that same array. Counting those invented tasks as real "demand" meant every
+        // later day's Generate saw a shape that was skewed by how many stopgap reserves earlier
+        // days happened to need -- not the real month's shape at all -- so a driver whose very
+        // first shift lock landed on, say, day 12 instead of day 1 could get seeded into a
+        // completely different shift than day 1 would have given them, for no reason connected to
+        // real task demand.
+        if (task.originalDriverRawText || task.engineAddedReserve) return;
         const idx = classifyShiftForMinutes(conditions, task.startMin);
         if (idx != null) counts[idx]++;
       });
@@ -780,6 +790,25 @@
         const fallback = parseHHMM(conditions.shifts[ownIdx].start);
         if (fallback != null) candidateTimes = [fallback];
       }
+      // An auto-created reserve task is a REAL duty, not a placeholder -- it must obey the exact
+      // same continuity rules as anything else this engine assigns, never rest time and never a
+      // backward jump in this driver's own real clock beyond the same-shift grace (see
+      // withinSameShiftForwardLimit above). Confirmed as a real, live bug: this path used to pick
+      // ANY real time already used elsewhere in the driver's own shift band that day, with no
+      // rest-time check and no continuity check at all -- so an unassigned driver whose real clock
+      // had been trending through the afternoon for a week could get auto-reserved at 05:00 the
+      // very next day purely because 05:00 happened to be the thinnest slot, undoing everything
+      // rules 2 and 4 otherwise guarantee. Confirmed directly: an auto-added reserve "should take
+      // into consideration the day before... so it goes smooth with what has been generated the
+      // days before." If every real time in the band fails this, same as everywhere else in this
+      // engine, the driver is left unassigned rather than forced into a jarring jump.
+      candidateTimes = candidateTimes.filter((t) => {
+        if (st && st.lastDutyEndMin != null) {
+          const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, t);
+          if (gap < conditions.restHours * 60) return false;
+        }
+        return !st || withinSameShiftForwardLimit(driver, st, day, t);
+      });
       const eligible = candidateTimes.filter((t) => (reserveCountByTime[t] || 0) < MAX_RESERVE_SLOTS_PER_TIME);
       if (!eligible.length) { stillUnassigned.push(driver); return; }
       // Thinnest time first; ties broken chronologically for determinism.

@@ -11,7 +11,7 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260819h"></script>
+<script src="driver_assignment_engine.js?v=20260819i"></script>
 <script src="xlsx_surgical_patch.js?v=20260819a"></script>
 <style>
   :root {
@@ -1992,8 +1992,21 @@
       // Self-check right after Generate, not just at Grant time -- catches a rule-1/rule-4
       // violation the moment it happens, with the exact driver/date, instead of only being
       // discoverable later in an exported file with no trace back to which Generate produced it.
-      const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
-      const violations = E.auditRotationRules([day], conditions, livePlan.lastGeneratedRotationState);
+      // auditRotationRules replays chronologically from scratch across whatever days it's given --
+      // passing ONLY today's day here would mean a driver's very first task of the day always
+      // looks like the start of a brand-new stretch, with no real history to compare a backward
+      // jump against, so a genuine rule-4 violation could never be caught this way (confirmed as a
+      // real gap: it let an auto-created reserve task jump a driver's clock backward hours with no
+      // warning at all). Passing every already-SAVED earlier day too, in order, plus today, gives
+      // the check the same real continuity Generate itself used -- then only today's own
+      // violations are surfaced, since earlier days would already have been shown on their own
+      // Generate.
+      const priorSavedKeys = livePlan.taskDays
+        .filter((d) => d.dateKey < dateKey && livePlan.dayStatus[d.dateKey] === "saved")
+        .map((d) => d.dateKey);
+      const auditDays = livePlan.taskDays.filter((d) => d.dateKey === dateKey || priorSavedKeys.includes(d.dateKey));
+      const violations = E.auditRotationRules(auditDays, conditions, livePlan.lastGeneratedRotationState)
+        .filter((v) => v.dateKey === dateKey);
       const violationNote = violations.length
         ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} in this day's result: ` +
           violations.map((v) => `${v.driverName} -- ${v.detail}`).join(" | ")
