@@ -1935,6 +1935,28 @@
 
   dayGenerateBtn.addEventListener("click", async () => {
     const dateKey = daySelect.value;
+    // Continuity (shift lock, rest time, reserve/trip mix) only ever comes from SAVED days --
+    // rebuildRotationStateFromSavedDays replays saved days alone, by design ("only what's saved
+    // now matters"). Generating a day while an EARLIER day in the range is still un-saved silently
+    // starts every driver fresh for this day instead of continuing from what actually happened --
+    // confirmed as a real, live source of confusion: a whole week generated without saving each
+    // day in order produced wildly inconsistent shifts and reserve/trip streaks day to day, none
+    // of it because of a borrow-widening mistake -- purely because nothing was there to continue
+    // from. Catching this HERE, before it happens, rather than only describing it in Save's own
+    // status text, is what actually prevents it.
+    const earlierUnsaved = livePlan.taskDays
+      .filter((d) => d.dateKey < dateKey && livePlan.dayStatus[d.dateKey] !== "saved")
+      .map((d) => d.dateKey);
+    if (earlierUnsaved.length) {
+      const list = earlierUnsaved.length <= 3
+        ? earlierUnsaved.join(", ")
+        : `${earlierUnsaved.slice(0, 3).join(", ")} and ${earlierUnsaved.length - 3} more`;
+      const plural = earlierUnsaved.length !== 1;
+      const proceed = await confirmEdit(
+        `${earlierUnsaved.length} earlier day${plural ? "s" : ""} (${list}) ${plural ? "aren't" : "isn't"} saved yet. Generating ${dateKey} now means it won't see ${plural ? "their" : "its"} results at all -- every driver's shift, rest time and reserve/trip mix will start completely fresh for ${dateKey}, as if ${plural ? "those days" : "that day"} never happened. Save ${plural ? "them" : "it"} first if you want ${dateKey} to build on ${plural ? "them" : "it"} -- or continue anyway if that's really what you want.`
+      );
+      if (!proceed) return;
+    }
     const status = livePlan.dayStatus[dateKey];
     if (status !== "pending") {
       const ok = await confirmEdit(status === "saved"
