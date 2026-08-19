@@ -13,6 +13,41 @@
      them (both stations, v1 and v2). -->
 <script src="driver_assignment_engine.js?v=20260819j"></script>
 <script src="xlsx_surgical_patch.js?v=20260819a"></script>
+<!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
+     deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
+     This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
+     the moment it disagrees with what's actually loaded, so nobody has to remember to hard-refresh
+     or guess whether they're testing stale code. APP_VERSION is bumped in lockstep with the
+     cache-busters above and with web/version.txt on every deploy. -->
+<script>
+  (function () {
+    var APP_VERSION = "20260819j";
+    function checkVersion() {
+      fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.text() : null; })
+        .then(function (text) {
+          if (text == null) return;
+          var latest = text.trim();
+          if (latest && latest !== APP_VERSION && !document.getElementById("__staleVersionBanner")) {
+            var banner = document.createElement("div");
+            banner.id = "__staleVersionBanner";
+            banner.setAttribute("style",
+              "position:fixed;top:0;left:0;right:0;z-index:99999;background:#0f766e;color:#fff;" +
+              "padding:10px 16px;font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;" +
+              "display:flex;align-items:center;justify-content:center;gap:12px;box-shadow:0 2px 6px rgba(0,0,0,.25);");
+            banner.innerHTML = '<span>A newer version of this tool is available.</span>' +
+              '<button style="background:#fff;color:#0f766e;border:none;border-radius:4px;padding:6px 14px;font-weight:600;cursor:pointer;">Reload now</button>';
+            banner.querySelector("button").addEventListener("click", function () { location.reload(); });
+            document.body.appendChild(banner);
+          }
+        })
+        .catch(function () { /* offline or blocked -- never interrupt real use over this */ });
+    }
+    document.addEventListener("DOMContentLoaded", function () { setTimeout(checkVersion, 3000); });
+    setInterval(checkVersion, 3 * 60 * 1000);
+    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") checkVersion(); });
+  })();
+</script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
