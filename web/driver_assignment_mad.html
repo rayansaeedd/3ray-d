@@ -793,12 +793,24 @@
     return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   }
 
+  // Splits a list of unassigned tasks into trip vs reserve counts and renders them as a compact
+  // "N (n trip, n reserve)" label -- same trip/reserve grouping the engine itself uses everywhere
+  // else (task.kind === "reserve" ? "reserve" : "trip"), so a supervisor can immediately tell
+  // whether an unassigned-tasks count is mostly the soft, lower-stakes reserve side or the trip
+  // side that must always be filled.
+  function unassignedBreakdownLabel(tasks) {
+    if (!tasks || !tasks.length) return "0";
+    let trip = 0, reserve = 0;
+    tasks.forEach((t) => { if (t.kind === "reserve") reserve++; else trip++; });
+    return `${tasks.length} (${trip} trip, ${reserve} reserve)`;
+  }
+
   function renderSummary(plan) {
     const rows = plan.perDay.map((d) => `
       <tr>
         <td>${d.date.toISOString().slice(0, 10)}</td>
         <td>${d.assignments.length}</td>
-        <td class="${d.unassignedTasks.length ? "warn" : ""}">${d.unassignedTasks.length}</td>
+        <td class="${d.unassignedTasks.length ? "warn" : ""}">${unassignedBreakdownLabel(d.unassignedTasks)}</td>
         <td class="${d.unassignedDrivers.length ? "warn" : ""}">${d.unassignedDrivers.length}</td>
       </tr>`).join("");
     summaryTable.innerHTML = `

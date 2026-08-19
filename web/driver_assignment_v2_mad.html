@@ -1054,6 +1054,18 @@
     if (livePlan.taskDays.some((d) => d.dateKey === current)) daySelect.value = current;
   }
 
+  // Splits a list of unassigned tasks into trip vs reserve counts and renders them as a compact
+  // "N (n trip, n reserve)" label -- same trip/reserve grouping the engine itself uses everywhere
+  // else (task.kind === "reserve" ? "reserve" : "trip", e.g. the per-task loop and
+  // buildMonthlySummary), so a supervisor can immediately tell whether an unassigned-tasks count is
+  // mostly the soft, lower-stakes reserve side or the trip side that must always be filled.
+  function unassignedBreakdownLabel(tasks) {
+    if (!tasks || !tasks.length) return "0";
+    let trip = 0, reserve = 0;
+    tasks.forEach((t) => { if (t.kind === "reserve") reserve++; else trip++; });
+    return `${tasks.length} (${trip} trip, ${reserve} reserve)`;
+  }
+
   function renderAllDaysTable() {
     const rows = livePlan.taskDays.map((day) => {
       const result = livePlan.results[day.dateKey];
@@ -1063,7 +1075,7 @@
         <td>${day.dateKey}</td>
         <td class="${statusClass(status)}">${statusLabel(status)}</td>
         <td>${result ? result.assignments.length : "--"}</td>
-        <td class="${result && result.unassignedTasks.length ? "warn" : ""}">${result ? result.unassignedTasks.length : "--"}</td>
+        <td class="${result && result.unassignedTasks.length ? "warn" : ""}">${result ? unassignedBreakdownLabel(result.unassignedTasks) : "--"}</td>
         <td class="${result && result.unassignedDrivers.length ? "warn" : ""}">${result ? result.unassignedDrivers.length : "--"}</td>
         <td class="${dupCount ? "warn" : ""}" title="${dupCount ? "Same driver on more than one task -- open this day to see who" : ""}">${dupCount || 0}</td>
       </tr>`;
@@ -1081,7 +1093,7 @@
       <tr>
         <td>${dateKey}</td>
         <td>${result.assignments.length}</td>
-        <td class="${result.unassignedTasks.length ? "warn" : ""}">${result.unassignedTasks.length}</td>
+        <td class="${result.unassignedTasks.length ? "warn" : ""}">${unassignedBreakdownLabel(result.unassignedTasks)}</td>
         <td class="${result.unassignedDrivers.length ? "warn" : ""}">${result.unassignedDrivers.length}</td>
       </tr>`;
     dayResultTable.style.display = "table";
