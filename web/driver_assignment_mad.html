@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v2). -->
-<script src="driver_assignment_engine.js?v=20260819d"></script>
-<script src="xlsx_surgical_patch.js?v=20260818"></script>
+<script src="driver_assignment_engine.js?v=20260819e"></script>
+<script src="xlsx_surgical_patch.js?v=20260819a"></script>
 <style>
   :root {
     --blue: #4472C4; --green: #70AD47; --red: #C00000;
@@ -95,7 +95,9 @@
   .conditions-rule .value { font-weight: 700; font-size: 14px; margin-top: 2px; }
   .conditions-rule .value.unset { color: var(--red); font-style: italic; font-size: 12px; }
 
-  .conditions-form-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px 14px; margin-bottom: 16px; }
+  /* 6 columns = 3 shifts (start+end field pair each) per row, dividing evenly into the 9 shifts
+     below (three per period) with no pair split across a row boundary. */
+  .conditions-form-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px 14px; margin-bottom: 16px; }
   @media (max-width: 900px) { .conditions-form-grid { grid-template-columns: 1fr 1fr; } }
   .conditions-form-grid label.field { max-width: none; }
   .conditions-form-grid input[type=time] { padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; width: 100%; }
@@ -265,7 +267,7 @@
   // that module's first-choice ARGB values with the alpha channel dropped, since a rare file
   // whose own palette collides with a first choice falls back to a slightly different shade only
   // in the actual downloaded file, not worth chasing here in the conditions UI).
-  const SHIFT_COLORS = ["#FFC000", "#FFF2CC", "#C55A11", "#ED7D31", "#ADD8E6"];
+  const SHIFT_COLORS = ["#FFC000", "#FFD966", "#FFF2CC", "#C55A11", "#ED7D31", "#F8CBAD", "#2E5F8A", "#5B9BD5", "#ADD8E6"];
 
   // Per-driver overrides, requested for this station specifically. Gating on STATION here (not
   // splitting into a separate file) is what keeps this out of the Makkah page: mad.html and

@@ -375,25 +375,37 @@
   // returns the identical {perDay: [{assignments, unassignedTasks, unassignedDrivers, ...}]} shape
   // assignSimple() does, just with a smarter selection than "shuffle and take the first N".
 
-  const SHIFT_NAMES = ["Early Morning", "Late Morning", "Early Afternoon", "Late Afternoon", "Night"];
+  const SHIFT_NAMES = [
+    "Early Morning", "Morning", "Late Morning",
+    "Early Afternoon", "Afternoon", "Late Afternoon",
+    "Early Night", "Night", "Late Night",
+  ];
 
   function defaultConditions() {
     return {
-      // Pre-filled with the boundaries a real grid search (against the real Sep1-21 file,
-      // replayed day-by-day with the actual engine) found best -- every top-scoring
-      // configuration widened Early Morning to 09:30, since that's where this file's biggest
-      // cluster of still-open tasks (08:00-09:59) sits, right where a lot of already-idle
-      // Early-Morning-locked drivers already are; Night starting at 18:00 (rather than 20:00)
-      // was confirmed compatible with that same best result, not a tradeoff against it, since
-      // there's essentially no real task demand between 18:00-20:00 in the tested file. Still
-      // fully editable in the Conditions panel -- these are a sensible, data-validated starting
-      // point for a different month/roster, not a hard requirement.
+      // Nine narrower bands, three per period (Morning/Afternoon/Night), replacing the earlier
+      // five wide ones. Confirmed directly: a driver's own locked shift was never window-
+      // constrained (by design -- the forward/backward window is a shortage-only rescue tool, not
+      // a rule for every assignment, per an explicit reversal earlier this session), so a 6-9.5h
+      // wide band let a driver's real start time swing all over it while the engine correctly saw
+      // it as "no issue, same shift" -- which WAS an issue, just not one the window was ever meant
+      // to solve. Narrowing the bands themselves is the fix: "I don't want to see a driver moving
+      // or changing his hour a lot and the engine considering it as the same shift... so I'm
+      // trying to make this new selection so the engine understand [what] hours [are] acceptable."
+      // Each of the three original macro-periods (Morning 03:30-12:30=9h, Afternoon 12:30-18:00=
+      // 5.5h, Night 18:00-03:30=9.5h -- the same real-data-validated boundaries as before) is split
+      // into three even thirds here as a clean starting point; still fully editable in the
+      // Conditions panel like every other boundary.
       shifts: [
-        { name: "Early Morning", start: "03:30", end: "09:30" },
+        { name: "Early Morning", start: "03:30", end: "06:30" },
+        { name: "Morning", start: "06:30", end: "09:30" },
         { name: "Late Morning", start: "09:30", end: "12:30" },
-        { name: "Early Afternoon", start: "12:30", end: "16:00" },
-        { name: "Late Afternoon", start: "16:00", end: "18:00" },
-        { name: "Night", start: "18:00", end: "03:30" },
+        { name: "Early Afternoon", start: "12:30", end: "14:20" },
+        { name: "Afternoon", start: "14:20", end: "16:10" },
+        { name: "Late Afternoon", start: "16:10", end: "18:00" },
+        { name: "Early Night", start: "18:00", end: "21:10" },
+        { name: "Night", start: "21:10", end: "00:20" },
+        { name: "Late Night", start: "00:20", end: "03:30" },
       ],
       ratioReserveDays: 4,
       ratioTripDays: 2,

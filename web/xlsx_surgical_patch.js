@@ -172,18 +172,24 @@
     return pickColor(IDLE_FLAG_ARGB_CANDIDATES, existingRgbs, new Set());
   }
 
-  // One candidate-list per shift (Early Morning, Late Morning, Early Afternoon, Late Afternoon,
-  // Night, matching SHIFT_NAMES order in driver_assignment_engine.js) -- confirmed scheme: dark
-  // yellow / light yellow / dark orange / orange / light blue, each print-friendly enough that the
-  // task code text stays readable and the whole roster still reads as one grid. Each list has
-  // fallbacks for when a file's own palette already happens to use the first choice (same
-  // reasoning as the idle-flag candidates above).
+  // One candidate-list per shift (Early Morning, Morning, Late Morning, Early Afternoon,
+  // Afternoon, Late Afternoon, Early Night, Night, Late Night, matching SHIFT_NAMES order in
+  // driver_assignment_engine.js -- nine narrower bands, three per period, replacing the earlier
+  // five wide ones). Confirmed scheme: three yellow shades / three orange shades / three blue
+  // shades, dark-to-light within each period, each print-friendly enough that the task code text
+  // stays readable and the whole roster still reads as one grid. Each list has fallbacks for when
+  // a file's own palette already happens to use the first choice (same reasoning as the idle-flag
+  // candidates above).
   const SHIFT_FLAG_ARGB_CANDIDATES = [
     ["FFFFC000", "FFE8A33C", "FFBF9000"], // Early Morning -- dark yellow
+    ["FFFFD966", "FFFFCC66", "FFF2C55C"], // Morning -- medium yellow
     ["FFFFF2CC", "FFFFE699", "FFFFEB84"], // Late Morning -- light yellow
     ["FFC55A11", "FFB45F06", "FF9C4A0A"], // Early Afternoon -- dark orange
-    ["FFED7D31", "FFF4B183", "FFFFA351"], // Late Afternoon -- orange
-    ["FFADD8E6", "FFBDD7EE", "FF9DC3E6"], // Night -- light blue
+    ["FFED7D31", "FFF4B183", "FFFFA351"], // Afternoon -- orange
+    ["FFF8CBAD", "FFFBE0CE", "FFFADBC7"], // Late Afternoon -- light orange/peach
+    ["FF2E5F8A", "FF1F4E79", "FF305496"], // Early Night -- dark blue
+    ["FF5B9BD5", "FF8FAADC", "FF6FA8DC"], // Night -- medium blue
+    ["FFADD8E6", "FFBDD7EE", "FF9DC3E6"], // Late Night -- light blue
   ];
 
   async function pickShiftColors(zip) {
