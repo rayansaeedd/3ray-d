@@ -796,6 +796,12 @@
     const effectiveEndMin = task.endMin != null ? task.endMin : task.startMin;
     st.lastDutyEndDateKey = dutyEndDateKey(day, task.startMin, effectiveEndMin);
     st.lastDutyEndMin = effectiveEndMin;
+    // The driver's actual real clock position, updated on EVERY assignment (own-shift or
+    // widened alike) -- see MAX_FORWARD_STEP_MIN/MAX_BACKWARD_STEP_MIN below for what this
+    // feeds into. Unlike the removed lastBorrowedStartMin, this is never an inference about
+    // which shift someone is "really" locked into -- it's simply the plain fact of what time
+    // they last actually worked, the same kind of fact lastDutyEndMin already tracks for rest.
+    st.lastDutyStartMin = task.startMin;
     st.recentKinds.push(wantKind);
     if (st.recentKinds.length > capLen) st.recentKinds.shift();
     if (wantKind === "reserve") st.cumulativeReserve = (st.cumulativeReserve || 0) + 1;
@@ -913,7 +919,7 @@
       // shift-lock was removed) is anchored here too, instead of staying permanently unclassifiable.
       available.forEach((d, i) => {
         if (!state[d.id]) {
-          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[d.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         if (state[d.id].shiftAnchorDate == null) {
           state[d.id].shiftAnchorDate = day.dateKey;
@@ -969,33 +975,46 @@
       orderedTasks.forEach((task) => {
         const shiftIdx = classifyShiftForMinutes(conditions, task.startMin);
         const inShift = (byShift[shiftIdx] || []).filter((d) => !usedDriverIds.has(d.id));
-
-        // Own locked shift tried first, rest-time never violated.
-        let pool = restFilter(inShift, task);
-        let usedWindow = false;
         const windowDeltaById = {};
 
-        // Only widen once the driver's own locked shift has nobody rested left in it -- to ANY
-        // available driver (regardless of which named shift they're nominally locked into) whose
-        // OWN locked shift's configured start time sits within the forward/backward window of
-        // this task's start time (see MAX_FORWARD_STEP_MIN/MAX_BACKWARD_STEP_MIN above). Always
-        // measured against each candidate's real locked-shift start, never a previous day's
-        // outcome -- no chain, no ratchet, so this can never drift further than the window itself
-        // allows, on any single day, ever.
+        // Own locked shift tried first, rest-time never violated. A driver's very first-EVER
+        // assignment (lastDutyStartMin still null) has no real clock position yet to be smooth
+        // relative to, so it's exempt from the window here -- any in-shift time is fine, same as
+        // before this feature (a wide band like Night, 9.5h, would otherwise fail a genuine
+        // in-shift task on someone's very first day purely for being far from a fallback
+        // reference they have no real history to justify).
+        let pool = restFilter(inShift, task).filter((d) => {
+          const st = state[d.id];
+          if (st.lastDutyStartMin == null) return true;
+          const delta = signedMinuteDelta(st.lastDutyStartMin, task.startMin);
+          if (delta < -MAX_BACKWARD_STEP_MIN || delta > MAX_FORWARD_STEP_MIN) return false;
+          windowDeltaById[d.id] = delta;
+          return true;
+        });
+
+        // Only widen once the driver's own locked shift has nobody who clears BOTH rest-time and
+        // (once they have real history) the window -- to ANY available driver (regardless of
+        // which named shift they're nominally locked into) whose own real clock position --
+        // lastDutyStartMin if they have one, else their locked shift's configured start the first
+        // time they're ever assigned -- sits within range of this task's start time. Confirmed
+        // directly: the forward/backward window isn't just for crossing shifts -- "for the same
+        // shift only forward... with exception backward one hour if needed" applies to EVERY
+        // day-to-day change. Always measured against each candidate's real clock position, never
+        // a previous day's BORROWED outcome misread as their identity (that was the old
+        // compounding bug) -- so this can never drift further than the window itself allows on
+        // any single day, ever, whether the result stays in-shift or crosses into another.
         if (!pool.length) {
           const otherPool = available.filter((d) => !usedDriverIds.has(d.id));
-          const rested = restFilter(otherPool, task);
-          const windowed = rested.filter((d) => {
-            const ownIdx = computeShiftIndexForDriver(state[d.id], conditions, day.date);
-            const ownStart = ownIdx != null ? parseHHMM(conditions.shifts[ownIdx].start) : null;
-            if (ownStart == null) return false;
-            const delta = signedMinuteDelta(ownStart, task.startMin);
+          pool = restFilter(otherPool, task).filter((d) => {
+            const st = state[d.id];
+            const ref = st.lastDutyStartMin != null ? st.lastDutyStartMin
+              : (() => { const idx = computeShiftIndexForDriver(st, conditions, day.date); return idx != null ? parseHHMM(conditions.shifts[idx].start) : null; })();
+            if (ref == null) return false;
+            const delta = signedMinuteDelta(ref, task.startMin);
             if (delta < -MAX_BACKWARD_STEP_MIN || delta > MAX_FORWARD_STEP_MIN) return false;
             windowDeltaById[d.id] = delta;
             return true;
           });
-          pool = windowed;
-          usedWindow = pool.length > 0;
         }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
@@ -1020,16 +1039,18 @@
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
-        // hard quota did. When the candidate came from the forward/backward window widening
-        // above, break ties toward the FORWARD direction first (the preferred one), then toward
-        // whoever needs the smallest step either way -- keeps the transition as gradual as
-        // possible for everyone involved.
+        // hard quota did. Ties break toward the FORWARD direction first (the preferred one, per
+        // every candidate's own windowDeltaById entry -- every survivor of the window filter
+        // above has one), then toward whoever needs the smallest step either way -- keeps the
+        // transition as gradual as possible for everyone involved, in-shift or widened alike.
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
           const ratioDiff = scoreB - scoreA;
-          if (ratioDiff !== 0 || !usedWindow) return ratioDiff;
-          const rank = (id) => { const d = windowDeltaById[id]; return d >= 0 ? d : 100000 - d; };
+          if (ratioDiff !== 0) return ratioDiff;
+          // A first-ever-assignment candidate (see above) has no windowDeltaById entry at all --
+          // treat that as the best possible rank (0), since there's no window violation to weigh.
+          const rank = (id) => { const d = windowDeltaById[id]; if (d == null) return 0; return d >= 0 ? d : 100000 - d; };
           return rank(a.id) - rank(b.id);
         });
         const chosen = finalPool[0];
@@ -1109,7 +1130,7 @@
         if (!state[task.driver.id]) {
           const seeded = shiftSeedAssignment && shiftSeedAssignment[task.driver.id];
           const shiftIdx = seeded != null ? seeded : classifyShiftForMinutes(conditions, task.startMin);
-          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+          state[task.driver.id] = { shiftAnchorDate: day.dateKey, shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
         }
         recordAssignment(state, day, task, task.driver, conditions);
       });
@@ -1221,6 +1242,7 @@
         shiftAnchorIndex: st.shiftAnchorIndex != null ? st.shiftAnchorIndex : null,
         lastDutyEndDateKey: st.lastDutyEndDateKey || null,
         lastDutyEndTime: st.lastDutyEndMin != null ? minutesToHHMM(st.lastDutyEndMin) : null,
+        lastDutyStartTime: st.lastDutyStartMin != null ? minutesToHHMM(st.lastDutyStartMin) : null,
         recentKinds: (st.recentKinds || []).join(","),
         cumulativeReserve: st.cumulativeReserve || 0,
         cumulativeTrip: st.cumulativeTrip || 0,
@@ -1253,6 +1275,11 @@
     const cumTripCell = findHeaderCell(ws, "Cumulative Trip", 20);
     const anchorDateCell = findHeaderCell(ws, "Shift Anchor Date", 20);
     const anchorIdxCell = findHeaderCell(ws, "Shift Anchor Index", 20);
+    // Same "optional, older file still loads" treatment -- added when the forward/backward
+    // window widened to cover same-shift assignments too, not just cross-shift ones. A missing
+    // value just means that driver's next task isn't window-constrained until they get a fresh
+    // real assignment (same graceful degradation as a missing shift anchor above).
+    const lastStartTimeCell = findHeaderCell(ws, "Last Duty Start Time", 20);
 
     const readAdjacent = (cell) => {
       if (!cell) return null;
@@ -1279,11 +1306,13 @@
       const cumTripVal = cumTripCell ? displayValue(row.getCell(cumTripCell.col)) : null;
       const anchorDateVal = anchorDateCell ? displayValue(row.getCell(anchorDateCell.col)) : null;
       const anchorIdxVal = anchorIdxCell ? displayValue(row.getCell(anchorIdxCell.col)) : null;
+      const lastStartTimeVal = lastStartTimeCell ? displayValue(row.getCell(lastStartTimeCell.col)) : null;
       rotationState[id] = {
         shiftAnchorDate: anchorDateVal != null && anchorDateVal !== "" ? String(anchorDateVal).trim() : null,
         shiftAnchorIndex: anchorIdxVal != null && anchorIdxVal !== "" ? parseInt(anchorIdxVal, 10) : null,
         lastDutyEndDateKey: lastEndDateVal != null && lastEndDateVal !== "" ? String(lastEndDateVal).trim() : null,
         lastDutyEndMin: lastEndTimeVal != null && lastEndTimeVal !== "" ? parseHHMM(String(lastEndTimeVal).trim()) : null,
+        lastDutyStartMin: lastStartTimeVal != null && lastStartTimeVal !== "" ? parseHHMM(String(lastStartTimeVal).trim()) : null,
         recentKinds: recentKindsVal != null && recentKindsVal !== "" ? String(recentKindsVal).split(",").map((s) => s.trim()).filter(Boolean) : [],
         cumulativeReserve: cumReserveVal != null && cumReserveVal !== "" ? parseInt(cumReserveVal, 10) : 0,
         cumulativeTrip: cumTripVal != null && cumTripVal !== "" ? parseInt(cumTripVal, 10) : 0,
