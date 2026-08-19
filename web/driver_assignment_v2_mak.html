@@ -814,6 +814,7 @@
 
     const state = {};
     const namesById = {};
+    const observedByDriver = {}; // id -> [{dateKey, shiftIdx}], every real duty in file order
     let totalTasks = 0, resolvedTasks = 0;
 
     taskDays.forEach((day) => {
@@ -828,16 +829,50 @@
         if (parsed.name && !namesById[parsed.id]) namesById[parsed.id] = parsed.name;
 
         if (!state[parsed.id]) {
-          const shiftIdx = E.classifyShiftForMinutes(conditions, task.startMin);
           state[parsed.id] = {
-            shiftAnchorDate: day.dateKey,
-            shiftAnchorIndex: shiftIdx != null ? shiftIdx : 0,
+            shiftAnchorDate: null, shiftAnchorIndex: null,
             lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null,
             recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0,
           };
         }
+        const shiftIdx = E.classifyShiftForMinutes(conditions, task.startMin);
+        if (shiftIdx != null) (observedByDriver[parsed.id] = observedByDriver[parsed.id] || []).push({ dateKey: day.dateKey, shiftIdx });
         E.recordAssignment(state, day, task, { id: parsed.id }, conditions);
       });
+    });
+
+    // The anchor used to be the driver's shift on their FIRST appearance in the imported file --
+    // a real, serious bug confirmed directly against a real result: seeding September from an
+    // August anchor set as early as the 1st meant computeShiftIndexForDriver had to extrapolate
+    // forward through every week in between using pure elapsed-time math, with no way to notice
+    // if real life (leave, an adjustment, an uneven week) ever stopped matching a perfectly
+    // uninterrupted rotation -- the longer that gap, the more it could silently drift from what
+    // the driver's shift actually was by month's end. Confirmed: 28 of 91 drivers touched 4
+    // different shift bands in just 21 days of the following month, when correct behavior is at
+    // most 2 (their locked band plus one legitimate rotation).
+    //
+    // Anchoring from the LAST real duty in the file instead shrinks that extrapolation down to
+    // just the real gap between the imported month's end and the new month's start -- typically a
+    // few days, not weeks. Using the single most recent duty alone would reintroduce a DIFFERENT
+    // known bug though (see rebuildRotationStateFromSavedDays's own history): a one-off
+    // shortage-borrow on the very last real day would get mistaken for the driver's real lock and
+    // silently become their new "normal". So this takes the MODE (most common band) across the
+    // driver's real duties within the last shiftLockWeeks-sized window ending at the file's own
+    // last covered date -- robust to a single borrowed day, still anchored to the recent truth
+    // rather than the distant past.
+    const lastFileDateKey = taskDays[taskDays.length - 1].dateKey;
+    const windowStart = E.addDays(new Date(lastFileDateKey + "T00:00:00"), -(conditions.shiftLockWeeks * 7) + 1);
+    Object.keys(state).forEach((id) => {
+      const obs = observedByDriver[id] || [];
+      const recent = obs.filter((o) => new Date(o.dateKey + "T00:00:00") >= windowStart);
+      const pool = recent.length ? recent : obs; // no duty at all in that window -- fall back to their whole history
+      state[id].shiftAnchorDate = lastFileDateKey;
+      if (!pool.length) { state[id].shiftAnchorIndex = 0; return; }
+      const counts = {};
+      pool.forEach((o) => { counts[o.shiftIdx] = (counts[o.shiftIdx] || 0) + 1; });
+      let bestIdx = null, bestCount = -1;
+      Object.keys(counts).forEach((k) => { if (counts[k] > bestCount) { bestCount = counts[k]; bestIdx = Number(k); } });
+      state[id].shiftAnchorIndex = bestIdx;
     });
 
     return {
