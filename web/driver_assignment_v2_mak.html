@@ -1691,28 +1691,23 @@
     addReserveForUnassignedBtn.disabled = count === 0;
   }
 
-  // One click instead of clicking Add Task once per unassigned driver by hand: appends a REAL
-  // reserve task, already coded and assigned, for every driver the last Generate left
-  // unassigned -- "we don't want to leave a driver with no task... we can do that by adding a
-  // reserved task to the task file." Confirmed convention: at most 4 reserve slots per sign-in
-  // time (R, RA, RB, RC), each new slot pegged to a sign-in time that ALREADY exists somewhere in
-  // the day's real Task Program, within the driver's OWN locked shift -- never an invented time --
-  // and distributed to keep the spread fair (fill the thinnest real time first, never stack onto
-  // a busier one while a thinner one has room). See buildReserveTasksForUnassignedDrivers in
-  // engine.js for the actual placement logic; this handler just turns its proposals into real
-  // task rows and wires each one to its driver exactly like a manual reassignment would.
-  addReserveForUnassignedBtn.addEventListener("click", () => {
-    if (!livePlan) return;
-    const dateKey = daySelect.value;
-    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
-    const result = livePlan.results[dateKey];
-    const unassignedDrivers = result ? result.unassignedDrivers.slice() : [];
-    if (!day || !unassignedDrivers.length) return;
-    // lastGeneratedRotationState (not computeReadOnlyRotationState()) -- it's the one that
-    // actually knows which shift each of these currently-unassigned drivers is locked to, since
-    // it just went through Generate's own cold-start seeding for every available driver.
-    const rotationState = livePlan.lastGeneratedRotationState || {};
-    const { created, stillUnassigned } = E.buildReserveTasksForUnassignedDrivers(day, unassignedDrivers, conditions, rotationState);
+  // Turns unassigned drivers into REAL reserve tasks, already coded and assigned -- "we don't
+  // want to leave a driver with no task... we can do that by adding a reserved task to the task
+  // file." Confirmed convention: at most 4 reserve slots per sign-in time (R, RA, RB, RC), each
+  // new slot pegged to a sign-in time that ALREADY exists somewhere in the day's real Task
+  // Program, within the driver's OWN locked shift -- never an invented time -- and distributed to
+  // keep the spread fair (fill the thinnest real time first, never stack onto a busier one while
+  // a thinner one has room). See buildReserveTasksForUnassignedDrivers in engine.js for the
+  // actual placement logic; this just turns its proposals into real task rows and wires each one
+  // to its driver exactly like a manual reassignment would -- including folding each new pairing
+  // into dayResult.assignments itself, so the day's own "Assigned" count (and every other count
+  // that reads off this same result object) reflects it immediately, not just "Unassigned
+  // drivers" going down. Shared by generateDay() (runs this automatically right after every
+  // Generate, confirmed directly: "can we [do this] automatically... the supervisor will know
+  // with the highlight that it has been added") and the button below (kept as a manual re-run for
+  // the rarer case where a later hand-edit leaves a NEW driver unassigned).
+  function applyReserveAutoFill(dateKey, day, dayResult, rotationState) {
+    const { created, stillUnassigned } = E.buildReserveTasksForUnassignedDrivers(day, dayResult.unassignedDrivers, conditions, rotationState);
     created.forEach(({ code, startMin, kind, destination, driver }) => {
       const row = livePlan.nextFreeRow[dateKey]++;
       // engineAddedReserve is permanent provenance, not a "still matches what the engine
@@ -1722,15 +1717,30 @@
       const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null, engineAddedReserve: true };
       day.tasks.push(task);
       setTaskDriver(dateKey, task, driver);
+      dayResult.assignments.push({ task, driver, shiftIdx: E.classifyShiftForMinutes(conditions, startMin) });
     });
-    result.unassignedDrivers = stillUnassigned; // only genuinely un-placeable drivers remain flagged
+    dayResult.unassignedDrivers = stillUnassigned; // only genuinely un-placeable drivers remain flagged
+    return { createdCount: created.length, stillUnassignedCount: stillUnassigned.length };
+  }
+
+  addReserveForUnassignedBtn.addEventListener("click", () => {
+    if (!livePlan) return;
+    const dateKey = daySelect.value;
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    const result = livePlan.results[dateKey];
+    if (!day || !result || !result.unassignedDrivers.length) return;
+    // lastGeneratedRotationState (not computeReadOnlyRotationState()) -- it's the one that
+    // actually knows which shift each of these currently-unassigned drivers is locked to, since
+    // it just went through Generate's own cold-start seeding for every available driver.
+    const rotationState = livePlan.lastGeneratedRotationState || {};
+    const { createdCount, stillUnassignedCount } = applyReserveAutoFill(dateKey, day, result, rotationState);
     renderTaskView(dateKey);
     renderRosterGrid();
     renderAllDaysTable();
     renderDayResultTable(dateKey);
     updateAddReserveForUnassignedBtn(dateKey);
-    const stillNote = stillUnassigned.length ? ` (${stillUnassigned.length} driver${stillUnassigned.length === 1 ? "" : "s"} couldn't get a slot -- every real sign-in time in their shift is already at the 4-slot cap)` : "";
-    setDayStatus(`Added ${created.length} reserve task${created.length === 1 ? "" : "s"}, one per unassigned driver, already coded and assigned.${stillNote}`);
+    const stillNote = stillUnassignedCount ? ` (${stillUnassignedCount} driver${stillUnassignedCount === 1 ? "" : "s"} couldn't get a slot -- every real sign-in time in their shift is already at the 4-slot cap)` : "";
+    setDayStatus(`Added ${createdCount} reserve task${createdCount === 1 ? "" : "s"}, one per unassigned driver, already coded and assigned.${stillNote}`);
   });
 
   // --- Driver-search picker: shared modal, reused for every task's Driver button ---------------
@@ -1902,15 +1912,18 @@
       newWrites[driver.id] = task.code;
     });
     livePlan.engineWrites[dateKey] = newWrites;
+    // Automatically top up a real reserve task for every driver still unassigned after the normal
+    // pass -- confirmed directly: "we don't want to leave a driver with no task... can we [do
+    // this] automatically... the supervisor will know with the highlight that it has been added."
+    // Uses THIS rotationState (not computeReadOnlyRotationState(), which by design never has an
+    // entry for a driver who was merely available but got nothing) since it just went through
+    // assignWithConditions's own cold-start seeding loop for every available driver, assigned or
+    // not -- so a brand-new unassigned driver's shift is already known, no separate click needed.
+    const reserveFill = applyReserveAutoFill(dateKey, day, dayResult, rotationState);
     livePlan.results[dateKey] = dayResult;
     livePlan.dayStatus[dateKey] = "generated";
-    // Unlike computeReadOnlyRotationState() (rebuilt only from SAVED days' actual assignments --
-    // a driver left genuinely unassigned never gets an entry there, by design, since they never
-    // received a task to replay), THIS rotationState just went through assignWithConditions's own
-    // cold-start seeding loop, which anchors a shift for every AVAILABLE driver that day whether
-    // or not they ended up with a task. Stashing it here is what lets "Add Reserve Task for Every
-    // Unassigned Driver" below know which shift an unassigned driver is actually locked to.
     livePlan.lastGeneratedRotationState = rotationState;
+    return reserveFill;
   }
 
   dayGenerateBtn.addEventListener("click", async () => {
@@ -1924,12 +1937,15 @@
     }
     try {
       dayGenerateBtn.disabled = true;
-      await generateDay(dateKey);
+      const reserveFill = await generateDay(dateKey);
       renderDaySelector();
       renderAllDaysTable();
       renderRosterGrid();
       onDaySelectChange();
-      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.`);
+      const reserveNote = reserveFill.createdCount
+        ? ` Added ${reserveFill.createdCount} reserve task${reserveFill.createdCount === 1 ? "" : "s"} automatically for driver${reserveFill.createdCount === 1 ? "" : "s"} this left unassigned -- look for the light-blue highlight in the Task view and Roster grid below.`
+        : "";
+      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}`);
     } catch (err) {
       console.error(err);
       setDayStatus("Could not generate this day: " + err.message, true);
