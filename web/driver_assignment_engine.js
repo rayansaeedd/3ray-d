@@ -1088,9 +1088,18 @@
         // EXACTLY the one shift immediately before this one in the fixed chain, never further,
         // never the shift after, never a minute-based distance check. shiftIdx 0 (Early Morning)
         // has no shift before it to borrow from at all.
+        //
+        // A real, confirmed bug lived here: this widened pool used to be filtered by restFilter
+        // ONLY, omitting the same withinSameShiftForwardLimit check the own-shift pool above
+        // already applies. The no-large-backward-jump rule is about a driver's real clock, not
+        // about which shift band a task happens to be classified into -- so a driver borrowed
+        // one-shift-up had zero backward-jump protection, and could be handed a task hours
+        // earlier than their last real duty purely because they were reached via the widening
+        // branch instead of their own shift. Traced from a real supervisor report of exactly this
+        // (a driver's day2 task landing 3-4 hours earlier than day1's, no day off between).
         if (!pool.length && shiftIdx != null && shiftIdx > 0) {
           const priorShiftPool = (byShift[shiftIdx - 1] || []).filter((d) => !usedDriverIds.has(d.id));
-          pool = restFilter(priorShiftPool, task);
+          pool = restFilter(priorShiftPool, task).filter((d) => withinSameShiftForwardLimit(d, state[d.id], day, task.startMin));
         }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
