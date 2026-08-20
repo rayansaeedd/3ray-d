@@ -937,18 +937,38 @@
   // across an unbroken work stretch, never jump back more than a small grace amount. Confirmed
   // directly with a real 6-day example (03:00, 03:00, 03:30, 04:00, 05:00, 06:00 -- always equal
   // or later than the day before): "I don't want to see is if he start... at 6 AM, sending him
-  // back to 3 AM. This is what I don't want to see, backward time shift." No cap on how far
-  // FORWARD a day can move (any later time within the shift is fine); backward is allowed only as
-  // a bounded last resort -- "you're allowed to move him backward in hours, half an hour or an
+  // back to 3 AM. This is what I don't want to see, backward time shift." Backward is allowed only
+  // as a bounded last resort -- "you're allowed to move him backward in hours, half an hour or an
   // hour, that's it, other than that leave it blank" -- so a step earlier than 60min back is
   // rejected outright, same "leave it unassigned rather than force it" shape as every other hard
   // rule here. Deliberately scoped to a driver's OWN shift only (see the per-task loop below) --
-  // separate from, and unrelated to, the shift-index-only widening rule.
+  // separate from, and unrelated to, the shift-index-only widening rule. (Rule 6, just below,
+  // covers the forward direction -- no hard cap there, but a real preference for keeping it
+  // gradual too.)
   const SAME_SHIFT_MAX_BACKWARD_MIN = 60;
   function withinSameShiftForwardLimit(driver, st, day, taskStartMin) {
     if (hadRealDayOffSince(driver, st.lastDutyDateKey, day.dateKey)) return true;
     if (st.lastDutyStartMin == null) return true;
     return signedMinuteDelta(st.lastDutyStartMin, taskStartMin) >= -SAME_SHIFT_MAX_BACKWARD_MIN;
+  }
+
+  // Rule 6: forward movement should also be SMOOTH within an unbroken work stretch, not just
+  // legal -- confirmed directly against a real contrasting pair: a gradual 1h/1h/2h/1h day-to-day
+  // climb ("something like that smooth and clean") vs. a single 5-hour jump in one day (12:00 ->
+  // 17:00) singled out as exactly the pattern to avoid -- "sleep cycle cannot be affected." Unlike
+  // the backward rule above, this is a soft PREFERENCE, not a hard block -- confirmed directly
+  // ("if you have to do this there's no other choice then you can do it") -- so it's applied as a
+  // pool-narrowing step in the per-task loop (prefer smooth-step candidates; fall back to the full
+  // pool only when literally nobody remaining has a smooth option), never as a reason to leave a
+  // task unassigned the way rest-time or the backward cap can. Confirmed to outrank the
+  // reserve/trip fairness ratio when the two disagree ("smoothness wins first") -- narrows the pool
+  // before that ratio sort ever runs, not just a tie-break within it. 2 hours matches the largest
+  // single-day step in the confirmed-good example.
+  const SMOOTH_FORWARD_STEP_MIN = 120;
+  function forwardStepMinutes(driver, st, day, taskStartMin) {
+    if (hadRealDayOffSince(driver, st.lastDutyDateKey, day.dateKey) || st.lastDutyStartMin == null) return 0;
+    const delta = signedMinuteDelta(st.lastDutyStartMin, taskStartMin);
+    return delta > 0 ? delta : 0;
   }
 
   // v2: restores shift-locking (removed in the earlier whole-month rebuild once real start times
@@ -1120,6 +1140,14 @@
 
         if (!pool.length) { unassignedTasks.push(task); return; }
 
+        // Rule 6: narrow toward a smooth forward step BEFORE the kind-alternation/fairness
+        // preferences below even get a look -- confirmed to outrank the reserve/trip ratio, not
+        // just break a tie with it (see forwardStepMinutes/SMOOTH_FORWARD_STEP_MIN above). Falls
+        // back to the full pool only when every remaining candidate would need a bigger jump --
+        // this is a preference, never a reason to leave the task unassigned.
+        const smoothPool = pool.filter((d) => forwardStepMinutes(d, state[d.id], day, task.startMin) <= SMOOTH_FORWARD_STEP_MIN);
+        const workingPool = smoothPool.length ? smoothPool : pool;
+
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
         // Priority cascade toward a real mix, not just an on-target ratio -- confirmed directly:
@@ -1134,28 +1162,22 @@
         // 3) last resort -- if literally every remaining candidate would be creating a 3rd
         //    consecutive same-kind duty, allow it anyway rather than leave the task unassigned (and
         //    that driver with nothing that day) purely to protect the mix.
-        const notRepeating = pool.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
-        const notThirdConsecutive = pool.filter((d) => !wouldBeThirdConsecutiveKind(state[d.id], wantKind));
-        const finalPool = notRepeating.length ? notRepeating : (notThirdConsecutive.length ? notThirdConsecutive : pool);
+        const notRepeating = workingPool.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
+        const notThirdConsecutive = workingPool.filter((d) => !wouldBeThirdConsecutiveKind(state[d.id], wantKind));
+        const finalPool = notRepeating.length ? notRepeating : (notThirdConsecutive.length ? notThirdConsecutive : workingPool);
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
         // hard quota did. Ties break toward the SMALLEST forward step within a driver's own
         // current work stretch (0 for anyone exempt -- a fresh stretch, or a widened/first-ever
-        // candidate) -- matches the gradual, minimal-creep shape of the confirmed real example
-        // (03:00, 03:00, 03:30, 04:00, 05:00, 06:00), not just "forward is legal, jump however far".
-        const forwardStep = (d) => {
-          const st = state[d.id];
-          if (hadRealDayOffSince(d, st.lastDutyDateKey, day.dateKey) || st.lastDutyStartMin == null) return 0;
-          const delta = signedMinuteDelta(st.lastDutyStartMin, task.startMin);
-          return delta > 0 ? delta : 0;
-        };
+        // candidate) -- matches the gradual, minimal-creep shape rule 6 prefers, not just "forward
+        // is legal, jump however far".
         finalPool.sort((a, b) => {
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
           const ratioDiff = scoreB - scoreA;
           if (ratioDiff !== 0) return ratioDiff;
-          return forwardStep(a) - forwardStep(b);
+          return forwardStepMinutes(a, state[a.id], day, task.startMin) - forwardStepMinutes(b, state[b.id], day, task.startMin);
         });
         const chosen = finalPool[0];
 
