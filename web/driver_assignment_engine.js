@@ -1285,17 +1285,22 @@
         const taskIdx = classifyShiftForMinutes(conditions, task.startMin);
         const lockIdx = computeShiftIndexForDriver(st, conditions, day.date);
 
-        if (lockIdx != null && taskIdx != null && taskIdx !== lockIdx) {
-          if (taskIdx !== lockIdx + 1) {
-            violations.push({
-              driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "shift-lock",
-              detail: `assigned into "${conditions.shifts[taskIdx].name}" (${minutesToHHMM(task.startMin)}) while locked into "${conditions.shifts[lockIdx].name}" -- neither their own shift nor exactly one shift up`,
-            });
-          }
-        } else if (lockIdx != null && taskIdx === lockIdx && !withinSameShiftForwardLimit(driver, st, day, task.startMin)) {
+        if (lockIdx != null && taskIdx != null && taskIdx !== lockIdx && taskIdx !== lockIdx + 1) {
+          violations.push({
+            driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "shift-lock",
+            detail: `assigned into "${conditions.shifts[taskIdx].name}" (${minutesToHHMM(task.startMin)}) while locked into "${conditions.shifts[lockIdx].name}" -- neither their own shift nor exactly one shift up`,
+          });
+          // A real, confirmed gap lived here: this branch (own shift OR the one legitimate
+          // one-shift-up borrow) used to only run the backward-jump check when taskIdx === lockIdx
+          // exactly -- so a driver correctly borrowed one shift up was never checked for a
+          // backward-clock jump at all, the same omission assignWithConditions's own widened pool
+          // had (see the comment there). This audit exists specifically to catch the live
+          // assignment loop's mistakes after the fact, so it needs the identical two-case coverage
+          // that loop's own filtering now has, not just the own-shift half of it.
+        } else if (lockIdx != null && taskIdx != null && !withinSameShiftForwardLimit(driver, st, day, task.startMin)) {
           violations.push({
             driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "same-shift-forward",
-            detail: `own-shift start time ${minutesToHHMM(task.startMin)} is more than ${SAME_SHIFT_MAX_BACKWARD_MIN}min earlier than their last duty (${minutesToHHMM(st.lastDutyStartMin)} on ${st.lastDutyDateKey}), with no real day off in between`,
+            detail: `start time ${minutesToHHMM(task.startMin)} (${taskIdx === lockIdx ? "own shift" : "one-shift-up borrow"}) is more than ${SAME_SHIFT_MAX_BACKWARD_MIN}min earlier than their last duty (${minutesToHHMM(st.lastDutyStartMin)} on ${st.lastDutyDateKey}), with no real day off in between`,
           });
         }
         recordAssignment(state, day, task, driver, conditions);
