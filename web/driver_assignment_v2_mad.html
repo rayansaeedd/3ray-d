@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260820f";
+    var APP_VERSION = "20260820g";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -346,8 +346,8 @@
   </div>
 
   <div class="card">
-    <h2>5. Day-by-day generation</h2>
-    <div class="note">Loading builds this session from the files/dates/conditions above. Pick a day, Generate it, review the counts below, then Save it as a checkpoint once you're happy -- only saved days feed the next day's Generate. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Only Grant, at the bottom of this card, finalizes anything.</div>
+    <h2>5. Generate, then review day-by-day</h2>
+    <div class="note">Loading builds this session from the files/dates/conditions above. Generate the whole month in one consistent pass -- every day sees the exact same, complete picture, so there's no risk from generating out of order or skipping around. Then pick a day below to review it, hand-edit anything, and Save it as a checkpoint once you're happy. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Only Grant, at the bottom of this card, finalizes anything.</div>
     <div class="generate-row">
       <button type="button" class="primary" id="startBtn" disabled>Load days for review</button>
       <span class="status-line" id="statusLine"></span>
@@ -355,10 +355,14 @@
     <div id="dayWorkflow" style="display:none; margin-top:18px;">
       <div id="shiftDemandPanel" class="shift-demand-panel"></div>
       <div class="generate-row" style="margin-top:0;">
+        <button type="button" class="primary" id="generateMonthBtn">Generate whole month</button>
+        <span class="status-line" id="monthStatusLine"></span>
+      </div>
+      <div class="generate-row">
         <label class="field" style="max-width:340px;">Day
           <select id="daySelect"></select>
         </label>
-        <button type="button" class="primary" id="dayGenerateBtn">Generate this day</button>
+        <button type="button" class="plain" id="dayGenerateBtn">Regenerate just this day</button>
         <button type="button" class="plain" id="daySaveBtn">Save this day</button>
         <button type="button" class="plain" id="dayUnsaveBtn">Edit this day (undo save)</button>
       </div>
@@ -515,6 +519,8 @@
   const statusLine = document.getElementById("statusLine");
   const dayWorkflow = document.getElementById("dayWorkflow");
   const shiftDemandPanel = document.getElementById("shiftDemandPanel");
+  const generateMonthBtn = document.getElementById("generateMonthBtn");
+  const monthStatusLine = document.getElementById("monthStatusLine");
   const daySelect = document.getElementById("daySelect");
   const dayGenerateBtn = document.getElementById("dayGenerateBtn");
   const daySaveBtn = document.getElementById("daySaveBtn");
@@ -560,6 +566,11 @@
   function setStatus(msg, isError) {
     statusLine.textContent = msg || "";
     statusLine.className = "status-line" + (isError ? " error" : "");
+  }
+
+  function setMonthStatus(msg, isError) {
+    monthStatusLine.textContent = msg || "";
+    monthStatusLine.className = "status-line" + (isError ? " error" : "");
   }
   function setDayStatus(msg, isError) {
     dayStatusLine.textContent = msg || "";
@@ -2016,6 +2027,111 @@
     renderRosterGrid();
     renderAllDaysTable();
   });
+
+  // Generate the WHOLE loaded month in one consistent pass, instead of requiring the supervisor to
+  // click Generate/Save one day at a time in order. Confirmed directly as a real, reported risk:
+  // "if the supervisor hit day one and save then go to day three by mistake and save then go back
+  // to day two, unsafe... this makes a lot of mistakes" -- generating out of order (or generating a
+  // later day before an earlier one is saved) was already a known, explicitly-guarded-against
+  // failure mode (see the "earlier day isn't saved yet" confirm in the single-day Generate handler
+  // below) -- this removes the whole class of risk by never letting a later day be computed without
+  // every earlier day's real result already threaded through it, in the same pass.
+  //
+  // Confirmed decision on the trade-off this creates: a hand-edit to an already-SAVED day does NOT
+  // automatically ripple forward through the rest of the month -- edits stay local. Re-running this
+  // after some days are saved leaves those SAVED days completely untouched (their real, possibly
+  // hand-edited assignments are replayed into rotation state exactly like a normal Generate would,
+  // via rebuildRotationStateFromSavedDays) and only (re)generates whatever isn't saved yet, in
+  // chronological order, threading state day-to-day within this one pass -- never gated behind
+  // whether each individual day happened to be saved first, which is exactly the gap that let two
+  // days generated at different, out-of-order moments end up looking mutually inconsistent.
+  async function generateWholeMonth() {
+    if (!livePlan) return;
+    const sortedDays = livePlan.taskDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+    const toGenerate = sortedDays.filter((d) => livePlan.dayStatus[d.dateKey] !== "saved");
+    if (!toGenerate.length) {
+      setMonthStatus("Every day is already saved -- nothing left to generate. Edit a day first if you want to redo it.");
+      return;
+    }
+    const alreadyGenerated = toGenerate.filter((d) => livePlan.dayStatus[d.dateKey] === "generated");
+    if (alreadyGenerated.length) {
+      const ok = await confirmEdit(
+        `${alreadyGenerated.length} day(s) were already generated (not yet saved) -- regenerating the whole month will replace their current assignments. Already-SAVED days are never touched. Continue?`
+      );
+      if (!ok) return;
+    }
+
+    generateMonthBtn.disabled = true;
+    try {
+      const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
+      const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
+      let rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
+      Object.keys(memoryRotationState).forEach((id) => {
+        if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
+      });
+
+      let totalCreated = 0, totalStillUnassigned = 0;
+      toGenerate.forEach((day) => {
+        const dateKey = day.dateKey;
+        const prevWrites = livePlan.engineWrites[dateKey] || {};
+        Object.keys(prevWrites).forEach((driverId) => {
+          const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
+          if (driver && driver.statusByDateKey[dateKey] === prevWrites[driverId]) driver.statusByDateKey[dateKey] = "";
+        });
+        // Drop any of THIS engine's own previously auto-created reserve rows for this day before
+        // regenerating it -- otherwise a repeated whole-month run would keep stacking new ones on
+        // top of the old, since nothing else in this loop removes a task row.
+        day.tasks = day.tasks.filter((t) => !t.engineAddedReserve);
+        day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; });
+
+        const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment, livePlan.taskDays);
+        const dayResult = result.perDay[0];
+        rotationState = result.rotationState; // thread forward within this same pass, day to day
+        const newWrites = {};
+        dayResult.assignments.forEach(({ task, driver }) => {
+          const t = day.tasks.find((x) => x.row === task.row);
+          if (t) t.driver = driver;
+          driver.statusByDateKey[dateKey] = task.code;
+          newWrites[driver.id] = task.code;
+        });
+        livePlan.engineWrites[dateKey] = newWrites;
+        const reserveFill = applyReserveAutoFill(dateKey, day, dayResult, rotationState);
+        totalCreated += reserveFill.createdCount;
+        totalStillUnassigned += reserveFill.stillUnassignedCount;
+        livePlan.results[dateKey] = dayResult;
+        livePlan.dayStatus[dateKey] = "generated";
+      });
+      livePlan.lastGeneratedRotationState = rotationState;
+
+      // Self-check across the WHOLE month right after generating it, not just per-day -- re-derives
+      // every driver's state fresh across all of sortedDays (auditRotationRules's own job), started
+      // from cross-month memory anchors so a driver continuing from a prior granted month is
+      // checked correctly from day 1.
+      const violations = E.auditRotationRules(sortedDays, conditions, memoryRotationState);
+      const violationNote = violations.length
+        ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} across the month: ` +
+          violations.slice(0, 5).map((v) => `${v.driverName} ${v.dateKey} -- ${v.detail}`).join(" | ") +
+          (violations.length > 5 ? ` ...and ${violations.length - 5} more` : "")
+        : "";
+
+      renderDaySelector();
+      renderAllDaysTable();
+      renderRosterGrid();
+      onDaySelectChange();
+      setMonthStatus(
+        `Generated ${toGenerate.length} day(s) in one consistent pass. Added ${totalCreated} auto-reserve task${totalCreated === 1 ? "" : "s"} total` +
+        (totalStillUnassigned ? `, ${totalStillUnassigned} driver${totalStillUnassigned === 1 ? "" : "s"} still couldn't get a slot` : "") +
+        `. Review each day below and Save when you're happy with it.${violationNote}`,
+        !!violations.length
+      );
+    } catch (err) {
+      console.error(err);
+      setMonthStatus("Could not generate the month: " + err.message, true);
+    } finally {
+      generateMonthBtn.disabled = false;
+    }
+  }
+  generateMonthBtn.addEventListener("click", generateWholeMonth);
 
   function onDaySelectChange() {
     const dateKey = daySelect.value;
