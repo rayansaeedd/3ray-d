@@ -585,6 +585,21 @@
   // count all the way to zero (confirmed directly: a shift with ~9% of demand rounded to 0 of 6
   // seeded drivers), which doesn't just make that shift's tasks unlikely to fill -- with nobody
   // ever locked into it, they become permanently unfillable, every single time they occur.
+  // Early Morning (shift index 0) is structurally different from every other band: when a task's
+  // own-shift pool comes up empty, assignWithConditions widens to exactly the one shift before it
+  // in the fixed chain -- except band 0, which has no shift before it to borrow from at all (see
+  // "shiftIdx 0 (Early Morning) has no shift before it to borrow from" there). Every other band
+  // gets a second chance on a day its own locked drivers happen to be thin; Early Morning never
+  // does. Confirmed directly from a real month: despite carrying the single largest demand share
+  // of any band (~45%) and a seed count roughly matching that share, Early Morning still filled
+  // only 52% of its tasks all month (worst of any band with real demand) -- one real day (Sep21)
+  // hit zero of seven. A proportional seed alone isn't enough here, since -- unlike every other
+  // band -- there's no rescue to fall back on when that day's own-locked subset thins out from
+  // leave/rest. Confirmed decision: seed MORE drivers into it than raw demand share alone would
+  // give, as a standing safety margin against exactly that. 1.5x is a deliberately simple, easily
+  // retuned starting point, not a value derived from a target fill rate.
+  const EARLY_MORNING_SEED_BOOST = 1.5;
+
   function computeShiftSeedAssignment(rosterData, taskDays, conditions) {
     const demand = computeOpenShiftDemand(taskDays, conditions);
     const n = conditions.shifts.length;
@@ -592,6 +607,7 @@
     // No task data to learn a shape from at all -- fall back to the plain even split this engine
     // used before this feature existed, rather than pretending to know a distribution.
     const shares = totalDemand > 0 ? demand.map((c) => c / totalDemand) : demand.map(() => 1 / n);
+    if (shares[0] > 0) shares[0] *= EARLY_MORNING_SEED_BOOST;
 
     const assignment = {};
     const seededCount = new Array(n).fill(0);
