@@ -366,6 +366,43 @@
     });
   }
 
+  // "SD" (and the same lettered-sequence variants reserve slots use -- SDB, SDC, SDD, ...) marks
+  // a driver confined to office duty for the day -- confirmed directly: possibly a violation or
+  // other administrative reason, "they cannot work as a reserve or take a trip... stuck to what
+  // the task origin task folder said." Only meaningful for a task the ORIGINAL file already
+  // resolved to a real driver -- a task the engine itself creates never uses this code.
+  function isOfficeDutyCode(code) {
+    const m = /^(\d{3,4})\/(\d{0,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    if (!m) return false;
+    return m[3].toUpperCase().startsWith("SD");
+  }
+
+  // A pre-existing SD task is already never touched or reassigned (same guarantee every other
+  // real originalDriverRawText task gets) -- the gap this closes is the OTHER direction: nothing
+  // stops that same driver from ALSO being handed a reserve or trip that same day, since the
+  // per-day availability check only ever looks at the Roster's own status cell, never at whether
+  // the Task Program already has this driver on a real task. Confirmed fix: rather than adding a
+  // separate cross-check into the per-task loop, write the SD code straight into the driver's
+  // Roster cell for that date -- the EXISTING isAvailable() contract ("blank = available")
+  // then excludes them from everything else on its own, no new logic needed anywhere downstream.
+  // Only ever touches a cell that's genuinely blank going in -- a Roster cell the supervisor
+  // already filled with something else (a real leave code, or anything else) is left exactly as
+  // it was. Called once, right after resolveExistingTaskAssignments and before any Generate.
+  function syncOfficeDutyToRoster(taskDays, rosterData) {
+    let synced = 0;
+    taskDays.forEach((day) => {
+      day.tasks.forEach((task) => {
+        if (!task.driver || !isOfficeDutyCode(task.code)) return;
+        const driver = task.driver;
+        if (isAvailable(driver.statusByDateKey[day.dateKey])) {
+          driver.statusByDateKey[day.dateKey] = task.code;
+          synced++;
+        }
+      });
+    });
+    return synced;
+  }
+
   function shuffle(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -1648,6 +1685,7 @@
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
     buildReserveTasksForUnassignedDrivers,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
+    isOfficeDutyCode, syncOfficeDutyToRoster,
     recordAssignment, rebuildRotationStateFromSavedDays, auditRotationRules,
     buildMonthlySummary,
     minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
