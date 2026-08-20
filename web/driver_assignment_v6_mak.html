@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260820i";
+    var APP_VERSION = "20260820j";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1218,19 +1218,20 @@
       taskByDriverPerDate[day.dateKey] = map;
     });
 
-    // Same "last week" definition the driver-reassignment picker's badge already uses (one week
-    // before whichever day is currently selected), computed once for the whole grid rather than
-    // per row -- reads from the same session-replay + cross-month-memory blend, so this is
-    // literally "from the memory" the supervisor loaded or has already saved this session.
-    const selectedDay = livePlan.taskDays.find((d) => d.dateKey === selectedDateKey);
+    // Reads from the same session-replay + cross-month-memory blend, so this is literally "from
+    // the memory" the supervisor loaded or has already saved this session. Confirmed directly:
+    // this used to show a PROJECTED band for a fixed reference week (computed from the rotation
+    // formula, not real duty data -- could even say "no day-by-day record" while still showing a
+    // color), which the supervisor found confusing next to the real evidence in the popup below.
+    // Now reflects the driver's actual last real duty's own start time -- the exact same fact the
+    // popup's "Last real duty on record" row shows, so the dot's color and the popup's text can
+    // never disagree.
     const gridRotationState = computeReadOnlyRotationState();
-    const gridLastWeekDate = selectedDay ? E.addDays(selectedDay.date, -7) : null;
     function lastWeekSwatch(driverId) {
-      if (!gridLastWeekDate) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No shift on record for last week"></span>`;
       const st = gridRotationState[driverId];
-      const idx = st ? E.computeShiftIndexForDriver(st, conditions, gridLastWeekDate) : null;
-      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No shift on record for last week -- click for details"></span>`;
-      return `<span class="roster-name-swatch shift-swatch" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[idx]};" title="Last week: ${escapeAttr(conditions.shifts[idx].name)} -- click for details"></span>`;
+      const idx = st && st.lastDutyStartMin != null ? E.classifyShiftForMinutes(conditions, st.lastDutyStartMin) : null;
+      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No real duty on record -- click for details"></span>`;
+      return `<span class="roster-name-swatch shift-swatch" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[idx]};" title="Last real duty: ${escapeAttr(conditions.shifts[idx].name)} -- click for details"></span>`;
     }
 
     // Legend: which color goes with which shift, so the supervisor never has to guess -- reads
@@ -1457,54 +1458,20 @@
   });
 
   // --- Roster name swatch: click for a small "why this color" info window -------------------
-  // The dot itself only has room for one color, but the supervisor asked to see more: last
-  // week's shift AND the week before it (so a rotation trend is visible at a glance), plus how
-  // many reserve vs trip tasks that driver actually worked last week. The shift values reuse the
-  // exact same rotation-state lookup the dot's own color already comes from; the reserve/trip
-  // breakdown is tallied fresh from this session's own loaded days (real per-day task data, not
-  // an estimate) for the 7 days ending the day before the selected day -- if none of those dates
-  // are in the currently loaded range, the breakdown says so instead of showing a misleading 0/0.
+  // Used to also show two PROJECTED reference weeks (computed from the rotation formula, not real
+  // duty data) below the real evidence -- confirmed directly as confusing noise once the real
+  // "Last real duty on record" row existed ("I told you that you should remember the last shift
+  // only"): removed, leaving only the one real fact this whole popup exists to show. Reads
+  // straight off st.lastDutyDateKey/lastDutyStartMin/lastDutyEndMin/lastDutyEndDateKey, the same
+  // fields recordAssignment maintains and the backward-jump/rest-time rules already rely on --
+  // this is the literal duty the memory system carries forward, shown as-is.
   function openRosterSwatchInfo(driverId) {
     if (!livePlan) return;
     const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
-    const selectedDay = livePlan.taskDays.find((d) => d.dateKey === daySelect.value);
-    if (!driver || !selectedDay) return;
+    if (!driver) return;
     const state = computeReadOnlyRotationState();
     const st = state[driverId];
 
-    function shiftLabelHtml(refDate) {
-      const idx = st ? E.computeShiftIndexForDriver(st, conditions, refDate) : null;
-      if (idx == null) return `<span style="color:#999; font-style:italic;">no shift on record</span>`;
-      return `<span class="shift-swatch" style="background:${SHIFT_COLORS[idx]};"></span>${escapeAttr(conditions.shifts[idx].name)}`;
-    }
-
-    const week1Start = E.addDays(selectedDay.date, -7);
-    const week1End = E.addDays(selectedDay.date, -1);
-    const week2Start = E.addDays(selectedDay.date, -14);
-    const week1StartKey = E.dateKey(week1Start);
-    const week1EndKey = E.dateKey(week1End);
-
-    let reserveCount = 0, tripCount = 0, coveredDays = 0;
-    livePlan.taskDays.forEach((day) => {
-      if (day.dateKey < week1StartKey || day.dateKey > week1EndKey) return;
-      coveredDays++;
-      day.tasks.forEach((t) => {
-        if (!t.driver || t.driver.id !== driverId) return;
-        if (t.kind === "reserve") reserveCount++; else tripCount++;
-      });
-    });
-    const breakdownHtml = coveredDays > 0
-      ? `<div class="roster-swatch-info-breakdown">${reserveCount} reserve, ${tripCount} trip</div>`
-      : `<div class="roster-swatch-info-breakdown" style="font-style:italic;">no day-by-day record in this session's loaded range</div>`;
-
-    // "Last week" / "week before" above are PROJECTED from the rotation formula (shiftAnchorDate/
-    // shiftAnchorIndex advanced forward by however many shiftLockWeeks blocks have elapsed) -- not
-    // the actual real duty the memory anchor itself is built from. Confirmed directly as a real
-    // gap: the supervisor wants to see the REAL evidence -- the true last recorded duty's own
-    // date, shift, and actual sign-in/sign-out clock time -- not just a computed label. Reads
-    // straight off st.lastDutyDateKey/lastDutyStartMin/lastDutyEndMin/lastDutyEndDateKey, the same
-    // fields recordAssignment maintains and the backward-jump/rest-time rules already rely on --
-    // this is the literal duty "the new memory system" carries forward, shown as-is.
     let lastDutyHtml;
     if (st && st.lastDutyDateKey && st.lastDutyStartMin != null) {
       const startIdx = E.classifyShiftForMinutes(conditions, st.lastDutyStartMin);
@@ -1530,18 +1497,7 @@
     }
 
     rosterSwatchInfoTitle.textContent = driver.name;
-    rosterSwatchInfoContent.innerHTML = `
-      ${lastDutyHtml}
-      <div class="roster-swatch-info-row">
-        <div class="roster-swatch-info-label">Last week (${week1StartKey} to ${week1EndKey})</div>
-        <div class="roster-swatch-info-value">${shiftLabelHtml(week1Start)}</div>
-        ${breakdownHtml}
-      </div>
-      <div class="roster-swatch-info-row">
-        <div class="roster-swatch-info-label">Week before that</div>
-        <div class="roster-swatch-info-value">${shiftLabelHtml(week2Start)}</div>
-      </div>
-    `;
+    rosterSwatchInfoContent.innerHTML = lastDutyHtml;
     rosterSwatchInfoOverlay.style.display = "flex";
   }
   function closeRosterSwatchInfo() { rosterSwatchInfoOverlay.style.display = "none"; }
