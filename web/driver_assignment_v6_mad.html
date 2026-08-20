@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Driver Task Assignment v2 — Makkah Station</title>
+<title>Driver Task Assignment v6 — Madinah Station</title>
 <script src="vendor/exceljs.min.js"></script>
 <script src="vendor/jszip.min.js"></script>
 <!-- The ?v=YYYYMMDD on these two is a cache-buster: browsers (mobile ones especially) can keep
      serving an old cached copy of a plain filename even after a new version is deployed, which
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
-     them (both stations, v1 and v2). -->
+     them (both stations, v1 and v6). -->
 <script src="driver_assignment_engine.js?v=20260820e"></script>
 <script src="xlsx_surgical_patch.js?v=20260819a"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260820g";
+    var APP_VERSION = "20260820h";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -257,12 +257,12 @@
 <body>
 
 <header>
-  <h1>Driver Task Assignment v2 — Makkah Station</h1>
-  <div class="sub">Day-by-day generation: load both files, set your conditions, then Generate one day at a time, review it, and Save it as a checkpoint that the next day's Generate builds on. Once you're happy with the whole month, Grant it to finalize the schedule.</div>
+  <h1>Driver Task Assignment v6 — Madinah Station</h1>
+  <div class="sub">Load both files, set your conditions, then Generate the whole month in one consistent pass. Review and hand-edit each day, Save it as a checkpoint, then Grant the month once you're happy to finalize the schedule.</div>
 </header>
 
 <main>
-  <div class="stage-banner">v2, work in progress: this build proves out the day-by-day Generate/Save/Grant mechanics. Editable grids, driver-search reassignment, Add Task and file export land in later steps -- v1 (the whole-month tool) is unaffected and still works the same way it always has.</div>
+  <div class="stage-banner">v6, day-by-day review with editable grids, driver-search reassignment, Add Task and file export -- v1 (the original whole-month tool) is unaffected and still works the same way it always has.</div>
 
   <div class="card">
     <h2>1. Schedule dates</h2>
@@ -465,7 +465,7 @@
 
 <script>
 (function () {
-  const STATION = "MAK";
+  const STATION = "MAD";
   const E = window.DriverAssignmentEngine;
 
   // Confirmed scheme (matches SHIFT_FLAG_ARGB_CANDIDATES's first choice in xlsx_surgical_patch.js,
@@ -578,10 +578,13 @@
   }
 
   // --- Conditions: shifts/ratio/rest-time/shift-lock, persisted per station in this browser --
-  // A separate localStorage key from v1's ("...V2_...") since v2's conditions object always
+  // A separate localStorage key from v1's ("...V2_...") since this page's conditions object always
   // carries shiftLockWeeks -- loading v1's older saved shape here (which may predate that field,
   // from the stretch when shift-lock was removed) would otherwise silently fail
-  // conditionsAreComplete with no obvious reason why.
+  // conditionsAreComplete with no obvious reason why. The literal "V2_" in the key itself is
+  // deliberately NOT renamed to match this page's current v6 label -- it's just an internal
+  // namespace tag from when this page was called v2, and changing it would orphan every
+  // supervisor's already-saved Conditions in their browser for no real benefit.
   const CONDITIONS_KEY = "driverAssignmentConditionsV2_" + STATION;
 
   function loadConditions() {
@@ -2185,7 +2188,7 @@
     // Also passes the WHOLE loaded range as the lookahead so a fresh assignment on this one day
     // never gets stranded ahead of a real, already-fixed pre-existing duty on a LATER day this
     // session hasn't generated yet (see buildFutureFixedShiftIndex in engine.js) -- without this,
-    // v2's per-day Generate would only ever see today's single-day taskDays array and have no way
+    // this page's per-day Generate would only ever see today's single-day taskDays array and have no way
     // to know a future day already has a real answer waiting.
     const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment, livePlan.taskDays);
     const dayResult = result.perDay[0];
