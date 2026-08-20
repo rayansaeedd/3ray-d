@@ -986,15 +986,21 @@
   // legal -- confirmed directly against a real contrasting pair: a gradual 1h/1h/2h/1h day-to-day
   // climb ("something like that smooth and clean") vs. a single 5-hour jump in one day (12:00 ->
   // 17:00) singled out as exactly the pattern to avoid -- "sleep cycle cannot be affected." Unlike
-  // the backward rule above, this is a soft PREFERENCE, not a hard block -- confirmed directly
-  // ("if you have to do this there's no other choice then you can do it") -- so it's applied as a
-  // pool-narrowing step in the per-task loop (prefer smooth-step candidates; fall back to the full
-  // pool only when literally nobody remaining has a smooth option), never as a reason to leave a
-  // task unassigned the way rest-time or the backward cap can. Confirmed to outrank the
-  // reserve/trip fairness ratio when the two disagree ("smoothness wins first") -- narrows the pool
-  // before that ratio sort ever runs, not just a tie-break within it. 2 hours matches the largest
-  // single-day step in the confirmed-good example.
-  const SMOOTH_FORWARD_STEP_MIN = 120;
+  // the backward rule above, this is a soft PREFERENCE, not a hard block -- confirmed directly,
+  // twice: "if you have to do this there's no other choice then you can do it," and confirmed
+  // again when asked directly whether to make it a hard rule ("no"). So it's applied as a
+  // pool-narrowing step in the per-task loop, never as a reason to leave a task unassigned the way
+  // rest-time or the backward cap can. Confirmed to outrank the reserve/trip fairness ratio when
+  // the two disagree ("smoothness wins first") -- narrows the pool before that ratio sort ever
+  // runs, not just a tie-break within it.
+  //
+  // Graduated, not a single cutoff -- confirmed directly ("let's start with two hours, if he
+  // cannot do that two hours let's give him a bigger window to three hour or 3 1/2 or four hours
+  // as a max"): try the tightest window first, widen a step at a time only when that tier's pool
+  // is genuinely empty, and only fall through to a truly unlimited jump if even the widest tier
+  // (4h) has nobody. Each step is strictly wider than the last, so this is naturally ordered --
+  // whichever tier a candidate satisfies, they also satisfy every tier after it.
+  const SMOOTH_FORWARD_STEP_TIERS_MIN = [120, 180, 210, 240];
   function forwardStepMinutes(driver, st, day, taskStartMin) {
     if (hadRealDayOffSince(driver, st.lastDutyDateKey, day.dateKey) || st.lastDutyStartMin == null) return 0;
     const delta = signedMinuteDelta(st.lastDutyStartMin, taskStartMin);
@@ -1172,11 +1178,16 @@
 
         // Rule 6: narrow toward a smooth forward step BEFORE the kind-alternation/fairness
         // preferences below even get a look -- confirmed to outrank the reserve/trip ratio, not
-        // just break a tie with it (see forwardStepMinutes/SMOOTH_FORWARD_STEP_MIN above). Falls
-        // back to the full pool only when every remaining candidate would need a bigger jump --
-        // this is a preference, never a reason to leave the task unassigned.
-        const smoothPool = pool.filter((d) => forwardStepMinutes(d, state[d.id], day, task.startMin) <= SMOOTH_FORWARD_STEP_MIN);
-        const workingPool = smoothPool.length ? smoothPool : pool;
+        // just break a tie with it (see forwardStepMinutes/SMOOTH_FORWARD_STEP_TIERS_MIN above).
+        // Tries the tightest tier first, widening a step at a time only when that tier's pool is
+        // genuinely empty; falls back to the full pool (truly unlimited jump) only when even the
+        // widest tier has nobody -- this is a preference, never a reason to leave the task
+        // unassigned.
+        let workingPool = pool;
+        for (const tierMax of SMOOTH_FORWARD_STEP_TIERS_MIN) {
+          const tierPool = pool.filter((d) => forwardStepMinutes(d, state[d.id], day, task.startMin) <= tierMax);
+          if (tierPool.length) { workingPool = tierPool; break; }
+        }
 
         const wantKind = task.kind === "reserve" ? "reserve" : "trip";
 
