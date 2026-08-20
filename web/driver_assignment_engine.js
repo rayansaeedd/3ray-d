@@ -722,6 +722,33 @@
     return kinds[kinds.length - 1] === wantKind && kinds[kinds.length - 2] === wantKind;
   }
 
+  // A real, confirmed gap: wouldBeThirdConsecutiveKind above only ever narrows the pool down to
+  // "avoid becoming a 3rd in a row" -- past that, the per-task loop's cascade fell all the way
+  // back to the FULL unfiltered pool with no further distinction at all between a driver about to
+  // become a 4th-in-a-row and one about to become a 7th. Confirmed against a real exported month:
+  // one driver hit 6 consecutive reserve days this way. "No 4 consecutive... soft preference with
+  // last-resort escape valve" means 4 is the escape valve, not an open door past 3 -- so this adds
+  // the missing middle tier (prefer avoiding a 4th too), with the TRUE last resort (see
+  // assignWithConditions) now reserved only for when literally nobody can avoid a 4th, and even
+  // then preferring whoever's current streak is shortest so the burden doesn't keep landing on the
+  // same driver day after day.
+  function wouldBeFourthConsecutiveKind(driverState, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    if (kinds.length < 3) return false;
+    return kinds[kinds.length - 1] === wantKind && kinds[kinds.length - 2] === wantKind && kinds[kinds.length - 3] === wantKind;
+  }
+
+  // How many trailing entries of recentKinds already equal wantKind -- used only as a last-resort
+  // tie-break (see assignWithConditions) once every candidate is already guaranteed to exceed the
+  // preferred 3-in-a-row cap, so the pick at least goes to whoever's shallowest into that streak
+  // rather than piling an even longer one onto whoever happens to sort first otherwise.
+  function currentStreakLength(driverState, wantKind) {
+    const kinds = driverState.recentKinds || [];
+    let n = 0;
+    for (let i = kinds.length - 1; i >= 0 && kinds[i] === wantKind; i--) n++;
+    return n;
+  }
+
   // rotationState: { [driverId]: { lastDutyEndDateKey, lastDutyEndMin, recentKinds: [],
   // cumulativeReserve, cumulativeTrip } } -- passed in and mutated in place so the caller can
   // persist it (e.g. to localStorage per station) and hand it back in on the next run to
@@ -1162,20 +1189,38 @@
         //    (RTRRTR) -- notRepeating is always a subset of this (repeating yesterday's kind is a
         //    precondition for a third-in-a-row, so anyone who avoided a repeat automatically
         //    avoided a streak too).
-        // 3) last resort -- if literally every remaining candidate would be creating a 3rd
-        //    consecutive same-kind duty, allow it anyway rather than leave the task unassigned (and
-        //    that driver with nothing that day) purely to protect the mix.
+        // 3) fallback -- a 3rd in a row is fine as long as it wouldn't be a 4TH (RTRRRT) --
+        //    notThirdConsecutive is always a subset of this for the same reason as above. This tier
+        //    was missing entirely until a real audit found a driver hitting 6 consecutive reserve
+        //    days -- "no 4 consecutive... soft preference with last-resort escape valve" means 4 is
+        //    the escape valve, not an open door past 3.
+        // 4) true last resort -- if literally every remaining candidate would already be a 4th (or
+        //    deeper) consecutive same-kind duty, allow it anyway rather than leave the task
+        //    unassigned, but prefer whoever's CURRENT streak is shortest (see the sort below) so
+        //    the same driver doesn't keep absorbing every subsequent day's worth of this.
         const notRepeating = workingPool.filter((d) => !isRepeatingLastKind(state[d.id], wantKind));
         const notThirdConsecutive = workingPool.filter((d) => !wouldBeThirdConsecutiveKind(state[d.id], wantKind));
-        const finalPool = notRepeating.length ? notRepeating : (notThirdConsecutive.length ? notThirdConsecutive : workingPool);
+        const notFourthConsecutive = workingPool.filter((d) => !wouldBeFourthConsecutiveKind(state[d.id], wantKind));
+        const isTrueLastResort = !notRepeating.length && !notThirdConsecutive.length && !notFourthConsecutive.length;
+        const finalPool = notRepeating.length ? notRepeating
+          : notThirdConsecutive.length ? notThirdConsecutive
+          : notFourthConsecutive.length ? notFourthConsecutive
+          : workingPool;
 
         // Soft nudge toward the configured ratio -- whoever's furthest behind on this kind
         // relative to their own history sorts first, but this never excludes anyone the way a
         // hard quota did. Ties break toward the SMALLEST forward step within a driver's own
         // current work stretch (0 for anyone exempt -- a fresh stretch, or a widened/first-ever
         // candidate) -- matches the gradual, minimal-creep shape rule 6 prefers, not just "forward
-        // is legal, jump however far".
+        // is legal, jump however far". In the true-last-resort tier, current streak length decides
+        // FIRST, ahead of both -- every remaining candidate is already guaranteed to exceed the
+        // preferred 3-in-a-row cap, so the priority shifts to minimizing how much further past it
+        // this pick goes, not who's most behind on ratio.
         finalPool.sort((a, b) => {
+          if (isTrueLastResort) {
+            const streakDiff = currentStreakLength(state[a.id], wantKind) - currentStreakLength(state[b.id], wantKind);
+            if (streakDiff !== 0) return streakDiff;
+          }
           const scoreA = ratioPreference(state[a.id], targetReserveFrac, wantKind) + specialRuleBias(a, task, rules);
           const scoreB = ratioPreference(state[b.id], targetReserveFrac, wantKind) + specialRuleBias(b, task, rules);
           const ratioDiff = scoreB - scoreA;
@@ -1342,6 +1387,19 @@
           violations.push({
             driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "same-shift-forward",
             detail: `start time ${minutesToHHMM(task.startMin)} (${taskIdx === lockIdx ? "own shift" : "one-shift-up borrow"}) is more than ${SAME_SHIFT_MAX_BACKWARD_MIN}min earlier than their last duty (${minutesToHHMM(st.lastDutyStartMin)} on ${st.lastDutyDateKey}), with no real day off in between`,
+          });
+        }
+
+        // This audit never checked consecutive-kind streaks at all, despite existing specifically
+        // to catch the live loop's mistakes after the fact -- the same missing coverage the live
+        // loop itself had before wouldBeFourthConsecutiveKind was added (see there). Uses the same
+        // reserve-vs-not-reserve bucketing recordAssignment always has (a sweep counts as "trip"
+        // for this purpose, matching live behavior).
+        const wantKindForStreak = task.kind === "reserve" ? "reserve" : "trip";
+        if (wouldBeFourthConsecutiveKind(st, wantKindForStreak)) {
+          violations.push({
+            driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "consecutive-kind",
+            detail: `assigned a ${wantKindForStreak} that would be their 4th+ consecutive ${wantKindForStreak} in a row (recent history: ${(st.recentKinds || []).join(",") || "none"})`,
           });
         }
         recordAssignment(state, day, task, driver, conditions);
