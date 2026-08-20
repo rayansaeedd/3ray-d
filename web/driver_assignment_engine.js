@@ -417,20 +417,18 @@
       // to solve. Narrowing the bands themselves is the fix: "I don't want to see a driver moving
       // or changing his hour a lot and the engine considering it as the same shift... so I'm
       // trying to make this new selection so the engine understand [what] hours [are] acceptable."
-      // Each of the three original macro-periods (Morning 03:30-12:30=9h, Afternoon 12:30-18:00=
-      // 5.5h, Night 18:00-03:30=9.5h -- the same real-data-validated boundaries as before) is split
-      // into three even thirds here as a clean starting point; still fully editable in the
-      // Conditions panel like every other boundary.
+      // Clean round-hour boundaries, confirmed directly (replacing an earlier :30/:10/:20-aligned
+      // draft) -- still fully editable in the Conditions panel like every other boundary.
       shifts: [
-        { name: "Early Morning", start: "03:30", end: "06:30" },
-        { name: "Morning", start: "06:30", end: "09:30" },
-        { name: "Late Morning", start: "09:30", end: "12:30" },
-        { name: "Early Afternoon", start: "12:30", end: "14:20" },
-        { name: "Afternoon", start: "14:20", end: "16:10" },
-        { name: "Late Afternoon", start: "16:10", end: "18:00" },
-        { name: "Early Night", start: "18:00", end: "21:10" },
-        { name: "Night", start: "21:10", end: "00:20" },
-        { name: "Late Night", start: "00:20", end: "03:30" },
+        { name: "Early Morning", start: "03:00", end: "06:00" },
+        { name: "Morning", start: "06:00", end: "09:00" },
+        { name: "Late Morning", start: "09:00", end: "12:00" },
+        { name: "Early Afternoon", start: "12:00", end: "14:00" },
+        { name: "Afternoon", start: "14:00", end: "16:00" },
+        { name: "Late Afternoon", start: "16:00", end: "18:00" },
+        { name: "Early Night", start: "18:00", end: "20:00" },
+        { name: "Night", start: "20:00", end: "00:00" },
+        { name: "Late Night", start: "00:00", end: "03:00" },
       ],
       ratioReserveDays: 4,
       ratioTripDays: 2,
@@ -590,15 +588,20 @@
   // in the fixed chain -- except band 0, which has no shift before it to borrow from at all (see
   // "shiftIdx 0 (Early Morning) has no shift before it to borrow from" there). Every other band
   // gets a second chance on a day its own locked drivers happen to be thin; Early Morning never
-  // does. Confirmed directly from a real month: despite carrying the single largest demand share
-  // of any band (~45%) and a seed count roughly matching that share, Early Morning still filled
-  // only 52% of its tasks all month (worst of any band with real demand) -- one real day (Sep21)
-  // hit zero of seven. A proportional seed alone isn't enough here, since -- unlike every other
-  // band -- there's no rescue to fall back on when that day's own-locked subset thins out from
-  // leave/rest. Confirmed decision: seed MORE drivers into it than raw demand share alone would
-  // give, as a standing safety margin against exactly that. 1.5x is a deliberately simple, easily
-  // retuned starting point, not a value derived from a target fill rate.
-  const EARLY_MORNING_SEED_BOOST = 1.5;
+  // does. Checked against a real month: Early Morning's real demand share is actually modest
+  // (~13%, roughly in line with an even 9-way split) -- an earlier "~45%" figure quoted here was
+  // wrong, traced to a bug in an offline diagnostic script (it read "already answered" status off
+  // an already-generated file, so every task the engine itself successfully filled looked
+  // pre-existing, and only Early Morning's OWN leftover failures showed up as "demand" -- circular).
+  // With the demand share corrected, Early Morning still filled only 52% of its tasks all month
+  // (worst of any band with real demand) purely because it has no rescue when its own thin, and
+  // simulating an actual rescue mechanism instead of a seed boost hit the same ~88% ceiling --
+  // the real constraint is that roughly HALF the entire roster is off on any given day, every day,
+  // all month (leave/vacation/training), not something either fix can conjure past. Confirmed
+  // decision: still worth a boost as a real, if modest, improvement -- 2.0x empirically gave the
+  // best result of the values tested (1.0x-5.0x) against the real month's data before returns
+  // turn negative from starving other bands.
+  const EARLY_MORNING_SEED_BOOST = 2.0;
 
   function computeShiftSeedAssignment(rosterData, taskDays, conditions) {
     const demand = computeOpenShiftDemand(taskDays, conditions);
