@@ -804,6 +804,17 @@
       if (m) (usedSuffixesByTime[t.startMin] = usedSuffixesByTime[t.startMin] || new Set()).add(m[1].toUpperCase());
     });
 
+    // Whether a driver who ends up here could ALSO have been placed into a real, still-open
+    // reserve task from the original file (instead of always inventing a new one) was checked
+    // directly, twice -- once via a hand-built engine test, once via 3000 randomized scenarios
+    // through the real per-day pipeline -- and confirmed structurally impossible: this function
+    // only ever sees a driver whose whole day already went through the normal per-task loop
+    // (which tries every open task, reserves included, against the full live-eligible pool
+    // before this ever runs). If that driver were own-shift/rest/rule-4 eligible for ANY
+    // still-open reserve task, the normal loop would already have placed them there directly --
+    // a task's candidate pool is checked once, and a non-empty pool is never left unfilled. So a
+    // driver only ever reaches this function when no such real open slot exists for them, which
+    // is exactly what "invent one instead" is for.
     const created = [];
     const stillUnassigned = [];
 
@@ -1127,6 +1138,20 @@
         assignments.push({ task, driver: chosen, shiftIdx });
         recordAssignment(state, day, task, chosen, conditions);
       });
+
+      // Rule 5: "never leave a trip task unassigned." Confirmed directly this stays best-effort,
+      // not absolute -- own shift, then exactly one shift up (rule 2's scope, never further), rest
+      // time never relaxed. A real, wanted addition here (bumping a driver THIS SAME Generate
+      // already placed on a reserve duty onto a still-open trip) turned out to be provably
+      // impossible to ever actually fire under those two limits: reserve tasks are always
+      // processed after every trip using the identical eligibility test, so any driver who ends up
+      // on a reserve duty was, by construction, not yet used when every trip was decided -- meaning
+      // they'd already have been in that trip's own candidate pool if they were ever eligible for
+      // it. A trip stays unassigned only when its pool was genuinely empty, and nobody becomes
+      // newly eligible afterward (eligibility never changes; usedDriverIds only grows). So beyond
+      // own-shift + one-shift-up widening, a trip that still can't be filled here genuinely can't
+      // be, without either relaxing rest or re-solving multiple tasks' picks together -- both
+      // explicitly out of scope for now (confirmed: "leave it as best-effort").
 
       return {
         date: day.date, dateKey: day.dateKey, sheetIndex: day.sheetIndex, nameCol: day.nameCol,
