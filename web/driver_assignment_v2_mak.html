@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260820e";
+    var APP_VERSION = "20260820f";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1476,8 +1476,41 @@
       ? `<div class="roster-swatch-info-breakdown">${reserveCount} reserve, ${tripCount} trip</div>`
       : `<div class="roster-swatch-info-breakdown" style="font-style:italic;">no day-by-day record in this session's loaded range</div>`;
 
+    // "Last week" / "week before" above are PROJECTED from the rotation formula (shiftAnchorDate/
+    // shiftAnchorIndex advanced forward by however many shiftLockWeeks blocks have elapsed) -- not
+    // the actual real duty the memory anchor itself is built from. Confirmed directly as a real
+    // gap: the supervisor wants to see the REAL evidence -- the true last recorded duty's own
+    // date, shift, and actual sign-in/sign-out clock time -- not just a computed label. Reads
+    // straight off st.lastDutyDateKey/lastDutyStartMin/lastDutyEndMin/lastDutyEndDateKey, the same
+    // fields recordAssignment maintains and the backward-jump/rest-time rules already rely on --
+    // this is the literal duty "the new memory system" carries forward, shown as-is.
+    let lastDutyHtml;
+    if (st && st.lastDutyDateKey && st.lastDutyStartMin != null) {
+      const startIdx = E.classifyShiftForMinutes(conditions, st.lastDutyStartMin);
+      const startLabel = startIdx != null
+        ? `<span class="shift-swatch" style="background:${SHIFT_COLORS[startIdx]};"></span>${escapeAttr(conditions.shifts[startIdx].name)}`
+        : "";
+      const signIn = E.minutesToHHMM(st.lastDutyStartMin);
+      const signOut = st.lastDutyEndMin != null ? E.minutesToHHMM(st.lastDutyEndMin) : "--";
+      const overnightNote = st.lastDutyEndDateKey && st.lastDutyEndDateKey !== st.lastDutyDateKey
+        ? ` <span style="color:#888;">(signs out ${escapeAttr(st.lastDutyEndDateKey)})</span>` : "";
+      lastDutyHtml = `
+        <div class="roster-swatch-info-row">
+          <div class="roster-swatch-info-label">Last real duty on record (${escapeAttr(st.lastDutyDateKey)})</div>
+          <div class="roster-swatch-info-value">${startLabel}</div>
+          <div class="roster-swatch-info-breakdown">Sign in ${signIn} &middot; Sign out ${signOut}${overnightNote}</div>
+        </div>`;
+    } else {
+      lastDutyHtml = `
+        <div class="roster-swatch-info-row">
+          <div class="roster-swatch-info-label">Last real duty on record</div>
+          <div class="roster-swatch-info-value" style="color:#999; font-style:italic;">none in this session's memory/history</div>
+        </div>`;
+    }
+
     rosterSwatchInfoTitle.textContent = driver.name;
     rosterSwatchInfoContent.innerHTML = `
+      ${lastDutyHtml}
       <div class="roster-swatch-info-row">
         <div class="roster-swatch-info-label">Last week (${week1StartKey} to ${week1EndKey})</div>
         <div class="roster-swatch-info-value">${shiftLabelHtml(week1Start)}</div>
