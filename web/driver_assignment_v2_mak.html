@@ -628,11 +628,18 @@
     if (!key) {
       memoryRotationState = {};
       setMemoryStatus("Starting fresh -- no memory loaded.");
+      renderRosterGrid();
       return;
     }
     const slot = memorySlots[key];
     memoryRotationState = JSON.parse(JSON.stringify(slot.rotationState));
     setMemoryStatus(`Continuing from granted memory: ${slot.monthLabel} (${Object.keys(memoryRotationState).length} driver${Object.keys(memoryRotationState).length === 1 ? "" : "s"}).`);
+    // The roster grid's per-driver "last week" swatch (and the driver-picker badge, computed fresh
+    // on open) both read memoryRotationState through computeReadOnlyRotationState() -- but nothing
+    // else re-renders the grid just because memory changed, so without this it keeps showing
+    // whatever memory was active at its last render (a real, reported bug: switching memory here
+    // left the roster's swatches "stuck to the old memory" until some unrelated edit redrew them).
+    renderRosterGrid();
   });
 
   // Permanently removes a granted month from THIS browser's memory only -- the backup .xlsx
@@ -653,6 +660,7 @@
     memoryRotationState = {};
     renderMemorySlotOptions();
     setMemoryStatus("Starting fresh -- no memory loaded.");
+    renderRosterGrid();
   });
 
   let _confirmEditResolve = null;
@@ -930,6 +938,7 @@
       const count = Object.keys(memoryRotationState).length;
       setMemoryStatus(`Loaded memory file: ${parsed.station || "unknown station"}, granted for ${parsed.monthLabel || "an unknown month"} (${count} driver${count === 1 ? "" : "s"}).`);
       setStatus("");
+      renderRosterGrid();
     } catch (err) {
       console.error(err);
       setStatus("Could not read this memory file: " + err.message, true);
@@ -974,6 +983,7 @@
 
       setMemoryStatus(`Imported ${monthLabel} directly from its Task Program (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved. Saved as memory and downloaded a backup file.`);
       setStatus("");
+      renderRosterGrid();
     } catch (err) {
       console.error(err);
       setStatus("Could not import this Task Program: " + err.message, true);
@@ -2350,6 +2360,7 @@
     memorySlotDeleteBtn.disabled = false;
     memoryRotationState = finalState;
     setMemoryStatus(`Continuing from granted memory: ${monthLabel} (${Object.keys(finalState).length} driver(s)).`);
+    renderRosterGrid();
 
     const rows = E.buildMemoryRows(livePlan.rosterData, finalState);
     const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
