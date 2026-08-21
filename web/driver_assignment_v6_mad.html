@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260820j";
+    var APP_VERSION = "20260821a";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -167,6 +167,10 @@
   .roster-grid-table td.roster-driver-name { text-align: left; font-weight: 700; font-size: 11px; background: #f7f8fa; position: sticky; left: 0; }
   .roster-name-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; border: 1px solid rgba(0,0,0,0.15); vertical-align: -1px; cursor: pointer; }
   .roster-name-swatch-unknown { background: #ddd; }
+  /* The second, smaller dot: a real (not projected) duty from roughly one shift-lock period
+     before the most recent one, only rendered when the loaded data genuinely reaches back that
+     far for this driver -- a visually distinct "older, secondary" indicator, same color meaning. */
+  .roster-name-swatch-prior { width: 6px; height: 6px; margin-right: 6px; opacity: .8; cursor: default; }
   .roster-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 11px; color: #555; margin-top: 6px; }
   .roster-legend-item { display: flex; align-items: center; }
   .roster-swatch-info-modal { max-width: 320px; }
@@ -1227,11 +1231,51 @@
     // popup's "Last real duty on record" row shows, so the dot's color and the popup's text can
     // never disagree.
     const gridRotationState = computeReadOnlyRotationState();
+
+    // A second, real (not projected) duty from roughly one full shift-lock period before the
+    // most recent one -- confirmed directly: "if the supervisor uploaded a file... with two
+    // weeks, not only two days or one week, then you will have the ability to see two shift of
+    // certain driver... add the shift code next to the name." Only shown when the loaded/saved
+    // range genuinely reaches back that far for this specific driver -- never a guess. Every real
+    // duty (original pre-fill or engine-decided alike, matching how "real duty" is already
+    // defined everywhere else on this page) is collected once per driver here rather than
+    // rescanned per row; for each, the latest one at or before (most recent real duty's date -
+    // shiftLockWeeks*7 days) is picked -- the closest real evidence to a full lock-period back,
+    // which is exactly the comparison point that shows whether the driver's shift actually
+    // rotated. Uses the CONFIGURED shiftLockWeeks, not a hardcoded two weeks, so this stays
+    // correct if that setting is ever changed.
+    const realDutiesByDriver = {};
+    livePlan.taskDays.forEach((day) => {
+      day.tasks.forEach((t) => {
+        if (!t.driver) return;
+        (realDutiesByDriver[t.driver.id] = realDutiesByDriver[t.driver.id] || []).push({ dateKey: day.dateKey, startMin: t.startMin, code: t.code });
+      });
+    });
+    Object.values(realDutiesByDriver).forEach((list) => list.sort((a, b) => a.dateKey.localeCompare(b.dateKey)));
+    const priorDutyByDriver = {};
+    Object.keys(gridRotationState).forEach((driverId) => {
+      const st = gridRotationState[driverId];
+      const list = realDutiesByDriver[driverId];
+      if (!st || !st.lastDutyDateKey || !list) return;
+      const cutoffKey = E.dateKey(E.addDays(new Date(st.lastDutyDateKey + "T00:00:00"), -conditions.shiftLockWeeks * 7));
+      let best = null;
+      for (const entry of list) {
+        if (entry.dateKey <= cutoffKey) best = entry; // list is sorted ascending -- keep the latest one still at/before the cutoff
+      }
+      if (best) priorDutyByDriver[driverId] = best;
+    });
+
     function lastWeekSwatch(driverId) {
       const st = gridRotationState[driverId];
       const idx = st && st.lastDutyStartMin != null ? E.classifyShiftForMinutes(conditions, st.lastDutyStartMin) : null;
-      if (idx == null) return `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No real duty on record -- click for details"></span>`;
-      return `<span class="roster-name-swatch shift-swatch" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[idx]};" title="Last real duty: ${escapeAttr(conditions.shifts[idx].name)} -- click for details"></span>`;
+      const dot1 = idx == null
+        ? `<span class="roster-name-swatch roster-name-swatch-unknown" data-driver-id="${driverId}" title="No real duty on record -- click for details"></span>`
+        : `<span class="roster-name-swatch shift-swatch" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[idx]};" title="Last real duty: ${escapeAttr(conditions.shifts[idx].name)} -- click for details"></span>`;
+      const prior = priorDutyByDriver[driverId];
+      if (!prior) return dot1;
+      const priorIdx = E.classifyShiftForMinutes(conditions, prior.startMin);
+      const dot2 = priorIdx == null ? "" : `<span class="roster-name-swatch roster-name-swatch-prior" data-driver-id="${driverId}" style="background:${SHIFT_COLORS[priorIdx]};" title="${escapeAttr(conditions.shiftLockWeeks)} week(s)+ earlier (${escapeAttr(prior.dateKey)}): ${escapeAttr(conditions.shifts[priorIdx].name)} (${escapeAttr(prior.code)}) -- click the first dot for details"></span>`;
+      return dot1 + dot2;
     }
 
     // Legend: which color goes with which shift, so the supervisor never has to guess -- reads
