@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260821b";
+    var APP_VERSION = "20260821c";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -406,6 +406,7 @@
       <button type="button" class="plain" id="rosterSwapModeBtn">Swap two task codes (F2)</button>
     </div>
     <div id="rosterSwapPanel" class="roster-swap-panel" style="display:none;"></div>
+    <div id="rosterDuplicateCodeWarning" class="task-duplicate-warning" style="display:none;"></div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
 </main>
@@ -568,6 +569,7 @@
   const taskDuplicateWarning = document.getElementById("taskDuplicateWarning");
   const rosterSwapModeBtn = document.getElementById("rosterSwapModeBtn");
   const rosterSwapPanel = document.getElementById("rosterSwapPanel");
+  const rosterDuplicateCodeWarning = document.getElementById("rosterDuplicateCodeWarning");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
   const driverPickerList = document.getElementById("driverPickerList");
@@ -1215,6 +1217,58 @@
     return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   }
 
+  // Confirmed directly: "if the same task code used 2 times on the same day on roster plz give a
+  // warning like task 0530/7L used two time on same day 01/09" -- two different drivers both
+  // showing the exact same code in the Roster on the same date, almost always a hand-typed mistake
+  // (Generate itself can't produce this -- it tracks usedDriverIds per day the same way it does
+  // for findDuplicateDriverAssignments above). Scoped to codes that actually look like a real task
+  // code (the same HHMM/N+letters shape startMinFromCode already parses) so ordinary shared leave
+  // codes (F/V/O/E/A0) never false-alarm. Further excludes two categories that are EXPECTED to
+  // repeat across many drivers the same day, confirmed real in the loaded fixture data itself --
+  // office-duty (SD*, see isOfficeDutyCode/syncOfficeDutyToRoster) and training (HHMM/NT, a shared
+  // class time -- see TRAINING_CODE_RE below): a real file had 28+ drivers all on "0830/7T" the
+  // same day, which is a training session, not a scheduling collision.
+  function findDuplicateTaskCodesOnRoster() {
+    const byDateCode = {}; // dateKey -> code -> [driver names]
+    livePlan.rosterData.drivers.forEach((driver) => {
+      Object.entries(driver.statusByDateKey || {}).forEach(([dateKey, raw]) => {
+        const code = (raw || "").trim();
+        if (!code || !startMinFromCode(code) || E.isOfficeDutyCode(code) || TRAINING_CODE_RE.test(code)) return;
+        const byCode = (byDateCode[dateKey] = byDateCode[dateKey] || {});
+        (byCode[code] = byCode[code] || []).push(driver.name);
+      });
+    });
+    const out = [];
+    Object.keys(byDateCode).sort().forEach((dateKey) => {
+      Object.entries(byDateCode[dateKey]).forEach(([code, names]) => {
+        if (names.length > 1) out.push({ dateKey, code, names });
+      });
+    });
+    return out;
+  }
+
+  function formatDMY(dateKey) {
+    const [, m, d] = dateKey.split("-");
+    return `${d}/${m}`;
+  }
+
+  // Split out from renderRosterGrid so a plain hand-typed cell edit (see the "change" listener
+  // below) can refresh just the warning text without rebuilding the whole grid's markup --
+  // rebuilding the full table synchronously inside that same input's own "change" dispatch (which
+  // fires mid-blur) destroys the very node still mid-dispatch and throws in some browsers.
+  function refreshDuplicateCodeWarning() {
+    const dupCodes = findDuplicateTaskCodesOnRoster();
+    if (!dupCodes.length) {
+      rosterDuplicateCodeWarning.style.display = "none";
+      rosterDuplicateCodeWarning.innerHTML = "";
+    } else {
+      rosterDuplicateCodeWarning.style.display = "block";
+      rosterDuplicateCodeWarning.innerHTML = dupCodes.map((d) =>
+        `&#9888; Task ${escapeAttr(d.code)} used ${d.names.length} times on the same day (${formatDMY(d.dateKey)}): ${d.names.map(escapeAttr).join(", ")}.`
+      ).join("<br/>");
+    }
+  }
+
   // Full roster grid: one row per driver, one column per day in this session's date range, each
   // cell a directly-editable input bound straight to that driver's statusByDateKey -- Generate is
   // what keeps this consistent with the Task Program view; after that, edits here are this grid's
@@ -1329,6 +1383,7 @@
         return `<tr><td class="roster-driver-name">${lastWeekSwatch(driver.id)}${driver.name}</td>${cells}</tr>`;
       }).join("");
     rosterGridTable.innerHTML = `<tr><th>Driver</th>${headerCells}</tr>${rows}`;
+    refreshDuplicateCodeWarning();
   }
 
   rosterGridTable.addEventListener("change", (e) => {
@@ -1337,6 +1392,10 @@
     const driver = livePlan.rosterData.drivers.find((d) => d.id === t.dataset.rosterDriver);
     if (!driver) return;
     driver.statusByDateKey[t.dataset.rosterDate] = t.value.trim();
+    // Refreshes just the warning text (not a full grid rebuild -- see refreshDuplicateCodeWarning)
+    // so the duplicate-code check stays live against hand-typed edits too, not just the quick-pick
+    // menu and code picker paths (which already go through a full renderRosterGrid() of their own).
+    refreshDuplicateCodeWarning();
   });
 
   // --- Roster cell quick-pick: click any cell for a one-tap leave/absence code, a real task, or
