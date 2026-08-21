@@ -667,14 +667,33 @@
   // turn negative from starving other bands.
   const EARLY_MORNING_SEED_BOOST = 2.0;
 
+  // computeOpenShiftDemand's own share for a shift can run far higher than that shift's TRUE
+  // (filled+open) demand share, purely as a function of how much of the loaded month happens to
+  // already be resolved when Generate runs -- confirmed as a real, separate bug from a real
+  // supervisor's file: Early Morning's TRUE share was a healthy ~15% (matching the ~13% this
+  // boost was originally tuned against), but with 16 of 30 loaded days already resolved, its OPEN
+  // share alone had already drifted to 41% (every remaining day's own Early Morning gap piling
+  // onto the same measurement -- itself partly a symptom of the exact shortage being diagnosed).
+  // Multiplying THAT by the boost pushed 59 of 99 drivers (60%) onto Early Morning, starving
+  // every other shift, while the day this was traced from still had zero of them actually
+  // available -- headcount was never the bottleneck, availability was. Bounding the boosted share
+  // at (2x the TRUE share) rather than (2x the OPEN share) keeps the exact behavior this was
+  // tuned against on a fresh, unresolved month (where open share ≈ true share, so this bound
+  // never actually engages) while preventing the runaway on a month that's mostly already staffed
+  // by the time Generate runs.
   function computeShiftSeedAssignment(rosterData, taskDays, conditions) {
     const demand = computeOpenShiftDemand(taskDays, conditions);
+    const totalDemandCounts = computeShiftDemand(taskDays, conditions);
     const n = conditions.shifts.length;
     const totalDemand = demand.reduce((a, b) => a + b, 0);
+    const totalDemandAll = totalDemandCounts.reduce((a, b) => a + b, 0);
     // No task data to learn a shape from at all -- fall back to the plain even split this engine
     // used before this feature existed, rather than pretending to know a distribution.
     const shares = totalDemand > 0 ? demand.map((c) => c / totalDemand) : demand.map(() => 1 / n);
-    if (shares[0] > 0) shares[0] *= EARLY_MORNING_SEED_BOOST;
+    if (shares[0] > 0) {
+      const trueShare0 = totalDemandAll > 0 ? totalDemandCounts[0] / totalDemandAll : shares[0];
+      shares[0] = Math.min(shares[0], trueShare0) * EARLY_MORNING_SEED_BOOST;
+    }
 
     const assignment = {};
     const seededCount = new Array(n).fill(0);
@@ -1279,6 +1298,24 @@
         if (!pool.length && shiftIdx != null && shiftIdx > 0) {
           const priorShiftPool = (byShift[shiftIdx - 1] || []).filter((d) => !usedDriverIds.has(d.id));
           pool = restFilter(priorShiftPool, task).filter((d) => withinSameShiftForwardLimit(d, state[d.id], day, task.startMin));
+        }
+
+        // Early Morning (shiftIdx 0) has no shift before it in the chain, so it never had ANY
+        // rescue at all until now -- confirmed as the real cause of a real supervisor's unfilled
+        // 3-5:30am tasks: the seed boost above can only grow how many drivers get anchored there,
+        // it can't do anything about a driver being off, in training, or on leave that specific
+        // day, and the diagnosis showed the whole locked pool coming up empty on exactly that kind
+        // of day. This exception borrows from Morning (shiftIdx 1) instead -- the one real,
+        // available pool of drivers nearby -- under the EXACT same protections as every other
+        // widen (rest time, and no jump further back than this driver's own real clock allows).
+        // Confirmed directly against a real month: a rescue mechanism alone (no seed change) only
+        // ever reached ~88% fill even with this exception, because roughly half the whole roster
+        // is off on any given day regardless of which shift they're nominally locked to -- so this
+        // is a genuine improvement, not a guarantee, and never overrides rest time or the
+        // same-shift-forward-limit check to force one through.
+        if (!pool.length && shiftIdx === 0) {
+          const morningPool = (byShift[1] || []).filter((d) => !usedDriverIds.has(d.id));
+          pool = restFilter(morningPool, task).filter((d) => withinSameShiftForwardLimit(d, state[d.id], day, task.startMin));
         }
 
         if (!pool.length) { unassignedTasks.push(task); return; }
