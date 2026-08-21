@@ -58,11 +58,17 @@
   }
 
   // Builds the replacement XML for a single <c> element, preserving its existing style index
-  // (if any) but always writing the new value as a self-contained inline string -- this avoids
+  // (if any). A string value is always written as a self-contained inline string -- this avoids
   // ever touching xl/sharedStrings.xml, which is the whole point: one less part this module
-  // needs to understand or keep consistent.
+  // needs to understand or keep consistent. A NUMBER is written as a genuine numeric cell (no `t`
+  // attribute -- Excel's default cell type is numeric) instead: needed for a real time-of-day
+  // value (e.g. a reserve task's sign-in/sign-out), which every real Task Program row already
+  // stores as a true numeric serial (a fraction of a day) with a time number format on the cell's
+  // style -- writing that as inlineStr text would look right but not actually BE a time cell (no
+  // TIME() arithmetic, wrong sort order, mismatched type against every real row in the column).
   function buildCellXml(address, styleAttr, value) {
     if (value == null || value === "") return `<c r="${address}"${styleAttr}/>`;
+    if (typeof value === "number") return `<c r="${address}"${styleAttr}><v>${value}</v></c>`;
     return `<c r="${address}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`;
   }
 
@@ -471,10 +477,322 @@
     return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
+  // Real TRUE row insertion -- a brand-new row lands at its real chronological position among the
+  // existing rows (e.g. a 07:30 reserve next to the real 07:00/08:00 rows), with everything below
+  // it shifted down, rather than always appended after the last real row. Confirmed directly
+  // against a real file, end to end, before this was written: every row below an insertion point
+  // has to shift (cells, formulas, merged cells, conditional-formatting ranges, the sheet's own
+  // dimension), AND so does every floating drawing shape anchored to those rows -- both the
+  // twoCellAnchor bar graphics AND the oneCellAnchor real-trip-code labels drawn inside a reserve
+  // bar (missing the second type was a real bug caught mid-development: those labels were being
+  // silently left behind at their old row while the bar around them moved). A shared formula group
+  // (Excel's "don't repeat this formula text in every cell" optimization) is converted to plain,
+  // independent formulas on every affected cell instead of shifted in place -- its declared `ref`
+  // range can't be kept correct once new rows are spliced into the middle of it, and a stale range
+  // is exactly the kind of thing that triggers Excel's "this workbook needs repair" recovery flow
+  // (confirmed directly: removing this was what actually fixed it, calcChain alone wasn't enough).
+  // xl/calcChain.xml (a pure performance-hint index of formula cells, by address) goes stale the
+  // same way and is removed outright rather than rewritten -- Excel just recalculates from scratch
+  // on open, which is what the OOXML spec says is always safe to do.
+  //
+  // insertionsBySheetIndex: { [sheetIndex]: [ { beforeRow, rows: [ { cells: { colNum: value } } ] } ] }
+  // `beforeRow` is a 1-indexed row number in the ORIGINAL (pre-shift) sheet -- the new row(s) land
+  // immediately before whatever real row currently has that number. Multiple insertion points on
+  // the same sheet, and multiple rows at the same point, are both supported; `cells` values may be
+  // a string, a number (an Excel numeric/time serial -- see minutesToExcelTimeSerial in
+  // driver_assignment_engine.js), or omitted for a column that should just carry the template
+  // row's own style with no value. Every OTHER column the template row has (its zebra/border
+  // styling, and any formula it carries, e.g. a duration calc) is cloned automatically -- the
+  // caller only needs to supply the columns it actually has real data for.
+  //
+  // The "template row" for a given insertion point -- whose full column styling, drawing-shape
+  // bar (if any), and formulas get cloned onto its new rows -- is auto-detected as the nearest
+  // real row before the insertion point that carries exactly 4 drawing shapes (this file
+  // template's own convention for "a plain reserve duty, no real trip picked up during it": two
+  // "Madinah" bracket boxes, one connecting line, one "RESERVE" label -- confirmed directly against
+  // a real file). Falls back to just the row immediately before the insertion point, with no
+  // shape clone, if no such row is found nearby or the sheet has no drawing part at all -- the row
+  // itself, its cells, and its styling still insert and shift correctly either way.
+  async function applyRowInsertions(originalArrayBuffer, insertionsBySheetIndex) {
+    const zip = await JSZip.loadAsync(originalArrayBuffer);
+    const originalNames = new Set(Object.keys(zip.files));
+    const sheetParts = await getSheetPartNames(zip);
+    const drawingParts = await getDrawingPartNames(zip);
+    const EMU_PER_PT = 12700;
+    const DEFAULT_ROW_HEIGHT_PT = 13.2;
+    const GANTT_ROW_HEIGHT_PT = 36.45;
+    const CLEAN_BAR_SHAPE_COUNT = 4;
+
+    function uuid() {
+      const hex = () => Math.floor(Math.random() * 0x10000).toString(16).padStart(4, "0");
+      return `{${hex()}${hex()}-${hex()}-${hex()}-${hex()}-${hex()}${hex()}${hex()}}`;
+    }
+
+    for (const sheetIndexStr of Object.keys(insertionsBySheetIndex)) {
+      const sheetIndex = parseInt(sheetIndexStr, 10);
+      const insertions = (insertionsBySheetIndex[sheetIndex] || []).filter((ins) => ins.rows && ins.rows.length);
+      if (!insertions.length) continue;
+      insertions.sort((a, b) => a.beforeRow - b.beforeRow);
+
+      const partName = sheetParts[sheetIndex];
+      if (!partName) throw new Error(`No worksheet part found for sheet index ${sheetIndex}.`);
+      let sheetXml = await zip.file(partName).async("string");
+      const drawingPartName = drawingParts[sheetIndex];
+      let drawingXml = drawingPartName ? await zip.file(drawingPartName).async("string") : null;
+
+      function shiftMap(oldRow) {
+        let shift = 0;
+        for (const ins of insertions) if (oldRow >= ins.beforeRow) shift += ins.rows.length;
+        return oldRow + shift;
+      }
+      insertions.forEach((ins) => { ins.newFirstRow = shiftMap(ins.beforeRow - 1) + 1; });
+
+      // --- Shared-formula master templates: capture BEFORE any edits, keyed by si, as the
+      // formula text with the master cell's own row number generalized to a "{R}" placeholder. ---
+      const sheetDataMatch = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(sheetXml);
+      const sharedFormulaTemplates = {};
+      const masterRe = /<f t="shared" ref="[^"]*" si="(\d+)">([^<]*)<\/f>/g;
+      let mm;
+      while ((mm = masterRe.exec(sheetDataMatch[1]))) {
+        const si = mm[1], masterFormula = mm[2];
+        const before = sheetDataMatch[1].slice(0, mm.index);
+        const ownerMatch = /<c r="[A-Z]+(\d+)"[^>]*>[^<]*$/.exec(before.slice(-60));
+        const ownerRow = ownerMatch ? ownerMatch[1] : null;
+        sharedFormulaTemplates[si] = ownerRow
+          ? masterFormula.replace(new RegExp(`([A-Za-z]+)${ownerRow}(?!\\d)`, "g"), "$1{R}")
+          : null;
+      }
+
+      // --- Rebuild <sheetData>: remap every row's own number, every cell address within it, any
+      // self-referencing formula token (e.g. a VLOOKUP reading its own row's Code cell), and
+      // convert any shared-formula cell to an independent plain formula. ---
+      const rowChunkRe = /<row r="(\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g;
+      const oldRows = [];
+      let rm;
+      while ((rm = rowChunkRe.exec(sheetDataMatch[1]))) oldRows.push({ oldRow: parseInt(rm[1], 10), xml: rm[0] });
+
+      const cellAddrRe = /<c r="([A-Z]+)(\d+)"/g;
+      const remappedRows = oldRows.map(({ oldRow, xml }) => {
+        const newRow = shiftMap(oldRow);
+        let x = xml.replace(new RegExp(`^<row r="${oldRow}"`), `<row r="${newRow}"`);
+        x = x.replace(cellAddrRe, (m0, colLetters, rowDigits) => {
+          if (parseInt(rowDigits, 10) !== oldRow) return m0;
+          return `<c r="${colLetters}${newRow}"`;
+        });
+        if (newRow !== oldRow) {
+          // Self-referencing formulas anywhere in this row (e.g. =VLOOKUP(C53,...) inside D53, or
+          // a duration calc like =AF53-F53) need their own row token updated to match, or they'd
+          // silently read a different row.
+          x = x.replace(new RegExp(`\\b([A-Z]+)${oldRow}\\b`, "g"), (m0, colLetters) => `${colLetters}${newRow}`);
+        }
+        x = x.replace(/<f t="shared"(?: ref="[^"]*")? si="(\d+)"(?:>[^<]*)?<\/f>|<f t="shared"(?: ref="[^"]*")? si="(\d+)"\/>/g, (m0, si1, si2) => {
+          const si = si1 || si2;
+          const tmpl = sharedFormulaTemplates[si];
+          return tmpl ? `<f>${tmpl.split("{R}").join(newRow)}</f>` : m0;
+        });
+        return { oldRow, newRow, xml: x };
+      });
+
+      // --- Per-insertion template row: nearest earlier row with exactly CLEAN_BAR_SHAPE_COUNT
+      // drawing shapes (a plain reserve bar, no real trip legs mixed in) -- falls back to just the
+      // row immediately before the insertion point (style-only, no shape clone) if none is found. ---
+      let allDrawingAnchors = [];
+      const shapeCountByOldRow0 = {};
+      if (drawingXml) {
+        allDrawingAnchors = drawingXml.match(/<xdr:twoCellAnchor>[\s\S]*?<\/xdr:twoCellAnchor>/g) || [];
+        allDrawingAnchors.forEach((a) => {
+          const fm = /<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row>/.exec(a);
+          if (!fm) return;
+          const r = parseInt(fm[1], 10);
+          shapeCountByOldRow0[r] = (shapeCountByOldRow0[r] || 0) + 1;
+        });
+      }
+      insertions.forEach((ins) => {
+        let templateRow1 = null;
+        for (let r1 = ins.beforeRow - 1; r1 >= 1; r1--) {
+          if (shapeCountByOldRow0[r1 - 1] === CLEAN_BAR_SHAPE_COUNT) { templateRow1 = r1; break; }
+        }
+        ins.styleTemplateRow1 = templateRow1 || Math.max(1, ins.beforeRow - 1);
+        ins.shapeTemplateRow1 = templateRow1; // null -> no bar graphic for this insertion's new rows
+      });
+
+      // --- Build the new rows' own XML: full column-style clone from the template row, caller's
+      // value overrides on top, any formula the template row carries reproduced with the new row. ---
+      function extractRowStyleAndFormulaMap(rowNum) {
+        const rowMatch = new RegExp(`<row r="${rowNum}"[^>]*>([\\s\\S]*?)</row>`).exec(sheetDataMatch[1]);
+        if (!rowMatch) return {};
+        const cellRe = /<c r="([A-Z]+)\d+"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+        const map = {};
+        let cm;
+        while ((cm = cellRe.exec(rowMatch[1]))) {
+          const styleMatch = /\ss="(\d+)"/.exec(cm[2]);
+          const fMatch = cm[3] && /<f[^>]*>([^<]*)<\/f>/.exec(cm[3]);
+          const sharedMatch = cm[3] && /<f t="shared"(?: ref="[^"]*")? si="(\d+)"/.exec(cm[3]);
+          let formulaTemplate = null;
+          if (sharedMatch) formulaTemplate = sharedFormulaTemplates[sharedMatch[1]] || null;
+          else if (fMatch) formulaTemplate = fMatch[1].replace(new RegExp(`([A-Za-z]+)${rowNum}(?!\\d)`, "g"), "$1{R}");
+          map[cm[1]] = { style: styleMatch ? styleMatch[1] : null, formulaTemplate };
+        }
+        return map;
+      }
+
+      const newRowXmlByNewRow = {};
+      insertions.forEach((ins) => {
+        const styleMap = extractRowStyleAndFormulaMap(ins.styleTemplateRow1);
+        ins.rows.forEach((rowSpec, i) => {
+          const newRow = ins.newFirstRow + i;
+          const cols = Object.keys(styleMap).sort((a, b) => colLetterToNumber(a) - colLetterToNumber(b));
+          const cellsXml = cols.map((colLetters) => {
+            const { style, formulaTemplate } = styleMap[colLetters];
+            const colNum = colLetterToNumber(colLetters);
+            const addr = `${colLetters}${newRow}`;
+            const styleAttr = style != null ? ` s="${style}"` : "";
+            const override = rowSpec.cells ? rowSpec.cells[colNum] : undefined;
+            if (override !== undefined) {
+              if (override == null) return `<c r="${addr}"${styleAttr}/>`;
+              if (typeof override === "number") return `<c r="${addr}"${styleAttr}><v>${override}</v></c>`;
+              return `<c r="${addr}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${escapeXml(override)}</t></is></c>`;
+            }
+            if (formulaTemplate) return `<c r="${addr}"${styleAttr}><f>${formulaTemplate.split("{R}").join(newRow)}</f></c>`;
+            return `<c r="${addr}"${styleAttr}/>`;
+          }).join("");
+          newRowXmlByNewRow[newRow] = `<row r="${newRow}" ht="${GANTT_ROW_HEIGHT_PT}" customHeight="1">${cellsXml}</row>`;
+        });
+      });
+
+      // --- Reassemble <sheetData> in ascending new-row order. ---
+      const allRowsByNewRow = {};
+      remappedRows.forEach((r) => { allRowsByNewRow[r.newRow] = r.xml; });
+      Object.assign(allRowsByNewRow, newRowXmlByNewRow);
+      const finalRowNumbers = Object.keys(allRowsByNewRow).map(Number).sort((a, b) => a - b);
+      const newSheetDataInner = finalRowNumbers.map((n) => allRowsByNewRow[n]).join("");
+      sheetXml = sheetXml.slice(0, sheetDataMatch.index) + `<sheetData>${newSheetDataInner}</sheetData>` + sheetXml.slice(sheetDataMatch.index + sheetDataMatch[0].length);
+
+      // --- Shift merged cells, conditional-formatting ranges, and the sheet's own dimension. ---
+      function shiftRef(ref) {
+        return ref.replace(/([A-Z]+)(\d+)/g, (m0, col, row) => `${col}${shiftMap(parseInt(row, 10))}`);
+      }
+      sheetXml = sheetXml.replace(/<mergeCell ref="([^"]+)"\/>/g, (m0, ref) => `<mergeCell ref="${shiftRef(ref)}"/>`);
+      sheetXml = sheetXml.replace(/<conditionalFormatting sqref="([^"]+)">/g, (m0, sqref) => {
+        const shifted = sqref.split(" ").map(shiftRef).join(" ");
+        return `<conditionalFormatting sqref="${shifted}">`;
+      });
+      const dimMatch = /<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/.exec(sheetXml);
+      if (dimMatch) {
+        const newDimEnd = shiftMap(parseInt(dimMatch[4], 10));
+        sheetXml = sheetXml.replace(dimMatch[0], `<dimension ref="${dimMatch[1]}${dimMatch[2]}:${dimMatch[3]}${newDimEnd}"/>`);
+      }
+      zip.file(partName, sheetXml);
+
+      // --- Shift every drawing shape (both anchor types) to its new row, recomputing its cached
+      // absolute y-offset against the new row-height layout -- old rows keep their own height,
+      // newly inserted rows are the tall Gantt-row height. Then clone each insertion's bar
+      // template (if one was found) onto its own new rows. ---
+      if (drawingXml) {
+        const finalHeightByNewRow = {};
+        oldRows.forEach(({ oldRow, xml }) => {
+          const htMatch = /\sht="([\d.]+)"/.exec(xml);
+          finalHeightByNewRow[shiftMap(oldRow)] = htMatch ? parseFloat(htMatch[1]) : DEFAULT_ROW_HEIGHT_PT;
+        });
+        Object.keys(newRowXmlByNewRow).forEach((n) => { finalHeightByNewRow[n] = GANTT_ROW_HEIGHT_PT; });
+        function cumulativeEmuAtTopOfNewRow(newRow1) {
+          let pt = 0;
+          for (let r = 1; r < newRow1; r++) pt += (finalHeightByNewRow[r] != null ? finalHeightByNewRow[r] : DEFAULT_ROW_HEIGHT_PT);
+          return Math.round(pt * EMU_PER_PT);
+        }
+
+        const twoCellRe = /<xdr:twoCellAnchor>[\s\S]*?<\/xdr:twoCellAnchor>/g;
+        const shiftedTwoCell = allDrawingAnchors.map((shapeXml) => {
+          let s = shapeXml;
+          const fromMatch = /<xdr:from><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:from>/.exec(s);
+          const toMatch = /<xdr:to><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:to>/.exec(s);
+          const fromNew0 = shiftMap(parseInt(fromMatch[3], 10) + 1) - 1, toNew0 = shiftMap(parseInt(toMatch[3], 10) + 1) - 1;
+          s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${fromNew0}$2`);
+          s = s.replace(/(<xdr:to><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${toNew0}$2`);
+          const newY = cumulativeEmuAtTopOfNewRow(fromNew0 + 1) + parseInt(fromMatch[4], 10);
+          s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+          return s;
+        });
+        drawingXml = drawingXml.replace(twoCellRe, () => shiftedTwoCell.shift());
+
+        const oneCellRe = /<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/g;
+        const allOneCellAnchors = drawingXml.match(oneCellRe) || [];
+        const shiftedOneCell = allOneCellAnchors.map((shapeXml) => {
+          let s = shapeXml;
+          const fromMatch = /<xdr:from><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:from>/.exec(s);
+          const fromNew0 = shiftMap(parseInt(fromMatch[3], 10) + 1) - 1;
+          s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${fromNew0}$2`);
+          const newY = cumulativeEmuAtTopOfNewRow(fromNew0 + 1) + parseInt(fromMatch[4], 10);
+          s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+          return s;
+        });
+        drawingXml = drawingXml.replace(oneCellRe, () => shiftedOneCell.shift());
+
+        let maxId = 0, idm;
+        const idRe = /<xdr:cNvPr id="(\d+)"/g;
+        while ((idm = idRe.exec(drawingXml))) maxId = Math.max(maxId, parseInt(idm[1], 10));
+        let nextId = maxId + 1;
+
+        const newBarAnchors = [];
+        insertions.forEach((ins) => {
+          if (!ins.shapeTemplateRow1) return; // no clean-bar template found nearby -- skip gracefully
+          const templateShapes = allDrawingAnchors.filter((a) => {
+            const fm = /<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row>/.exec(a);
+            return fm && parseInt(fm[1], 10) === ins.shapeTemplateRow1 - 1;
+          });
+          ins.rows.forEach((rowSpec, i) => {
+            const newRow1 = ins.newFirstRow + i;
+            const targetRow0 = newRow1 - 1;
+            const topEmu = cumulativeEmuAtTopOfNewRow(newRow1);
+            templateShapes.forEach((shapeXml) => {
+              let s = shapeXml;
+              s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${targetRow0}$2`);
+              s = s.replace(/(<xdr:to><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${targetRow0}$2`);
+              const idMatch = /<xdr:cNvPr id="(\d+)" name="([^"]*)"/.exec(s);
+              const thisId = nextId++;
+              s = s.replace(`<xdr:cNvPr id="${idMatch[1]}" name="`, `<xdr:cNvPr id="${thisId}" name="`);
+              s = s.replace(/id="\{[0-9A-Fa-f-]+\}"\/>/, `id="${uuid()}"/>`);
+              const fromRowOffMatch = /<xdr:from>.*?<xdr:rowOff>(\d+)<\/xdr:rowOff>/.exec(s);
+              const newY = topEmu + parseInt(fromRowOffMatch[1], 10);
+              s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+              newBarAnchors.push(s);
+            });
+          });
+        });
+        drawingXml = drawingXml.replace("</xdr:wsDr>", newBarAnchors.join("") + "</xdr:wsDr>");
+        zip.file(drawingPartName, drawingXml);
+      }
+    }
+
+    // calcChain.xml is a pure performance-hint index; once any formula has moved or been added,
+    // it's stale, and a stale one is a real trigger for Excel's "needs repair" flow. Only remove
+    // it (plus its two references) if it's actually present -- not every workbook has one.
+    if (zip.files["xl/calcChain.xml"]) {
+      delete zip.files["xl/calcChain.xml"];
+      const ctFile = zip.file("[Content_Types].xml");
+      if (ctFile) {
+        const ct = await ctFile.async("string");
+        zip.file("[Content_Types].xml", ct.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*?\/>/, ""));
+      }
+      const relsFile = zip.file("xl/_rels/workbook.xml.rels");
+      if (relsFile) {
+        const rels = await relsFile.async("string");
+        zip.file("xl/_rels/workbook.xml.rels", rels.replace(/<Relationship[^>]*Target="calcChain\.xml"\/>/, ""));
+      }
+    }
+
+    for (const name of Object.keys(zip.files)) {
+      const entry = zip.files[name];
+      if (entry && entry.dir && !originalNames.has(name)) delete zip.files[name];
+    }
+
+    return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+  }
+
   return {
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
     patchCellInSheetXml, patchCellStyleInSheetXml, patchCellValueAndStyleInSheetXml, ensureFillStyle,
     pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES, pickShiftColors, SHIFT_FLAG_ARGB_CANDIDATES,
-    getDrawingPartNames, findPassengerMarkedRows, getCellStyleIndex,
+    getDrawingPartNames, findPassengerMarkedRows, getCellStyleIndex, applyRowInsertions,
   };
 });

@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260820f"></script>
-<script src="xlsx_surgical_patch.js?v=20260819a"></script>
+<script src="driver_assignment_engine.js?v=20260821a"></script>
+<script src="xlsx_surgical_patch.js?v=20260821a"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260821c";
+    var APP_VERSION = "20260821d";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2579,6 +2579,9 @@
       // patch for them.
       const removedTasks = (day.removedTasks || []).map((entry) => entry.task);
       for (const task of day.tasks.concat(removedTasks)) {
+        // engineAddedReserve rows get a real chronological row via applyRowInsertions instead of
+        // being patched here at their in-app placeholder row -- see buildTaskDownloadArrayBuffer.
+        if (task.engineAddedReserve) continue;
         const isNewRow = origCodes[task.row] === undefined;
         if (isNewRow || origCodes[task.row] !== task.code) {
           const patch = { row: task.row, col: day.taskCol, value: task.code };
@@ -2626,12 +2629,43 @@
     return { rosterPatches, taskPatches };
   }
 
+  // Every engineAddedReserve task, across every day, placed at its real chronological row --
+  // confirmed directly: "place each added reserve task to the timeslot... if there is a task at
+  // 3 AM, put it up there in the 3 AM area." Reads day.tasks fresh (not a Generate-time snapshot),
+  // so a hand-edited code/time/driver on an added row is reflected exactly like buildLivePatches
+  // already does for everything else. Skips a day with nothing to insert entirely -- the vast
+  // majority of days, so this stays a no-op for them.
+  function buildReserveInsertionsBySheetIndex() {
+    const insertionsBySheetIndex = {};
+    livePlan.taskDays.forEach((day) => {
+      const added = day.tasks.filter((t) => t.engineAddedReserve && t.driver);
+      if (!added.length) return;
+      const plan = E.planReserveRowInsertions(day, added);
+      if (!plan.length) return;
+      insertionsBySheetIndex[day.sheetIndex] = plan.map((group) => ({
+        beforeRow: group.beforeRow,
+        rows: group.tasks.map((task) => {
+          const endMin = task.endMin != null ? task.endMin : null;
+          const cells = { [day.taskCol]: task.code, [day.nameCol]: E.formatDriverForTaskCell(task.driver) };
+          if (task.startMin != null && day.startCol != null) cells[day.startCol] = E.minutesToExcelTimeSerial(task.startMin);
+          if (endMin != null && day.endCol != null) cells[day.endCol] = E.minutesToExcelTimeSerial(endMin);
+          return { cells };
+        }),
+      }));
+    });
+    return insertionsBySheetIndex;
+  }
+
   taskDownloadBtn.addEventListener("click", async () => {
     if (!livePlan) return;
     try {
       setStatus("Building the Task Program file...");
       const { taskPatches } = await buildLivePatches();
-      const buf = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
+      let buf = await XlsxSurgicalPatch.applyCellPatches(taskArrayBuffer, taskPatches);
+      const insertionsBySheetIndex = buildReserveInsertionsBySheetIndex();
+      if (Object.keys(insertionsBySheetIndex).length) {
+        buf = await XlsxSurgicalPatch.applyRowInsertions(buf, insertionsBySheetIndex);
+      }
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
       setStatus("Downloaded the current Task Program.");
     } catch (err) {

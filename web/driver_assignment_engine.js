@@ -311,10 +311,37 @@
       }
       days.push({
         sheetIndex: idx, sheetName: ws.name, date, dateKey: dateKey(date),
-        taskCol: tasksCell.col, nameCol: nameCell.col, tasks,
+        taskCol: tasksCell.col, nameCol: nameCell.col,
+        startCol: startCell ? startCell.col : null, endCol: endCell ? endCell.col : null, tasks,
       });
     });
     return days;
+  }
+
+  // Where "Add Task" (and an engine-added reserve) should write its next new row -- one past the
+  // last row parseTaskProgram recognized as a real task is NOT reliably blank. Confirmed directly
+  // against a real file: every single day-sheet in this station's real template carries a stray
+  // "Tasks" label (plus a broken cross-workbook VLOOKUP formula) in that exact row, left over as
+  // part of that day's Gantt-chart header/footer furniture -- the same row's columns further right
+  // hold "REAL / Start / 1..24 / End / REAL". Blindly assuming maxRow+1 is free silently
+  // overwrote that label with the first added task's own code/driver, every single day, on a real
+  // engine-downloaded file diffed against its original. Scans forward in the RAW sheet (not just
+  // what parseTaskProgram recognized as a task) until both the code and name cells of a candidate
+  // row are genuinely blank. Capped well past any real file's own blank-row stretch (confirmed
+  // 80+ rows) so a malformed sheet fails loudly instead of scanning forever.
+  function findNextFreeTaskRow(taskWorkbook, day) {
+    const lastRealTaskRow = day.tasks.reduce((m, t) => Math.max(m, t.row), 0);
+    if (lastRealTaskRow === 0) return 200; // no real tasks at all this day -- no row to anchor off of
+    const ws = taskWorkbook.worksheets[day.sheetIndex];
+    let row = lastRealTaskRow + 1;
+    const giveUpAt = lastRealTaskRow + 500;
+    while (row < giveUpAt) {
+      const codeBlank = displayValue(ws.getRow(row).getCell(day.taskCol)) == null;
+      const nameBlank = displayValue(ws.getRow(row).getCell(day.nameCol)) == null;
+      if (codeBlank && nameBlank) return row;
+      row++;
+    }
+    throw new Error(`Could not find a genuinely blank row on sheet "${day.sheetName}" within 500 rows of the last real task -- refusing to guess.`);
   }
 
   // A completed/partially-completed Task Program's NAME cell resolves to a real driver as
@@ -853,6 +880,12 @@
   // add 4 R task as max: 0700/R, 0700/RA, 0700/RB, 0700/RC." Never more than 4 at one time.
   const RESERVE_SUFFIXES = ["R", "RA", "RB", "RC"];
   const MAX_RESERVE_SLOTS_PER_TIME = RESERVE_SUFFIXES.length;
+  // Confirmed directly against real files: every "7R*"-coded reserve duty already in a real Task
+  // Program is exactly a 7-hour duty (checked dozens of real rows across multiple days -- every
+  // single one is sign-in to sign-out +7:00, never anything else). Used to give an engine-added
+  // reserve task the same real sign-in/sign-out pair a well-formed real reserve row already has,
+  // instead of leaving those cells blank on export.
+  const RESERVE_DURATION_MIN = 420;
 
   // We don't want to leave a driver with no job -- for every driver Generate left unassigned,
   // proposes a brand-new reserve task {code, startMin, kind, destination, driver} to add to the
@@ -937,12 +970,49 @@
       const suffix = RESERVE_SUFFIXES.find((s) => !used.has(s));
       if (!suffix) { stillUnassigned.push(driver); return; } // guarded by the count filter above, but stay safe
       const code = `${minutesToHHMM(chosenTime).replace(":", "")}/${RESERVE_ROUTE_DIGIT}${suffix}`;
-      created.push({ code, startMin: chosenTime, kind: "reserve", destination: null, driver });
+      // Real Excel time cells wrap on a 24h clock, never carrying a next-day date even for a
+      // reserve that actually crosses midnight (confirmed directly: a real 18:00 reserve's own
+      // sign-out cell just reads 01:00, not "next day 1:00") -- % 1440 matches that convention.
+      const endMin = (chosenTime + RESERVE_DURATION_MIN) % 1440;
+      created.push({ code, startMin: chosenTime, endMin, kind: "reserve", destination: null, driver });
       reserveCountByTime[chosenTime] = (reserveCountByTime[chosenTime] || 0) + 1;
       (usedSuffixesByTime[chosenTime] = used).add(suffix);
     });
 
     return { created, stillUnassigned };
+  }
+
+  // Where each newly engine-added reserve task belongs on export -- confirmed directly: "place
+  // each added reserve task to the timeslot... if there is a task at 3 AM, put it up there in the
+  // 3 AM area" -- a real spreadsheet row landing at its actual chronological position among the
+  // day's real rows, not always appended after the last one. Pure planning: this only decides
+  // WHICH real row each new task belongs immediately before (grouping any that land in the same
+  // gap together) -- XlsxSurgicalPatch.applyRowInsertions does the actual XML surgery once this
+  // plan is hand to it. `day.tasks` is read here only for its REAL rows' own row/startMin (a
+  // manual Add Task or an already-resolved original row still counts as "real" for this purpose --
+  // anything with a genuine spreadsheet row); engineAddedReserve rows already in day.tasks from an
+  // earlier Generate are excluded, since `addedReserveTasks` is the fresh list being planned now.
+  // A new task whose time is at or after every real row's own time lands one past the last real
+  // row (plain append, same as before) -- there's nothing real after it to land in front of.
+  function planReserveRowInsertions(day, addedReserveTasks) {
+    const realRows = day.tasks
+      .filter((t) => !t.engineAddedReserve && t.row != null)
+      .map((t) => ({ row: t.row, startMin: t.startMin != null ? t.startMin : Infinity }))
+      .sort((a, b) => a.row - b.row);
+    const lastRealRow = realRows.length ? realRows[realRows.length - 1].row : 0;
+
+    const sorted = addedReserveTasks.slice().sort((a, b) => (a.startMin != null ? a.startMin : Infinity) - (b.startMin != null ? b.startMin : Infinity));
+    const groups = [];
+    sorted.forEach((task) => {
+      const taskStart = task.startMin != null ? task.startMin : Infinity;
+      const target = realRows.find((r) => r.startMin > taskStart);
+      const beforeRow = target ? target.row : lastRealRow + 1;
+      let group = groups.find((g) => g.beforeRow === beforeRow);
+      if (!group) { group = { beforeRow, tasks: [] }; groups.push(group); }
+      group.tasks.push(task);
+    });
+    groups.sort((a, b) => a.beforeRow - b.beforeRow);
+    return groups;
   }
 
   // A driver's rotation-state update after being assigned one task -- extracted out of the
@@ -1539,6 +1609,13 @@
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   }
 
+  // Excel stores a time-of-day as a fraction of a 24h day (09:00 -> 0.375) in a numeric cell,
+  // paired with a time number format on the cell's style to display it as HH:MM -- see
+  // buildCellXml in xlsx_surgical_patch.js for why this has to be a real number, not text.
+  function minutesToExcelTimeSerial(min) {
+    return min / 1440;
+  }
+
   function monthKeyFromDateKey(dk) {
     return dk.slice(0, 7);
   }
@@ -1683,12 +1760,12 @@
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
-    buildReserveTasksForUnassignedDrivers,
+    buildReserveTasksForUnassignedDrivers, findNextFreeTaskRow, planReserveRowInsertions,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     isOfficeDutyCode, syncOfficeDutyToRoster,
     recordAssignment, rebuildRotationStateFromSavedDays, auditRotationRules,
     buildMonthlySummary,
-    minutesToHHMM, monthKeyFromDateKey, monthLabelFromDateKey,
+    minutesToHHMM, minutesToExcelTimeSerial, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,
     isRepeatingLastKind,
   };
