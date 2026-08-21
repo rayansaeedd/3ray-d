@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260821a";
+    var APP_VERSION = "20260821b";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -432,14 +432,26 @@
       <button type="button" id="rosterCellPickerClose" class="driver-picker-close">&times;</button>
     </div>
     <div class="roster-cell-picker-list" id="rosterCellPickerList">
-      <button type="button" class="roster-cell-picker-btn" data-value="V">V</button>
+      <button type="button" class="roster-cell-picker-btn" data-value="F">F <span class="roster-cell-picker-hint">Off</span></button>
+      <button type="button" class="roster-cell-picker-btn" data-value="V">V <span class="roster-cell-picker-hint">Vacation</span></button>
       <button type="button" class="roster-cell-picker-btn" data-value="VR">VR</button>
       <button type="button" class="roster-cell-picker-btn" data-value="O">O</button>
       <button type="button" class="roster-cell-picker-btn" data-value="E">E</button>
       <button type="button" class="roster-cell-picker-btn" data-value="A0">A0</button>
-      <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Task <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
-      <button type="button" class="roster-cell-picker-btn roster-cell-picker-noop" data-noop="1">Training <span class="roster-cell-picker-hint">-- type the number yourself</span></button>
+      <button type="button" class="roster-cell-picker-btn" data-open-code-picker="task">Add a Task <span class="roster-cell-picker-hint">search real task codes</span></button>
+      <button type="button" class="roster-cell-picker-btn" data-open-code-picker="training">Training <span class="roster-cell-picker-hint">search/enter a time</span></button>
     </div>
+  </div>
+</div>
+
+<div id="taskCodePickerOverlay" class="driver-picker-overlay" style="display:none;">
+  <div class="driver-picker-modal">
+    <div class="driver-picker-header">
+      <span id="taskCodePickerTitle">Pick a task code</span>
+      <button type="button" id="taskCodePickerClose" class="driver-picker-close">&times;</button>
+    </div>
+    <input type="text" id="taskCodePickerSearch" class="driver-picker-search" placeholder="Type to search..." />
+    <div id="taskCodePickerList" class="driver-picker-list"></div>
   </div>
 </div>
 
@@ -538,6 +550,11 @@
   const rosterCellPickerOverlay = document.getElementById("rosterCellPickerOverlay");
   const rosterCellPickerList = document.getElementById("rosterCellPickerList");
   const rosterCellPickerClose = document.getElementById("rosterCellPickerClose");
+  const taskCodePickerOverlay = document.getElementById("taskCodePickerOverlay");
+  const taskCodePickerTitle = document.getElementById("taskCodePickerTitle");
+  const taskCodePickerSearch = document.getElementById("taskCodePickerSearch");
+  const taskCodePickerList = document.getElementById("taskCodePickerList");
+  const taskCodePickerClose = document.getElementById("taskCodePickerClose");
   const rosterShiftLegend = document.getElementById("rosterShiftLegend");
   const rosterSwatchInfoOverlay = document.getElementById("rosterSwatchInfoOverlay");
   const rosterSwatchInfoTitle = document.getElementById("rosterSwatchInfoTitle");
@@ -1322,12 +1339,14 @@
     driver.statusByDateKey[t.dataset.rosterDate] = t.value.trim();
   });
 
-  // --- Roster cell quick-pick: click any cell for a one-tap leave/absence code -------------
-  // Doesn't replace direct typing (the cell is still a plain editable input underneath) --
-  // this is a shortcut layered on top for the fixed codes, so a supervisor isn't retyping the
-  // same handful of letters over and over. Task and Training have no fixed value to offer (a
-  // real task/training number varies every time), so those two entries are pass-through: they
-  // just close the menu and hand focus back to the cell for typing it in directly.
+  // --- Roster cell quick-pick: click any cell for a one-tap leave/absence code, a real task, or
+  // training -----------------------------------------------------------------------------------
+  // Doesn't replace direct typing (the cell is still a plain editable input underneath) -- this
+  // is a shortcut layered on top for the fixed codes (F/V/VR/O/E/A0), so a supervisor isn't
+  // retyping the same handful of letters over and over. Confirmed directly: "Add a Task" and
+  // "Training" used to be dead pass-through entries (no fixed value to offer, so they just
+  // refocused the cell for manual typing) -- now both open a real searchable picker instead (see
+  // openTaskCodePicker below).
   let activeRosterCell = null; // { driverId, dateKey }
 
   function openRosterCellPicker(driverId, dateKey) {
@@ -1359,10 +1378,9 @@
     const btn = e.target.closest(".roster-cell-picker-btn");
     if (!btn || !activeRosterCell) return;
     const { driverId, dateKey } = activeRosterCell;
-    if (btn.dataset.noop) {
+    if (btn.dataset.openCodePicker) {
       closeRosterCellPicker();
-      const input = rosterGridTable.querySelector(`input[data-roster-driver="${driverId}"][data-roster-date="${dateKey}"]`);
-      if (input) input.focus();
+      openTaskCodePicker(btn.dataset.openCodePicker, driverId, dateKey);
       return;
     }
     const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
@@ -1371,6 +1389,142 @@
       renderRosterGrid();
     }
     closeRosterCellPicker();
+  });
+
+  // --- "Add a Task" / "Training" searchable code picker, opened from the roster cell menu above -
+  // Confirmed directly: "take all the task code from the task file that the supervisor reloaded,
+  // do not duplicate any same code and put it in there so [the supervisor] can pick any task code
+  // and inject it in that blank square for a certain driver." Two modes sharing one modal:
+  //   "task" -- source is every unique CODE actually used anywhere in the loaded Task Program,
+  //     deduplicated. Picking one creates a REAL task row for this exact (driver, day) -- not
+  //     just roster text -- so it's fully seen by every rule this engine enforces (rest time,
+  //     shift-lock, rule 6, streak limits), exactly like "Add Task" or a driver-picker
+  //     reassignment already are. Uses setTaskDriver, the same helper both of those use, so the
+  //     Roster cell gets written the identical way.
+  //   "training" -- confirmed distinct from a real task: training's own time varies day to day
+  //     but has no backing Task Program row in real files (it's a roster-only status, the same
+  //     family as F/V/O/VR, just with a variable time instead of a fixed letter). Source is every
+  //     unique training-shaped value (HHMM/...T) already used anywhere in the loaded Roster, plus
+  //     a "use exactly what I typed" option when the search text doesn't already match one, so a
+  //     genuinely new time can still be entered. Writes straight into the Roster cell, no task row.
+  let taskCodePickerMode = null; // "task" | "training"
+  let taskCodePickerTarget = null; // { driverId, dateKey }
+  const TRAINING_CODE_RE = /^(\d{3,4})\/(\d{0,2})T\s*$/i;
+
+  function startMinFromCode(code) {
+    const m = /^(\d{3,4})\/(\d{0,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    if (!m) return null;
+    const digits = m[1].padStart(4, "0");
+    const hh = parseInt(digits.slice(0, 2), 10), mm = parseInt(digits.slice(2), 10);
+    if (hh > 23 || mm > 59) return null;
+    return hh * 60 + mm;
+  }
+
+  function taskCodePickerSourceList() {
+    const seen = new Set();
+    const out = [];
+    if (taskCodePickerMode === "task") {
+      livePlan.taskDays.forEach((day) => {
+        day.tasks.forEach((t) => {
+          const code = (t.code || "").trim();
+          if (!code || seen.has(code)) return;
+          seen.add(code);
+          out.push(code);
+        });
+      });
+    } else {
+      livePlan.rosterData.drivers.forEach((d) => {
+        Object.values(d.statusByDateKey || {}).forEach((v) => {
+          const code = (v || "").trim();
+          if (!code || seen.has(code) || !TRAINING_CODE_RE.test(code)) return;
+          seen.add(code);
+          out.push(code);
+        });
+      });
+    }
+    out.sort((a, b) => (startMinFromCode(a) ?? 9999) - (startMinFromCode(b) ?? 9999) || a.localeCompare(b));
+    return out;
+  }
+
+  function openTaskCodePicker(mode, driverId, dateKey) {
+    if (!livePlan) return;
+    taskCodePickerMode = mode;
+    taskCodePickerTarget = { driverId, dateKey };
+    taskCodePickerTitle.textContent = mode === "task" ? "Pick a task code" : "Pick a training time";
+    taskCodePickerSearch.placeholder = mode === "task" ? "Type to search real task codes..." : "Type a time, e.g. 0830, or search existing ones...";
+    taskCodePickerSearch.value = "";
+    renderTaskCodePickerList("");
+    taskCodePickerOverlay.style.display = "flex";
+    taskCodePickerSearch.focus();
+  }
+  function closeTaskCodePicker() {
+    taskCodePickerOverlay.style.display = "none";
+    taskCodePickerMode = null;
+    taskCodePickerTarget = null;
+  }
+
+  function renderTaskCodePickerList(query) {
+    const q = query.trim().toUpperCase();
+    const source = taskCodePickerSourceList();
+    const matches = source.filter((c) => !q || c.toUpperCase().includes(q));
+    const items = matches.map((code) => `<div class="driver-picker-list-item" data-code="${escapeAttr(code)}"><span class="driver-picker-name">${escapeAttr(code)}</span></div>`);
+    // Training only: if what's typed looks like a real HHMM sign-in but isn't already in the
+    // list, offer to use it as-is -- a genuinely new training time is expected, not an error.
+    if (taskCodePickerMode === "training" && q) {
+      const digitsOnly = q.replace(/[^\d]/g, "");
+      if (digitsOnly.length >= 3 && digitsOnly.length <= 4) {
+        const hh = digitsOnly.padStart(4, "0").slice(0, 2), mm = digitsOnly.padStart(4, "0").slice(2);
+        const candidate = `${hh}${mm}/7T`;
+        if (!matches.some((c) => c.toUpperCase() === candidate)) {
+          items.unshift(`<div class="driver-picker-list-item" data-code="${escapeAttr(candidate)}"><span class="driver-picker-name">Use ${escapeAttr(candidate)} <span style="color:#888; font-weight:400;">(new time)</span></span></div>`);
+        }
+      }
+    }
+    if (!items.length) {
+      items.push(`<div class="driver-picker-empty">${taskCodePickerMode === "task" ? "No matching task codes in the loaded Task Program." : "Type a time (e.g. 0830) to add a new training entry."}</div>`);
+    }
+    taskCodePickerList.innerHTML = items.join("");
+  }
+  taskCodePickerSearch.addEventListener("input", () => renderTaskCodePickerList(taskCodePickerSearch.value));
+  taskCodePickerClose.addEventListener("click", closeTaskCodePicker);
+  taskCodePickerOverlay.addEventListener("click", (e) => { if (e.target === taskCodePickerOverlay) closeTaskCodePicker(); });
+  taskCodePickerList.addEventListener("click", (e) => {
+    const item = e.target.closest(".driver-picker-list-item[data-code]");
+    if (!item || !taskCodePickerTarget) return;
+    const code = item.dataset.code;
+    const { driverId, dateKey } = taskCodePickerTarget;
+    const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
+    if (!driver) { closeTaskCodePicker(); return; }
+
+    if (taskCodePickerMode === "training") {
+      driver.statusByDateKey[dateKey] = code;
+      closeTaskCodePicker();
+      renderRosterGrid();
+      return;
+    }
+
+    // "task" mode: create a REAL task row for this driver on this day, same shape/placement
+    // convention as every other row added this session (append-only into the next free row,
+    // inserted in the display list at its own chronological position -- see applyReserveAutoFill).
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    if (!day) { closeTaskCodePicker(); return; }
+    const startMin = startMinFromCode(code);
+    const kind = E.classifyCode(code);
+    const destination = kind === "trip" ? E.classifyDestination(code) : null;
+    const row = livePlan.nextFreeRow[dateKey]++;
+    const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null };
+    let insertAt = day.tasks.findIndex((t) => (t.startMin ?? Infinity) > (startMin ?? Infinity));
+    if (insertAt === -1) insertAt = day.tasks.length;
+    day.tasks.splice(insertAt, 0, task);
+    setTaskDriver(dateKey, task, driver);
+    closeTaskCodePicker();
+    // Only re-render the Task view if the day just touched is the one it's currently showing --
+    // renderTaskView always draws whatever dateKey it's given, with no check against daySelect's
+    // own value, so calling it for a DIFFERENT day than what's on screen would silently swap the
+    // displayed day out from under the dropdown.
+    if (daySelect.value === dateKey) renderTaskView(dateKey);
+    renderRosterGrid();
+    renderAllDaysTable();
   });
 
   // --- Swap two task codes: F2 arms it, click two cells, Enter confirms, Escape cancels -----
