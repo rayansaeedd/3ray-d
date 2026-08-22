@@ -1025,27 +1025,43 @@
     const reassignedTasks = new Set();
 
     function tryFill(task, band, visited) {
+      // Graduated by how close the driver's OWN locked shift is to this band -- exact match
+      // first, then progressively wider (distance 1, 2, 3, 4 -- every level, not just "exact vs
+      // adjacent vs everyone"), only ever reaching the farthest tier if every closer one is
+      // genuinely empty. Fixed a real bug here: the old exact/near/"everyone else" grouping left
+      // that last bucket completely unsorted, so a distance-4 driver could get picked over a
+      // distance-2 one sitting right next to them in the same pool purely by array order -- this
+      // is exactly the "big spread" the shift-distance tiering was supposed to prevent. Within
+      // whichever distance tier is actually used, still prefer a driver for whom this wouldn't be
+      // a 4th-consecutive-same-kind (falling back to the 4th-consecutive option in that SAME
+      // tier, never jumping to a farther tier just to dodge it).
+      let directChosen = null;
       if (band === latestActiveBand) {
         const restEligible = freeDrivers.filter((d) => !usedDriverIds.has(d.id) && chainRescuePassesRest(conditions, rotationState, d.id, day, task));
-        // Graduated by how close the driver's OWN locked shift is to this band -- exact match
-        // first, then adjacent, only falling all the way through to "anyone at all" if genuinely
-        // nobody shift-appropriate is available. Same "prefer close, widen only when truly empty"
-        // shape as everywhere else in this engine (see SMOOTH_FORWARD_STEP_TIERS_MIN), applied here
-        // for the first time to direct placements specifically.
         const withDistance = restEligible.map((d) => {
           const st = rotationState[d.id];
           const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
           return { d, distance: ownIdx != null ? chainRescueBandDistance(ownIdx, band) : 999 };
         });
-        const exact = withDistance.filter((x) => x.distance === 0);
-        const near = withDistance.filter((x) => x.distance === 1);
-        const tiered = exact.length ? exact : near.length ? near : withDistance;
-        const notFourth = tiered.filter((x) => !chainRescueWouldBeFourthConsecutive(rotationState, x.d.id, task));
-        const chosen = (notFourth.length ? notFourth : tiered)[0];
-        if (chosen) {
-          usedDriverIds.add(chosen.d.id);
-          return { driver: chosen.d, vacatedTask: null };
-        }
+        const byDistance = {};
+        withDistance.forEach((x) => { (byDistance[x.distance] = byDistance[x.distance] || []).push(x); });
+        Object.keys(byDistance).map(Number).sort((a, b) => a - b).some((dist) => {
+          const bucket = byDistance[dist];
+          const notFourth = bucket.filter((x) => !chainRescueWouldBeFourthConsecutive(rotationState, x.d.id, task));
+          directChosen = (notFourth.length ? notFourth : bucket)[0];
+          return !!directChosen;
+        });
+      }
+      // A close direct fill (the driver's own shift is exact or adjacent) is already smooth --
+      // take it immediately, no need for the complexity of a hop. But a FAR direct fill (distance
+      // 2+) is exactly the "big spread" problem -- try a hop chain first, since a hop only ever
+      // moves people in small time-steps (CHAIN_RESCUE_PREFERRED_STEP_MIN/MAX_STEP_MIN) and pushes
+      // the mismatched free driver into whatever slot the chain bottoms out at, which is usually
+      // much closer to their own natural shift than this gap is. Only fall back to the far direct
+      // fill if no hop chain can close this gap at all.
+      if (directChosen && directChosen.distance <= 1) {
+        usedDriverIds.add(directChosen.d.id);
+        return { driver: directChosen.d, vacatedTask: null };
       }
       if (band < 8) {
         const candidates = (filledByBand[band + 1] || [])
@@ -1073,6 +1089,18 @@
             return { driver: a.driver, vacatedTask: a.task };
           }
         }
+      }
+      // No hop chain closed the gap -- a far direct fill (distance 2+) is only acceptable as a
+      // genuine last resort for a MANDATORY duty (a real trip/sweep/RK left uncovered is worse
+      // than one driver having an odd day). A lenient reserve-pool representative is NOT worth
+      // that: real audit data showed the large majority of "big spread" placements were exactly
+      // this case -- a driver dragged clear across the day's shifts just to fill a reserve slot
+      // whose group only needs one person, when leaving it open costs nothing operationally. So
+      // for a lenient duty, a far candidate is left unused here; the slot stays open (falls
+      // through to reserve auto-fill / stays genuinely unassigned) rather than forcing the jump.
+      if (directChosen && isChainRescueMandatory(task)) {
+        usedDriverIds.add(directChosen.d.id);
+        return { driver: directChosen.d, vacatedTask: null };
       }
       return null;
     }
