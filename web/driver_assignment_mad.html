@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822g"></script>
-<script src="xlsx_surgical_patch.js?v=20260822g"></script>
+<script src="driver_assignment_engine.js?v=20260822h"></script>
+<script src="xlsx_surgical_patch.js?v=20260822h"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822g";
+    var APP_VERSION = "20260822h";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -51,18 +51,39 @@
     // after a fix was actually just seeing a stale cached copy, and had no quick way to check
     // which version they were even running without digging through devtools. This puts the exact
     // deployed version in plain sight, so it can just be read off and compared on request instead
-    // of guessed at.
+    // of guessed at. Paired with a "Clear cache & reload" button -- confirmed directly as a real
+    // need: before dropping new files and generating a fresh schedule, a supervisor should be able
+    // to force a genuinely fresh copy of the page and its scripts on demand, not just wait for the
+    // passive stale-detector above to notice on its own.
     function addVersionBadge() {
-      if (document.getElementById("__versionBadge")) return;
+      if (document.getElementById("__versionBadgeRow")) return;
+      var row = document.createElement("div");
+      row.id = "__versionBadgeRow";
+      row.setAttribute("style", "position:fixed;bottom:4px;right:6px;z-index:99998;display:flex;gap:6px;align-items:center;");
+
+      var clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.textContent = "Clear cache & reload";
+      clearBtn.title = "Forces a fresh copy of this page and its scripts, bypassing any cached version -- use this before loading new files and generating a schedule if you're not sure you're on the latest version.";
+      clearBtn.setAttribute("style",
+        "background:#0f766e;color:#fff;border:none;padding:3px 8px;border-radius:4px;" +
+        "font:11px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;opacity:.85;");
+      clearBtn.addEventListener("click", function () {
+        if (!window.confirm("This reloads the page fresh and clears any cached copy of the app -- any unsaved work in the current session will be lost. Continue?")) return;
+        window.location.href = window.location.pathname + "?_cachebust=" + Date.now();
+      });
+      row.appendChild(clearBtn);
+
       var badge = document.createElement("div");
       badge.id = "__versionBadge";
       badge.textContent = "v" + APP_VERSION;
       badge.title = "Deployed engine version -- tell this to Claude if something looks wrong.";
       badge.setAttribute("style",
-        "position:fixed;bottom:4px;right:6px;z-index:99998;background:rgba(0,0,0,.55);color:#fff;" +
-        "padding:2px 7px;border-radius:4px;font:11px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;" +
-        "pointer-events:none;opacity:.65;");
-      document.body.appendChild(badge);
+        "background:rgba(0,0,0,.55);color:#fff;padding:2px 7px;border-radius:4px;" +
+        "font:11px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;pointer-events:none;opacity:.65;");
+      row.appendChild(badge);
+
+      document.body.appendChild(row);
     }
     document.addEventListener("DOMContentLoaded", addVersionBadge);
   })();
