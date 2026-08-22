@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822a"></script>
-<script src="xlsx_surgical_patch.js?v=20260822a"></script>
+<script src="driver_assignment_engine.js?v=20260822b"></script>
+<script src="xlsx_surgical_patch.js?v=20260822b"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822a";
+    var APP_VERSION = "20260822b";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2088,11 +2088,18 @@
   // every count that reads off it (Assigned/Unassigned) reflects the result immediately.
   function applyChainRescue(dateKey, day, dayResult, rotationState) {
     const spares = E.chainRescueSparePool(day);
-    const freeDrivers = spares.map((t) => t.driver).concat(dayResult.unassignedDrivers);
+    const originalIdle = dayResult.unassignedDrivers;
+    const freeDrivers = spares.map((t) => t.driver).concat(originalIdle);
     const { moves, stillFreeDrivers } = E.buildChainRescueMoves(day, conditions, rotationState, freeDrivers);
-    // A spare duplicate's own slot is never required to be refilled (see chainRescueSparePool) --
-    // clear it outright rather than leaving its old driver's name sitting there unassigned-looking.
-    spares.forEach((t) => setTaskDriver(dateKey, t, null));
+    const stillFreeIds = new Set(stillFreeDrivers.map((d) => d.id));
+    // A spare duplicate's own slot is never REQUIRED to be refilled (see chainRescueSparePool),
+    // but that doesn't mean it should always be cleared -- only clear it if Chain Rescue actually
+    // used that driver somewhere. Confirmed as a real bug in testing: on a day with zero genuine
+    // shortage (nothing for Chain Rescue to do at all), blanket-clearing every spare regardless of
+    // need manufactured brand-new "unassigned" drivers out of thin air, who then got needlessly
+    // reshuffled into a reserve auto-fill task for no reason -- exactly the kind of pointless churn
+    // this whole session's supervisor-comparison was trying to get AWAY from, not add more of.
+    spares.forEach((t) => { if (!stillFreeIds.has(t.driver.id)) setTaskDriver(dateKey, t, null); });
     moves.forEach((m) => {
       setTaskDriver(dateKey, m.task, m.driver);
       dayResult.assignments.push({ task: m.task, driver: m.driver, shiftIdx: E.classifyShiftForMinutes(conditions, m.task.startMin) });
@@ -2104,7 +2111,10 @@
       // Chain Rescue's.
       E.recordAssignment(rotationState, day, m.task, m.driver, conditions);
     });
-    dayResult.unassignedDrivers = stillFreeDrivers; // only genuinely still-free drivers remain flagged
+    // Only an originally-idle driver who's STILL free stays flagged as unassigned -- an unused
+    // spare kept their original real task above (see the guarded clear just above) and was never
+    // genuinely unassigned at all.
+    dayResult.unassignedDrivers = originalIdle.filter((d) => stillFreeIds.has(d.id));
     return { movedCount: moves.length };
   }
 
