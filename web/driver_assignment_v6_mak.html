@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822e"></script>
-<script src="xlsx_surgical_patch.js?v=20260822e"></script>
+<script src="driver_assignment_engine.js?v=20260822f"></script>
+<script src="xlsx_surgical_patch.js?v=20260822f"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822e";
+    var APP_VERSION = "20260822f";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -227,6 +227,14 @@
      already load-bearing (it shows the assigned task's real shift color), so a light-blue ring
      around the box is how this stays visible without covering that up. */
   input.roster-cell-engine-added { box-shadow: inset 0 0 0 2px #1565C0; }
+  /* Chain Rescue reassigning an EXISTING real task row (not inventing a new one) -- deliberately a
+     different color from the reserve-added blue above, since it's a different mechanism doing a
+     different thing: placing a driver into a real duty someone else could otherwise have taken,
+     via a rest-time-checked backward chain, rather than creating a brand-new reserve slot. */
+  #taskViewTable tr.task-row-chain-rescued { background: #F3E5F5; }
+  #taskViewTable tr.task-row-chain-rescued:hover { background: #E6CEEB; }
+  .chain-rescue-note { display: block; margin-top: 2px; font-size: 11px; color: #6A1B9A; font-weight: 600; }
+  input.roster-cell-chain-rescued { box-shadow: inset 0 0 0 2px #6A1B9A; }
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
   .shift-demand-panel { margin-bottom: 14px; padding: 10px 12px; background: #f4f8f6; border: 1px solid #d8ebe3; border-radius: 8px; }
@@ -1078,7 +1086,7 @@
       // so the existing "blank = available" check excludes them from everything else on its own
       // -- see syncOfficeDutyToRoster in engine.js.
       const officeDutySynced = E.syncOfficeDutyToRoster(taskDays, rosterData);
-      taskDays.forEach((day) => { day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; }); });
+      taskDays.forEach((day) => { day.tasks.forEach((t) => { if (!t.originalDriverRawText) { t.driver = null; t.chainRescued = false; } }); });
       // Seeds the initial display order by start time, once -- from here on, day.tasks's own
       // array order IS the display order (dragging a row reorders this array directly; see the
       // drag handlers below), so a hand-edited Start time no longer silently re-shuffles a row a
@@ -1395,7 +1403,7 @@
           // An outline, not a fill -- the cell's background is already load-bearing (the real
           // shift color above), so this rings the box instead of covering it up. See
           // buildReserveTasksForUnassignedDrivers/engineAddedReserve in the Task view.
-          const classNames = [isSwapSelected && "roster-cell-swap-selected", task && task.engineAddedReserve && "roster-cell-engine-added"].filter(Boolean);
+          const classNames = [isSwapSelected && "roster-cell-swap-selected", task && task.engineAddedReserve && "roster-cell-engine-added", task && task.chainRescued && "roster-cell-chain-rescued"].filter(Boolean);
           const inputClass = classNames.length ? ` class="${classNames.join(" ")}"` : "";
           return `<td class="${selected}"><input type="text"${inputClass}${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
         }).join("");
@@ -1879,10 +1887,17 @@
         const engineReserveNote = task.engineAddedReserve
           ? `<span class="engine-reserve-note">Added reserve task for ${driverLabel} by the engine</span>`
           : "";
-        return `<tr class="task-row${isAdded ? " task-row-added" : ""}${isDuplicate ? " task-row-duplicate" : ""}" draggable="true" data-task-row="${task.row}">
+        // Chain Rescue reassigning an EXISTING real task row is otherwise invisible (see
+        // applyChainRescue in section... this same file) -- distinct color from the reserve-added
+        // note above since it's a different mechanism doing a different thing (placing someone
+        // into a real duty, not inventing a new one).
+        const chainRescueNote = task.chainRescued
+          ? `<span class="chain-rescue-note">${driverLabel} placed here by Chain Rescue</span>`
+          : "";
+        return `<tr class="task-row${isAdded ? " task-row-added" : ""}${isDuplicate ? " task-row-duplicate" : ""}${task.chainRescued ? " task-row-chain-rescued" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
-          <td><input type="text" class="task-code-input" data-task-row="${task.row}" value="${escapeAttr(task.code)}" />${engineReserveNote}</td>
+          <td><input type="text" class="task-code-input" data-task-row="${task.row}" value="${escapeAttr(task.code)}" />${engineReserveNote}${chainRescueNote}</td>
           <td>${task.kind}</td>
           <td><input type="time" class="task-start-input" data-task-row="${task.row}" value="${timeVal}" /></td>
           <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${duplicateFlag}${driverLabel}</button></td>
@@ -2121,6 +2136,14 @@
     spares.forEach((t) => { if (!stillFreeIds.has(t.driver.id)) setTaskDriver(dateKey, t, null); });
     moves.forEach((m) => {
       setTaskDriver(dateKey, m.task, m.driver);
+      // Chain Rescue writes straight into an already-existing real task row, same setTaskDriver
+      // call any normal assignment uses -- with nothing else, this would be visually IDENTICAL to
+      // a task that was always going to land on this driver, even though the engine specifically
+      // pulled a strand to get them here. Confirmed directly as a real gap: a supervisor counting
+      // "12 unassigned, only 5 highlighted" had no way to see that Chain Rescue had quietly placed
+      // the other 7 into real tasks -- it only marks brand-new reserve rows (engineAddedReserve),
+      // never a reassignment of an EXISTING row. This flag exists so that placement is visible too.
+      m.task.chainRescued = true;
       dayResult.assignments.push({ task: m.task, driver: m.driver, shiftIdx: E.classifyShiftForMinutes(conditions, m.task.startMin) });
       // generateWholeMonth threads THIS SAME rotationState object forward day to day via
       // result.rotationState (never re-derived from day.tasks mid-pass) -- without this, every day
@@ -2380,7 +2403,7 @@
         // regenerating it -- otherwise a repeated whole-month run would keep stacking new ones on
         // top of the old, since nothing else in this loop removes a task row.
         day.tasks = day.tasks.filter((t) => !t.engineAddedReserve);
-        day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; });
+        day.tasks.forEach((t) => { if (!t.originalDriverRawText) { t.driver = null; t.chainRescued = false; } });
 
         const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment, livePlan.taskDays);
         const dayResult = result.perDay[0];
@@ -2482,7 +2505,7 @@
     });
     // A task with a real pre-existing answer (originalDriverRawText) is never reset here -- its
     // driver, whatever it resolved to at load, stays exactly as-is across every re-Generate.
-    day.tasks.forEach((t) => { if (!t.originalDriverRawText) t.driver = null; });
+    day.tasks.forEach((t) => { if (!t.originalDriverRawText) { t.driver = null; t.chainRescued = false; } });
     // Also passes the WHOLE loaded range as the lookahead so a fresh assignment on this one day
     // never gets stranded ahead of a real, already-fixed pre-existing duty on a LATER day this
     // session hasn't generated yet (see buildFutureFixedShiftIndex in engine.js) -- without this,
