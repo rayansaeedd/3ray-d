@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822c"></script>
-<script src="xlsx_surgical_patch.js?v=20260822c"></script>
+<script src="driver_assignment_engine.js?v=20260822d"></script>
+<script src="xlsx_surgical_patch.js?v=20260822d"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822c";
+    var APP_VERSION = "20260822d";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -46,6 +46,25 @@
     document.addEventListener("DOMContentLoaded", function () { setTimeout(checkVersion, 3000); });
     setInterval(checkVersion, 3 * 60 * 1000);
     document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") checkVersion(); });
+
+    // Always-visible version badge -- confirmed directly: a supervisor reporting "same issue"
+    // after a fix was actually just seeing a stale cached copy, and had no quick way to check
+    // which version they were even running without digging through devtools. This puts the exact
+    // deployed version in plain sight, so it can just be read off and compared on request instead
+    // of guessed at.
+    function addVersionBadge() {
+      if (document.getElementById("__versionBadge")) return;
+      var badge = document.createElement("div");
+      badge.id = "__versionBadge";
+      badge.textContent = "v" + APP_VERSION;
+      badge.title = "Deployed engine version -- tell this to Claude if something looks wrong.";
+      badge.setAttribute("style",
+        "position:fixed;bottom:4px;right:6px;z-index:99998;background:rgba(0,0,0,.55);color:#fff;" +
+        "padding:2px 7px;border-radius:4px;font:11px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;" +
+        "pointer-events:none;opacity:.65;");
+      document.body.appendChild(badge);
+    }
+    document.addEventListener("DOMContentLoaded", addVersionBadge);
   })();
 </script>
 <style>
