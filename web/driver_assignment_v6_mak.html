@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822b"></script>
-<script src="xlsx_surgical_patch.js?v=20260822b"></script>
+<script src="driver_assignment_engine.js?v=20260822c"></script>
+<script src="xlsx_surgical_patch.js?v=20260822c"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822b";
+    var APP_VERSION = "20260822c";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2134,6 +2134,22 @@
   // with the highlight that it has been added") and the button below (kept as a manual re-run for
   // the rarer case where a later hand-edit leaves a NEW driver unassigned).
   function applyReserveAutoFill(dateKey, day, dayResult, rotationState) {
+    // Hard safety check at this exact boundary -- reserve auto-fill must never be handed a driver
+    // who already has a real task somewhere else today. Confirmed as a real, previously-shipped
+    // bug (Chain Rescue blanket-clearing spare duplicates it never ended up using, before this
+    // ever ran) that turned real drivers into phantom "unassigned" ones; that specific bug is
+    // fixed, but this guard exists so if it (or anything upstream) ever regresses, it's caught and
+    // surfaced to the supervisor immediately -- via guardedCount below -- rather than silently
+    // reshuffling someone who was never actually free.
+    const assignedElsewhereIds = new Set(day.tasks.filter((t) => t.driver).map((t) => t.driver.id));
+    const bogusUnassigned = dayResult.unassignedDrivers.filter((d) => assignedElsewhereIds.has(d.id));
+    if (bogusUnassigned.length) {
+      console.warn(
+        `applyReserveAutoFill guard: ${bogusUnassigned.length} driver(s) flagged unassigned on ${dateKey} but already have a real task today -- excluded from reserve auto-fill.`,
+        bogusUnassigned.map((d) => d.name)
+      );
+      dayResult.unassignedDrivers = dayResult.unassignedDrivers.filter((d) => !assignedElsewhereIds.has(d.id));
+    }
     const { created, stillUnassigned } = E.buildReserveTasksForUnassignedDrivers(day, dayResult.unassignedDrivers, conditions, rotationState);
     created.forEach(({ code, startMin, kind, destination, driver }) => {
       const row = livePlan.nextFreeRow[dateKey]++;
@@ -2158,7 +2174,7 @@
       dayResult.assignments.push({ task, driver, shiftIdx: E.classifyShiftForMinutes(conditions, startMin) });
     });
     dayResult.unassignedDrivers = stillUnassigned; // only genuinely un-placeable drivers remain flagged
-    return { createdCount: created.length, stillUnassignedCount: stillUnassigned.length };
+    return { createdCount: created.length, stillUnassignedCount: stillUnassigned.length, guardedCount: bogusUnassigned.length };
   }
 
   addReserveForUnassignedBtn.addEventListener("click", () => {
@@ -2171,14 +2187,15 @@
     // actually knows which shift each of these currently-unassigned drivers is locked to, since
     // it just went through Generate's own cold-start seeding for every available driver.
     const rotationState = livePlan.lastGeneratedRotationState || {};
-    const { createdCount, stillUnassignedCount } = applyReserveAutoFill(dateKey, day, result, rotationState);
+    const { createdCount, stillUnassignedCount, guardedCount } = applyReserveAutoFill(dateKey, day, result, rotationState);
     renderTaskView(dateKey);
     renderRosterGrid();
     renderAllDaysTable();
     renderDayResultTable(dateKey);
     updateAddReserveForUnassignedBtn(dateKey);
     const stillNote = stillUnassignedCount ? ` (${stillUnassignedCount} driver${stillUnassignedCount === 1 ? "" : "s"} couldn't get a slot -- every real sign-in time in their shift is already at the 4-slot cap)` : "";
-    setDayStatus(`Added ${createdCount} reserve task${createdCount === 1 ? "" : "s"}, one per unassigned driver, already coded and assigned.${stillNote}`);
+    const guardNote = guardedCount ? ` ⚠ ${guardedCount} driver${guardedCount === 1 ? "" : "s"} were incorrectly flagged unassigned while already having a real task -- see console for detail, this should never happen.` : "";
+    setDayStatus(`Added ${createdCount} reserve task${createdCount === 1 ? "" : "s"}, one per unassigned driver, already coded and assigned.${stillNote}${guardNote}`, !!guardedCount);
   });
 
   // --- Driver-search picker: shared modal, reused for every task's Driver button ---------------
@@ -2332,7 +2349,7 @@
         if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
       });
 
-      let totalCreated = 0, totalStillUnassigned = 0;
+      let totalCreated = 0, totalStillUnassigned = 0, totalGuarded = 0;
       toGenerate.forEach((day) => {
         const dateKey = day.dateKey;
         const prevWrites = livePlan.engineWrites[dateKey] || {};
@@ -2361,6 +2378,7 @@
         const reserveFill = applyReserveAutoFill(dateKey, day, dayResult, rotationState);
         totalCreated += reserveFill.createdCount;
         totalStillUnassigned += reserveFill.stillUnassignedCount;
+        totalGuarded += reserveFill.guardedCount;
         livePlan.results[dateKey] = dayResult;
         livePlan.dayStatus[dateKey] = "generated";
       });
@@ -2381,11 +2399,12 @@
       renderAllDaysTable();
       renderRosterGrid();
       onDaySelectChange();
+      const guardNote = totalGuarded ? ` ⚠ ${totalGuarded} driver${totalGuarded === 1 ? "" : "s"} were incorrectly flagged unassigned while already having a real task somewhere -- see console, this should never happen.` : "";
       setMonthStatus(
         `Generated ${toGenerate.length} day(s) in one consistent pass. Added ${totalCreated} auto-reserve task${totalCreated === 1 ? "" : "s"} total` +
         (totalStillUnassigned ? `, ${totalStillUnassigned} driver${totalStillUnassigned === 1 ? "" : "s"} still couldn't get a slot` : "") +
-        `. Review each day below and Save when you're happy with it.${violationNote}`,
-        !!violations.length
+        `. Review each day below and Save when you're happy with it.${violationNote}${guardNote}`,
+        !!violations.length || !!totalGuarded
       );
     } catch (err) {
       console.error(err);
@@ -2543,7 +2562,10 @@
         ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} in this day's result: ` +
           violations.map((v) => `${v.driverName} -- ${v.detail}`).join(" | ")
         : "";
-      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}${violationNote}`, !!violations.length);
+      const guardNote = reserveFill.guardedCount
+        ? ` ⚠ ${reserveFill.guardedCount} driver${reserveFill.guardedCount === 1 ? "" : "s"} were incorrectly flagged unassigned while already having a real task -- see console, this should never happen.`
+        : "";
+      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}${violationNote}${guardNote}`, !!violations.length || !!reserveFill.guardedCount);
     } catch (err) {
       console.error(err);
       setDayStatus("Could not generate this day: " + err.message, true);
