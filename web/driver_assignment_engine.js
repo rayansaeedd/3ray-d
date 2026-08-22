@@ -970,6 +970,18 @@
     const wantKind = task.kind === "reserve" ? "reserve" : "trip";
     return wouldBeFourthConsecutiveKind(st, wantKind);
   }
+  // Confirmed as a real, live bug: a direct placement (see tryFill in buildChainRescueMoves below)
+  // only ever checked rest-time, never how far the target band is from the driver's own locked
+  // shift -- so a driver locked to Early Night could get placed directly at Early Morning purely
+  // because that happened to be the day's only remaining shortage, a 6-band, ~9-hour swing from
+  // where they actually belong. Confirmed directly against real September data: RAKAN NAFEA N
+  // ALHAISONI (locked Early Night) placed at 05:30 with nothing else touched that day. Distance is
+  // wrap-aware (9 bands run in a real 24h loop -- Late Night(8) sits right next to Early
+  // Morning(0), not six bands away).
+  function chainRescueBandDistance(a, b) {
+    const raw = Math.abs(a - b);
+    return Math.min(raw, 9 - raw);
+  }
   // Preferred/max backward-hop step, in minutes -- tested directly against real September data.
   // 90min covers the overwhelming majority of real hops needed; a small number of days have a
   // genuine 2+ hour hole in the day's own task schedule (nothing sits between two real tasks close
@@ -1015,11 +1027,24 @@
     function tryFill(task, band, visited) {
       if (band === latestActiveBand) {
         const restEligible = freeDrivers.filter((d) => !usedDriverIds.has(d.id) && chainRescuePassesRest(conditions, rotationState, d.id, day, task));
-        const notFourth = restEligible.filter((d) => !chainRescueWouldBeFourthConsecutive(rotationState, d.id, task));
-        const chosen = (notFourth.length ? notFourth : restEligible)[0];
+        // Graduated by how close the driver's OWN locked shift is to this band -- exact match
+        // first, then adjacent, only falling all the way through to "anyone at all" if genuinely
+        // nobody shift-appropriate is available. Same "prefer close, widen only when truly empty"
+        // shape as everywhere else in this engine (see SMOOTH_FORWARD_STEP_TIERS_MIN), applied here
+        // for the first time to direct placements specifically.
+        const withDistance = restEligible.map((d) => {
+          const st = rotationState[d.id];
+          const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+          return { d, distance: ownIdx != null ? chainRescueBandDistance(ownIdx, band) : 999 };
+        });
+        const exact = withDistance.filter((x) => x.distance === 0);
+        const near = withDistance.filter((x) => x.distance === 1);
+        const tiered = exact.length ? exact : near.length ? near : withDistance;
+        const notFourth = tiered.filter((x) => !chainRescueWouldBeFourthConsecutive(rotationState, x.d.id, task));
+        const chosen = (notFourth.length ? notFourth : tiered)[0];
         if (chosen) {
-          usedDriverIds.add(chosen.id);
-          return { driver: chosen, vacatedTask: null };
+          usedDriverIds.add(chosen.d.id);
+          return { driver: chosen.d, vacatedTask: null };
         }
       }
       if (band < 8) {
