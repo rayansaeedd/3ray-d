@@ -890,6 +890,182 @@
     return result;
   }
 
+  // "Chain Rescue" -- runs after the normal per-task assignment loop and before reserve auto-fill
+  // (buildReserveTasksForUnassignedDrivers, just below), for any real Task Program duty still
+  // unfilled. Built and validated against real September data across many rounds of testing
+  // before shipping: a naive "give any idle driver the nearest open task" pass was tried first and
+  // rejected -- it filled real gaps, but sometimes by handing a driver locked to one shift a task
+  // hours away from it (confirmed directly, e.g. a driver locked to Late Afternoon getting an
+  // 08:00 Morning task) purely because they happened to be free and clear rest-time, the same
+  // "far jump" problem rule 4/6 already exist to prevent everywhere else in this engine. The
+  // design below fixes that: a free driver may only be placed directly onto a duty in the LATEST
+  // shift band that still has any shortage that day (see latestActiveBand below) -- everywhere
+  // earlier must be reached by an actual backward CHAIN of small hops through already-filled
+  // drivers, each one individually rest-time-checked, never one person making a single long jump.
+
+  // Not every open reserve-kind duty matters equally. Confirmed directly: several reserve slots at
+  // the same sign-in time (e.g. four 0800/7R* rows) are redundant copies of the same duty -- only
+  // ONE needs a driver to satisfy that time band, the rest can stay open with no real consequence.
+  // The one exception is a code ending in "RK": despite reading as a reserve code (classifyCode
+  // sees the "R" and calls it "reserve"), confirmed directly it's actually a real trip -- the
+  // driver travels to another city to stand reserve THERE -- so it's mandatory like any other trip
+  // or sweep, never treated as a spare duplicate.
+  function chainRescueSuffix(code) {
+    const m = /^(\d{3,4})\/(\d{0,2})([A-Za-z]{1,3})\s*$/.exec(String(code).trim());
+    return m ? m[3].toUpperCase() : null;
+  }
+  function isChainRescueMandatory(task) {
+    if (task.kind === "trip" || task.kind === "sweep") return true;
+    return chainRescueSuffix(task.code) === "RK";
+  }
+  // Every still-open mandatory duty, plus (for each same-time reserve-pool group with NOTHING
+  // filled yet) one representative -- once any one member of a group has a driver, the rest of
+  // that group is no longer a real gap and is left out of this list entirely.
+  function chainRescueOpenDuties(day) {
+    const mandatoryOpen = day.tasks.filter((t) => !t.driver && isChainRescueMandatory(t));
+    const lenientTasks = day.tasks.filter((t) => t.kind === "reserve" && chainRescueSuffix(t.code) !== "RK");
+    const groups = {};
+    lenientTasks.forEach((t) => (groups[t.startMin] = groups[t.startMin] || []).push(t));
+    const lenientOpen = [];
+    Object.values(groups).forEach((group) => {
+      if (group.some((t) => t.driver)) return;
+      lenientOpen.push(group[0]);
+    });
+    return mandatoryOpen.concat(lenientOpen);
+  }
+  // A reserve-pool group's 2nd+ filled member is a spare duplicate -- their own group's "at least
+  // one" requirement is already satisfied by whichever member is kept, so freeing the rest costs
+  // nothing and needs no backfill. Confirmed directly against real data: this is real, safe
+  // manpower a supervisor would recognize as available, not people who need replacing first.
+  function chainRescueSparePool(day) {
+    const groups = {};
+    day.tasks.forEach((t) => {
+      if (t.kind === "reserve" && chainRescueSuffix(t.code) !== "RK" && t.driver) {
+        (groups[t.startMin] = groups[t.startMin] || []).push(t);
+      }
+    });
+    const spares = [];
+    Object.values(groups).forEach((g) => { if (g.length > 1) spares.push(...g.slice(1)); });
+    return spares;
+  }
+  function chainRescuePassesRest(conditions, rotationState, driverId, day, task) {
+    const st = rotationState[driverId];
+    if (!st) return false;
+    if (st.lastDutyEndMin != null) {
+      const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, task.startMin);
+      if (gap < conditions.restHours * 60) return false;
+    }
+    return true;
+  }
+  // Chain Rescue is a real assignment, same as anything else this engine hands out -- it should
+  // respect the same soft "avoid a 4th+ consecutive same-kind duty" preference the normal
+  // per-task loop already applies (wouldBeFourthConsecutiveKind), not just rest-time. Confirmed as
+  // a real gap in testing: the live audit flagged drivers picked up a 4th-straight reserve day
+  // purely because Chain Rescue's candidate order never considered it. Same shape as everywhere
+  // else in this engine -- a preference, not a hard exclusion, so it only narrows the candidate
+  // list when a better option actually exists.
+  function chainRescueWouldBeFourthConsecutive(rotationState, driverId, task) {
+    const st = rotationState[driverId];
+    if (!st) return false;
+    const wantKind = task.kind === "reserve" ? "reserve" : "trip";
+    return wouldBeFourthConsecutiveKind(st, wantKind);
+  }
+  // Preferred/max backward-hop step, in minutes -- tested directly against real September data.
+  // 90min covers the overwhelming majority of real hops needed; a small number of days have a
+  // genuine 2+ hour hole in the day's own task schedule (nothing sits between two real tasks close
+  // enough), and 90min alone leaves those unreachable even though every individual hop would
+  // otherwise be perfectly rest-time-safe. 180min was the smallest widening that closed those
+  // gaps in testing without ever needing to go further.
+  const CHAIN_RESCUE_PREFERRED_STEP_MIN = 90;
+  const CHAIN_RESCUE_MAX_STEP_MIN = 180;
+
+  // Builds the day's Chain Rescue plan without mutating anything -- `freeDrivers` is whatever the
+  // caller has already identified as available (its own currently-idle drivers plus
+  // chainRescueSparePool's spare duplicates); day.tasks is read as-is (spare duplicate tasks are
+  // excluded from the hop candidate pool below, since their driver is being freed regardless of
+  // whether this plan ends up using them for anything).
+  // Returns:
+  //   moves: [{task, driver, vacatedTask}] -- task gets driver; vacatedTask (null for a driver
+  //     coming straight from freeDrivers) is the task that same driver is being moved OFF of, and
+  //     is itself covered by its own separate entry in this same list (a hop's source task always
+  //     gets refilled by the next link in the chain, never left half-done).
+  //   stillFreeDrivers: freeDrivers not used by any move.
+  function buildChainRescueMoves(day, conditions, rotationState, freeDrivers) {
+    const spareTaskSet = new Set(chainRescueSparePool(day));
+    const filledByBand = {};
+    day.tasks.forEach((t) => {
+      if (!t.driver || spareTaskSet.has(t)) return;
+      const idx = classifyShiftForMinutes(conditions, t.startMin);
+      (filledByBand[idx] = filledByBand[idx] || []).push({ task: t, driver: t.driver });
+    });
+
+    const openDuties = chainRescueOpenDuties(day);
+    const openByBand = {};
+    openDuties.forEach((t) => {
+      const idx = classifyShiftForMinutes(conditions, t.startMin);
+      (openByBand[idx] = openByBand[idx] || []).push(t);
+    });
+    const activeBands = Object.keys(openByBand).map(Number);
+    const latestActiveBand = activeBands.length ? Math.max(...activeBands) : -1;
+
+    const moves = [];
+    const usedDriverIds = new Set();
+    const reassignedTasks = new Set();
+
+    function tryFill(task, band, visited) {
+      if (band === latestActiveBand) {
+        const restEligible = freeDrivers.filter((d) => !usedDriverIds.has(d.id) && chainRescuePassesRest(conditions, rotationState, d.id, day, task));
+        const notFourth = restEligible.filter((d) => !chainRescueWouldBeFourthConsecutive(rotationState, d.id, task));
+        const chosen = (notFourth.length ? notFourth : restEligible)[0];
+        if (chosen) {
+          usedDriverIds.add(chosen.id);
+          return { driver: chosen, vacatedTask: null };
+        }
+      }
+      if (band < 8) {
+        const candidates = (filledByBand[band + 1] || [])
+          .filter((a) => !reassignedTasks.has(a.task) && !usedDriverIds.has(a.driver.id))
+          .map((a) => ({ a, step: a.task.startMin - task.startMin }))
+          .filter(({ step }) => step >= 0 && step <= CHAIN_RESCUE_MAX_STEP_MIN)
+          .sort((x, y) => x.step - y.step);
+        const preferred = candidates.filter((c) => c.step <= CHAIN_RESCUE_PREFERRED_STEP_MIN);
+        const ordered = preferred.length ? preferred.concat(candidates.filter((c) => c.step > CHAIN_RESCUE_PREFERRED_STEP_MIN)) : candidates;
+        const restEligible = ordered.filter(({ a }) => !visited.has(a.task) && chainRescuePassesRest(conditions, rotationState, a.driver.id, day, task));
+        // Preferred tier first (small step, not a 4th-consecutive), but if literally none of THAT
+        // tier's recursion pans out, still fall through to the excluded ones rather than giving up
+        // a chain that a less-ideal candidate could have completed -- a real gap in an earlier
+        // version of this, which stopped trying entirely once the preferred tier was non-empty
+        // even if every one of them turned out to be a recursive dead end.
+        const notFourth = restEligible.filter(({ a }) => !chainRescueWouldBeFourthConsecutive(rotationState, a.driver.id, task));
+        const fourthOnly = restEligible.filter(({ a }) => chainRescueWouldBeFourthConsecutive(rotationState, a.driver.id, task));
+        const finalOrder = notFourth.concat(fourthOnly);
+        for (const { a } of finalOrder) {
+          const refill = tryFill(a.task, band + 1, new Set([...visited, a.task]));
+          if (refill) {
+            reassignedTasks.add(a.task);
+            usedDriverIds.add(a.driver.id);
+            moves.push({ task: a.task, driver: refill.driver, vacatedTask: refill.vacatedTask });
+            return { driver: a.driver, vacatedTask: a.task };
+          }
+        }
+      }
+      return null;
+    }
+
+    for (let band = 0; band <= 8; band++) {
+      const opens = (openByBand[band] || []).slice().sort((t1, t2) => {
+        const kindRank = (t) => (isChainRescueMandatory(t) ? 0 : 1);
+        return kindRank(t1) - kindRank(t2) || t1.startMin - t2.startMin;
+      });
+      opens.forEach((task) => {
+        const result = tryFill(task, band, new Set([task]));
+        if (result) moves.push({ task, driver: result.driver, vacatedTask: result.vacatedTask });
+      });
+    }
+    const stillFreeDrivers = freeDrivers.filter((d) => !usedDriverIds.has(d.id));
+    return { moves, stillFreeDrivers };
+  }
+
   // Real reserve codes carry a route digit before the letters ("0700/7RA") -- confirmed as the
   // convention to use for newly-created ones, matching how the overwhelming majority of real
   // reserve tasks are already written (a small minority use no digit at all, e.g. "1100/RA", but
@@ -1798,6 +1974,7 @@
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
     buildReserveTasksForUnassignedDrivers, findNextFreeTaskRow, planReserveRowInsertions,
+    chainRescueSparePool, buildChainRescueMoves,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     isOfficeDutyCode, syncOfficeDutyToRoster,
     recordAssignment, rebuildRotationStateFromSavedDays, auditRotationRules,

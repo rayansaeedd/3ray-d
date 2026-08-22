@@ -11,8 +11,8 @@
      silently leaves someone running stale engine/patcher code. Bump this date whenever
      driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
      them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260821b"></script>
-<script src="xlsx_surgical_patch.js?v=20260821a"></script>
+<script src="driver_assignment_engine.js?v=20260822a"></script>
+<script src="xlsx_surgical_patch.js?v=20260822a"></script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +21,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260821e";
+    var APP_VERSION = "20260822a";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2079,6 +2079,28 @@
     addReserveForUnassignedBtn.disabled = count === 0;
   }
 
+  // "Chain Rescue" -- runs right after Generate's normal per-task pass and before reserve
+  // auto-fill below, for any real Task Program duty still unfilled. See buildChainRescueMoves in
+  // engine.js for the actual mechanism (spare reserve-duplicate freeing, entry only at the day's
+  // latest still-short shift band, small backward hops through already-filled drivers). This just
+  // turns its proposed moves into real task/roster writes via setTaskDriver, same convention as
+  // applyReserveAutoFill just below -- including folding each move into dayResult.assignments so
+  // every count that reads off it (Assigned/Unassigned) reflects the result immediately.
+  function applyChainRescue(dateKey, day, dayResult, rotationState) {
+    const spares = E.chainRescueSparePool(day);
+    const freeDrivers = spares.map((t) => t.driver).concat(dayResult.unassignedDrivers);
+    const { moves, stillFreeDrivers } = E.buildChainRescueMoves(day, conditions, rotationState, freeDrivers);
+    // A spare duplicate's own slot is never required to be refilled (see chainRescueSparePool) --
+    // clear it outright rather than leaving its old driver's name sitting there unassigned-looking.
+    spares.forEach((t) => setTaskDriver(dateKey, t, null));
+    moves.forEach((m) => {
+      setTaskDriver(dateKey, m.task, m.driver);
+      dayResult.assignments.push({ task: m.task, driver: m.driver, shiftIdx: E.classifyShiftForMinutes(conditions, m.task.startMin) });
+    });
+    dayResult.unassignedDrivers = stillFreeDrivers; // only genuinely still-free drivers remain flagged
+    return { movedCount: moves.length };
+  }
+
   // Turns unassigned drivers into REAL reserve tasks, already coded and assigned -- "we don't
   // want to leave a driver with no task... we can do that by adding a reserved task to the task
   // file." Confirmed convention: at most 4 reserve slots per sign-in time (R, RA, RB, RC), each
@@ -2318,6 +2340,7 @@
           newWrites[driver.id] = task.code;
         });
         livePlan.engineWrites[dateKey] = newWrites;
+        applyChainRescue(dateKey, day, dayResult, rotationState);
         const reserveFill = applyReserveAutoFill(dateKey, day, dayResult, rotationState);
         totalCreated += reserveFill.createdCount;
         totalStillUnassigned += reserveFill.stillUnassignedCount;
@@ -2423,6 +2446,9 @@
       newWrites[driver.id] = task.code;
     });
     livePlan.engineWrites[dateKey] = newWrites;
+    // Chain Rescue runs before reserve auto-fill, same rotationState reasoning as the comment
+    // below -- it needs to know each driver's real rest-time history, not a blank cold start.
+    applyChainRescue(dateKey, day, dayResult, rotationState);
     // Automatically top up a real reserve task for every driver still unassigned after the normal
     // pass -- confirmed directly: "we don't want to leave a driver with no task... can we [do
     // this] automatically... the supervisor will know with the highlight that it has been added."
