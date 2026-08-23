@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822k")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822k"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822l")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822l"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822k";
+    var APP_VERSION = "20260822l";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -347,7 +347,7 @@
 
 <header>
   <h1>Driver Task Assignment v6 — Madinah Station</h1>
-  <div class="sub">Load both files, set your conditions, then Generate the whole month in one consistent pass. Review and hand-edit each day, Save it as a checkpoint, then Grant the month once you're happy to finalize the schedule.</div>
+  <div class="sub">Load both files, set your conditions, then Generate the whole month in one consistent pass. Review and hand-edit each day, Save it as a checkpoint, then Download once you're happy with the schedule.</div>
 </header>
 
 <main>
@@ -398,23 +398,9 @@
   </div>
 
   <div class="card">
-    <h2>3. Continue from previous memory (optional)</h2>
-    <div class="note">Only matters if you want this run to continue a driver's shift rotation, rest-time and reserve/trip balance from an earlier granted month. Skip this to start every driver fresh -- nothing carries over unless you explicitly load it here. This is shared with v1's memory files -- a month granted from either tool can feed the other.</div>
-    <div class="date-range-row" style="margin-top:12px; align-items:flex-end;">
-      <label class="field" style="max-width:340px;">Continue from a granted month
-        <select id="memorySlotSelect"><option value="">Start fresh (no memory)</option></select>
-      </label>
-      <button type="button" class="plain" id="memorySlotDeleteBtn" disabled title="Permanently deletes this granted month from this browser's memory -- does not affect any already-exported file">Delete this granted month</button>
-    </div>
-    <div class="dropzone" id="memoryDropzone" style="margin-top:14px; max-width:460px;">
-      <div class="icon">&#8595;</div>
-      <div><strong>Or upload a memory file</strong></div>
-      <div class="hint">On a different laptop/browser? Drop the memory .xlsx you downloaded when you granted a previous month, or <span class="browse-link" id="memoryBrowseLink">browse</span>.</div>
-      <input type="file" id="memoryFileInput" accept=".xlsx" />
-    </div>
-    <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no memory loaded.</div>
-
-    <div class="note" style="margin-top:18px;">Or skip building a memory file by hand -- drop a completed month's own Task Program (the real file, with driver names already filled in) and this reads each driver's shift, reserve/trip mix and last duty straight out of it. Only the Task Program is needed for this -- no Roster upload, since every task's own NAME cell already says who did it. Set the first date this file covers, then drop it below.</div>
+    <h2>3. Shift rotation history (optional)</h2>
+    <div class="note">Only matters if you want this run's shift-lock rotation, rest-time and reserve/trip balance to continue from the PREVIOUS real month -- e.g. generating September correctly needs to know each driver's actual August shift. Skip this to start every driver fresh (each gets a shift seeded purely from this month's own demand, with no history behind it). Nothing is ever saved in this browser -- refreshing or reopening this page always starts with no history loaded, on purpose: the only source of truth is the real completed Task Program you drop below, read fresh every time, never a remembered copy that could quietly drift out of date or mismatch what's actually deployed.</div>
+    <div class="note" style="margin-top:10px;">Drop the PREVIOUS month's completed Task Program (the real file, with driver names already filled in) and this reads each driver's shift, reserve/trip mix and last duty straight out of it. Only the Task Program is needed -- no Roster upload, since every task's own NAME cell already says who did it. Set the first date this file covers, then drop it below.</div>
     <div class="date-range-row" style="margin-top:10px;">
       <label class="field">First day this completed Task Program covers
         <input type="date" id="importMonthStartDate" />
@@ -422,10 +408,11 @@
     </div>
     <div class="dropzone" id="importMonthDropzone" style="margin-top:10px; max-width:460px;">
       <div class="icon">&#8595;</div>
-      <div><strong>Import a completed month's Task Program</strong></div>
+      <div><strong>Import the previous month's completed Task Program</strong></div>
       <div class="hint">Drop the completed Task Program .xlsx here, or <span class="browse-link" id="importMonthBrowseLink">browse</span>. Set the date above first.</div>
       <input type="file" id="importMonthFileInput" accept=".xlsx" />
     </div>
+    <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no shift rotation history loaded.</div>
   </div>
 
   <div class="card">
@@ -436,7 +423,7 @@
 
   <div class="card">
     <h2>5. Generate, then review day-by-day</h2>
-    <div class="note">Loading builds this session from the files/dates/conditions above. Generate the whole month in one consistent pass -- every day sees the exact same, complete picture, so there's no risk from generating out of order or skipping around. Then pick a day below to review it, hand-edit anything, and Save it as a checkpoint once you're happy. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Only Grant, at the bottom of this card, finalizes anything.</div>
+    <div class="note">Loading builds this session from the files/dates/conditions above. Generate the whole month in one consistent pass -- every day sees the exact same, complete picture, so there's no risk from generating out of order or skipping around. Then pick a day below to review it, hand-edit anything, and Save it as a checkpoint once you're happy. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Download (above) always exports the current state of the whole session, saved and not-yet-saved days alike -- there's no separate "finalize" step.</div>
     <div class="generate-row">
       <button type="button" class="primary" id="startBtn" disabled>Load days for review</button>
       <span class="status-line" id="statusLine"></span>
@@ -458,11 +445,6 @@
       <div class="status-line" id="dayStatusLine"></div>
       <table class="summary-table" id="dayResultTable" style="margin-top:12px; display:none;"></table>
       <div class="note">"Unassigned tasks" = the rest-time rule (the only hard limit) ruled out every driver locked into this task's own shift for these two weeks, or there were simply more tasks than available drivers in that shift. "Unassigned drivers" is left genuinely blank on purpose -- no manufactured reserve duty -- for you to fix by hand.</div>
-
-      <div class="generate-row">
-        <button type="button" class="primary" id="grantMonthBtn">Grant this month's schedule</button>
-      </div>
-      <div class="note">The real finish line: once you've saved as many days as you want for this month, Grant confirms exactly how many days are currently saved (out of the whole session), finalizes them as the month's schedule, saves that as memory for next month, and downloads a backup copy. Grant this once you're done reviewing the whole month -- not after every single day.</div>
 
       <div class="note" style="margin-top:14px;">
         <div style="margin-bottom:6px;">All days in this session:</div>
@@ -611,11 +593,6 @@ window.__initDriverAssignmentApp = function () {
   const rosterBrowseLink = document.getElementById("rosterBrowseLink");
   const rosterLoadedLabel = document.getElementById("rosterLoadedLabel");
   const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
-  const memorySlotSelect = document.getElementById("memorySlotSelect");
-  const memorySlotDeleteBtn = document.getElementById("memorySlotDeleteBtn");
-  const memoryDropzone = document.getElementById("memoryDropzone");
-  const memoryFileInput = document.getElementById("memoryFileInput");
-  const memoryBrowseLink = document.getElementById("memoryBrowseLink");
   const memoryStatusLabel = document.getElementById("memoryStatusLabel");
   const importMonthStartDateInput = document.getElementById("importMonthStartDate");
   const importMonthDropzone = document.getElementById("importMonthDropzone");
@@ -634,7 +611,6 @@ window.__initDriverAssignmentApp = function () {
   const dayStatusLine = document.getElementById("dayStatusLine");
   const dayResultTable = document.getElementById("dayResultTable");
   const allDaysTable = document.getElementById("allDaysTable");
-  const grantMonthBtn = document.getElementById("grantMonthBtn");
   const rosterGridCard = document.getElementById("rosterGridCard");
   const rosterGridTable = document.getElementById("rosterGridTable");
   const rosterCellPickerOverlay = document.getElementById("rosterCellPickerOverlay");
@@ -715,79 +691,17 @@ window.__initDriverAssignmentApp = function () {
 
   let conditions = loadConditions();
 
-  // --- Rotation memory: explicit, granted-on-purpose, shared with v1 (same station-scoped key) -
-  // Cross-MONTH memory -- separate from this page's own per-DAY Save workflow below, and from the
-  // month-level Grant button further down. Loading a slot here only seeds the starting point for
-  // drivers a day's own in-range saved history doesn't already cover.
-  const MEMORY_SLOTS_KEY = "driverAssignmentGrantedSlots_" + STATION;
-  let memorySlots = loadMemorySlots();
+  // --- Shift rotation history: explicit, per-session only, NEVER persisted anywhere -----------
+  // Confirmed directly as a deliberate design decision: this must never survive a page refresh or
+  // be silently reused across sessions -- the only source of truth for a driver's carried-over
+  // shift lock is the real completed Task Program dropped in "3. Shift rotation history" above,
+  // read fresh every time. A prior version of this page also offered a persisted, browser-stored
+  // "granted month" memory slot system (localStorage) as an alternative -- removed entirely,
+  // since any state that can silently carry across sessions or come from an unverified source is
+  // exactly the kind of thing that turns "why did I get a different result" into an hours-long
+  // investigation. Cross-MONTH history -- separate from this page's own per-DAY Save workflow.
   let memoryRotationState = {};
-
-  function loadMemorySlots() {
-    try {
-      const raw = localStorage.getItem(MEMORY_SLOTS_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch (err) { /* ignore */ }
-    return {};
-  }
-  function saveMemorySlots(slots) {
-    try { localStorage.setItem(MEMORY_SLOTS_KEY, JSON.stringify(slots)); } catch (err) { /* storage disabled -- won't persist */ }
-  }
   function setMemoryStatus(text) { memoryStatusLabel.textContent = text; }
-  function renderMemorySlotOptions() {
-    const entries = Object.keys(memorySlots)
-      .map((k) => ({ key: k, ...memorySlots[k] }))
-      .sort((a, b) => (b.grantedAt || "").localeCompare(a.grantedAt || ""));
-    const current = memorySlotSelect.value;
-    memorySlotSelect.innerHTML = `<option value="">Start fresh (no memory)</option>` +
-      entries.map((e) => `<option value="${e.key}">${e.monthLabel} (granted ${new Date(e.grantedAt).toLocaleDateString()})</option>`).join("");
-    if (entries.some((e) => e.key === current)) memorySlotSelect.value = current;
-    memorySlotDeleteBtn.disabled = !memorySlotSelect.value;
-  }
-  renderMemorySlotOptions();
-  setMemoryStatus("Starting fresh -- no memory loaded.");
-
-  memorySlotSelect.addEventListener("change", () => {
-    const key = memorySlotSelect.value;
-    memoryFileInput.value = "";
-    memorySlotDeleteBtn.disabled = !key;
-    if (!key) {
-      memoryRotationState = {};
-      setMemoryStatus("Starting fresh -- no memory loaded.");
-      renderRosterGrid();
-      return;
-    }
-    const slot = memorySlots[key];
-    memoryRotationState = JSON.parse(JSON.stringify(slot.rotationState));
-    setMemoryStatus(`Continuing from granted memory: ${slot.monthLabel} (${Object.keys(memoryRotationState).length} driver${Object.keys(memoryRotationState).length === 1 ? "" : "s"}).`);
-    // The roster grid's per-driver "last week" swatch (and the driver-picker badge, computed fresh
-    // on open) both read memoryRotationState through computeReadOnlyRotationState() -- but nothing
-    // else re-renders the grid just because memory changed, so without this it keeps showing
-    // whatever memory was active at its last render (a real, reported bug: switching memory here
-    // left the roster's swatches "stuck to the old memory" until some unrelated edit redrew them).
-    renderRosterGrid();
-  });
-
-  // Permanently removes a granted month from THIS browser's memory only -- the backup .xlsx
-  // downloaded at Grant time (or any copy of it) is completely untouched, so this is never the
-  // only copy of that month's real result, only this browser's stored starting point for a FUTURE
-  // month. Confirmed as a real, wanted capability: a wrong or superseded Grant currently has no way
-  // to be cleared out short of clearing the browser's storage entirely (which would also wipe every
-  // other granted month and the saved Conditions).
-  memorySlotDeleteBtn.addEventListener("click", async () => {
-    const key = memorySlotSelect.value;
-    if (!key) return;
-    const slot = memorySlots[key];
-    const ok = await confirmEdit(`Delete the granted memory for ${slot.monthLabel} (granted ${new Date(slot.grantedAt).toLocaleDateString()}) from this browser? This only removes it from this browser's memory -- any backup file you already downloaded for it is untouched. A future month currently set to continue from it will start fresh instead, unless you pick a different granted month.`);
-    if (!ok) return;
-    delete memorySlots[key];
-    saveMemorySlots(memorySlots);
-    memorySlotSelect.value = "";
-    memoryRotationState = {};
-    renderMemorySlotOptions();
-    setMemoryStatus("Starting fresh -- no memory loaded.");
-    renderRosterGrid();
-  });
 
   let _confirmEditResolve = null;
   function confirmEdit(message) {
@@ -1050,27 +964,9 @@ window.__initDriverAssignmentApp = function () {
     }
   });
 
-  wireDropzone(memoryDropzone, memoryFileInput, memoryBrowseLink, async (file) => {
-    try {
-      setStatus("Reading " + file.name + "...");
-      const loaded = await loadWorkbook(file);
-      const parsed = E.parseMemoryWorkbook(loaded.wb);
-      if (parsed.station && parsed.station !== STATION) {
-        const proceed = await confirmEdit(`This memory file says it was granted for station "${parsed.station}", not "${STATION}". Load it anyway?`);
-        if (!proceed) { setStatus(""); return; }
-      }
-      memoryRotationState = parsed.rotationState;
-      memorySlotSelect.value = "";
-      const count = Object.keys(memoryRotationState).length;
-      setMemoryStatus(`Loaded memory file: ${parsed.station || "unknown station"}, granted for ${parsed.monthLabel || "an unknown month"} (${count} driver${count === 1 ? "" : "s"}).`);
-      setStatus("");
-      renderRosterGrid();
-    } catch (err) {
-      console.error(err);
-      setStatus("Could not read this memory file: " + err.message, true);
-    }
-  });
-
+  // Sole source of shift rotation history now -- computed fresh from the real file every time,
+  // used only for THIS session, never written to localStorage or downloaded as a separate backup
+  // (nothing reads that format back in anymore, so a backup file would just be dead weight).
   wireDropzone(importMonthDropzone, importMonthFileInput, importMonthBrowseLink, async (file) => {
     try {
       if (!importMonthStartDateInput.value) {
@@ -1083,31 +979,15 @@ window.__initDriverAssignmentApp = function () {
       const startDate = new Date(y, m - 1, d);
       const result = computeStateFromCompletedTaskProgram(loaded.wb, startDate);
 
-      const monthKey = E.monthKeyFromDateKey(result.firstDateKey);
       const monthLabel = E.monthLabelFromDateKey(result.firstDateKey);
-      const replacing = !!memorySlots[monthKey];
       const driverCount = Object.keys(result.state).length;
       const ok = await confirmEdit(
-        `Import ${result.firstDateKey} to ${result.lastDateKey} from "${file.name}"? This resolved ${result.resolvedTasks} of ${result.totalTasks} task rows to a real driver and computed rotation history for ${driverCount} driver(s). It'll be saved as ${monthLabel}'s memory${replacing ? ` (replacing what's already saved for ${monthLabel})` : ""} and downloaded as a backup file.`
+        `Import ${result.firstDateKey} to ${result.lastDateKey} from "${file.name}"? This resolved ${result.resolvedTasks} of ${result.totalTasks} task rows to a real driver and computed shift rotation history for ${driverCount} driver(s), for THIS session only.`
       );
       if (!ok) { setStatus(""); return; }
 
       memoryRotationState = result.state;
-      memorySlotSelect.value = "";
-
-      const grantedAt = new Date().toISOString();
-      memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(result.state)) };
-      saveMemorySlots(memorySlots);
-      renderMemorySlotOptions();
-      memorySlotSelect.value = monthKey;
-      memorySlotDeleteBtn.disabled = false;
-
-      const rosterLike = { drivers: Object.keys(result.namesById).map((id) => ({ id, name: result.namesById[id] })) };
-      const rows = E.buildMemoryRows(rosterLike, result.state);
-      const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
-      downloadBlob(blob, `${STATION}_memory_${monthKey}.xlsx`);
-
-      setMemoryStatus(`Imported ${monthLabel} directly from its Task Program (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved. Saved as memory and downloaded a backup file.`);
+      setMemoryStatus(`Imported ${monthLabel} directly from its Task Program (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved.`);
       setStatus("");
       renderRosterGrid();
     } catch (err) {
@@ -2889,92 +2769,6 @@ window.__initDriverAssignmentApp = function () {
     }
   });
 
-  async function buildMemoryWorkbookBlob(rows, station, monthLabel, grantedAt) {
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Rotation Memory");
-    ws.addRow(["Driver Assignment Engine -- Rotation Memory"]);
-    ws.addRow(["Station", station]);
-    ws.addRow(["Granted for", monthLabel]);
-    ws.addRow(["Granted at", grantedAt]);
-    ws.addRow([]);
-    ws.addRow(["Driver ID", "Driver Name", "Shift Anchor Date", "Shift Anchor Index", "Last Duty End Date", "Last Duty End Time", "Recent Kinds", "Cumulative Reserve", "Cumulative Trip"]);
-    rows.forEach((r) => {
-      ws.addRow([
-        r.driverId, r.driverName,
-        r.shiftAnchorDate, r.shiftAnchorIndex,
-        r.lastDutyEndDateKey, r.lastDutyEndTime, r.recentKinds,
-        r.cumulativeReserve, r.cumulativeTrip,
-      ]);
-    });
-    ws.getRow(1).font = { bold: true, size: 13 };
-    const headerRowIdx = 6;
-    ws.getRow(headerRowIdx).font = { bold: true };
-    ws.getRow(headerRowIdx).eachCell((cell) => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEAF3EA" } }; });
-    ws.columns.forEach((col, i) => { col.width = i === 1 ? 28 : 16; });
-    const buf = await wb.xlsx.writeBuffer();
-    return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  }
-
-  // The real finish line for the whole month -- distinct from the per-day Save checkpoint above.
-  // Confirms exactly how many days are currently saved (out of the whole session) before doing
-  // anything, per the explicit requirement: "it will show him how many days was saved with a
-  // confirmed message, please confirm that these days that you want to grant." Once confirmed,
-  // finalizes those saved days' rotation state as this month's memory (for a future month to
-  // continue from) and downloads a backup copy so the supervisor can pick up on another laptop.
-  grantMonthBtn.addEventListener("click", async () => {
-    if (!livePlan) return;
-    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
-    const totalDays = livePlan.taskDays.length;
-    if (!savedKeys.length) { setStatus("Save at least one day before you can Grant this month.", true); return; }
-    const monthKey = E.monthKeyFromDateKey(startDateInput.value);
-    const monthLabel = E.monthLabelFromDateKey(startDateInput.value);
-    const replacing = !!memorySlots[monthKey];
-    const notAllSaved = savedKeys.length < totalDays
-      ? ` Note: ${totalDays - savedKeys.length} of the ${totalDays} day(s) in this session are NOT saved and will not be part of this Grant.`
-      : "";
-    const ok = await confirmEdit(
-      `${savedKeys.length} of ${totalDays} day(s) in this session are saved. Grant ${monthLabel} for ${STATION} with these ${savedKeys.length} saved day(s) as the final schedule?${notAllSaved}${replacing ? ` This replaces the memory already granted for ${monthLabel}.` : ""} This saves every driver's current shift, rest-time and reserve/trip history so a future month's run can continue from here, and downloads a backup copy.`
-    );
-    if (!ok) return;
-
-    const grantShiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
-    const finalState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, grantShiftSeedAssignment);
-    Object.keys(memoryRotationState).forEach((id) => {
-      if (!finalState[id]) finalState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
-    });
-
-    // Last-chance self-check across the WHOLE saved range before this becomes the official record
-    // -- catches anything the per-day check at Generate time might have missed (e.g. a hand-edit
-    // made after Generate, or a day generated before this check existed). Doesn't block outright --
-    // per this whole page's philosophy, a real edge case the supervisor needs to override by hand
-    // is possible -- but it does require an explicit "grant anyway" past a clear list of exactly
-    // what and who, rather than finalizing silently.
-    const savedDays = livePlan.taskDays.filter((d) => savedKeys.includes(d.dateKey));
-    const violations = E.auditRotationRules(savedDays, conditions, finalState);
-    if (violations.length) {
-      const list = violations.slice(0, 8).map((v) => `${v.dateKey} -- ${v.driverName}: ${v.detail}`).join("\n");
-      const more = violations.length > 8 ? `\n...and ${violations.length - 8} more.` : "";
-      const proceedAnyway = await confirmEdit(
-        `${violations.length} rule violation${violations.length === 1 ? "" : "s"} found across the saved days you're about to Grant:\n${list}${more}\nGrant anyway?`
-      );
-      if (!proceedAnyway) return;
-    }
-    const grantedAt = new Date().toISOString();
-    memorySlots[monthKey] = { monthLabel, grantedAt, rotationState: JSON.parse(JSON.stringify(finalState)) };
-    saveMemorySlots(memorySlots);
-    renderMemorySlotOptions();
-    memorySlotSelect.value = monthKey;
-    memorySlotDeleteBtn.disabled = false;
-    memoryRotationState = finalState;
-    setMemoryStatus(`Continuing from granted memory: ${monthLabel} (${Object.keys(finalState).length} driver(s)).`);
-    renderRosterGrid();
-
-    const rows = E.buildMemoryRows(livePlan.rosterData, finalState);
-    const blob = await buildMemoryWorkbookBlob(rows, STATION, monthLabel, grantedAt);
-    downloadBlob(blob, `${STATION}_memory_${monthKey}.xlsx`);
-
-    setStatus(`Granted ${monthLabel} for ${STATION} (${savedKeys.length} of ${totalDays} day(s) saved) and downloaded a backup file.`);
-  });
 };
 </script>
 </body>
