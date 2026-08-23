@@ -6,13 +6,50 @@
 <title>Driver Task Assignment v6 — Madinah Station</title>
 <script src="vendor/exceljs.min.js"></script>
 <script src="vendor/jszip.min.js"></script>
-<!-- The ?v=YYYYMMDD on these two is a cache-buster: browsers (mobile ones especially) can keep
-     serving an old cached copy of a plain filename even after a new version is deployed, which
-     silently leaves someone running stale engine/patcher code. Bump this date whenever
-     driver_assignment_engine.js or xlsx_surgical_patch.js changes, in every HTML file that loads
-     them (both stations, v1 and v6). -->
-<script src="driver_assignment_engine.js?v=20260822i"></script>
-<script src="xlsx_surgical_patch.js?v=20260822i"></script>
+<!-- A plain <script src=...?v=...> cache-buster (what this used to be) only works if every layer
+     between here and the deployed file actually honors the query string -- confirmed a REAL,
+     live failure mode: a supervisor testing the exact same uploaded files, same visible version
+     badge, got genuinely different results than a fresh verified test, meaning the query-string
+     bust wasn't enough for them (some proxy/CDN/mobile-browser cache along the way was ignoring
+     it and serving old bytes for the plain filename). fetch(..., {cache:"no-store"}) is a much
+     harder guarantee: it tells the browser's own HTTP cache to skip straight to a real network
+     request every time, and (per the Fetch spec) that request carries no-cache/no-store request
+     headers most real proxies do respect, unlike a same-URL-different-query-string request which
+     an overly aggressive one can still serve from its own cache. Loaded as text and injected as
+     an inline script element (executes in the same global scope root.DriverAssignmentEngine /
+     root.XlsxSurgicalPatch already assume) rather than a src= tag, specifically so this bypass is
+     real and not just cosmetic. When driver_assignment_engine.js or xlsx_surgical_patch.js
+     changes, bump the ?v= on both here (kept for visibility in the Network tab, no longer
+     load-bearing for caching) in every HTML file that loads them (both stations, v1 and v6). -->
+<script>
+  (function () {
+    function loadScriptFresh(url) {
+      return fetch(url, { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error(url + ": HTTP " + r.status);
+        return r.text();
+      }).then(function (code) {
+        var s = document.createElement("script");
+        s.textContent = code;
+        document.head.appendChild(s);
+      });
+    }
+    var domReady = new Promise(function (resolve) {
+      if (document.readyState !== "loading") resolve();
+      else document.addEventListener("DOMContentLoaded", resolve);
+    });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822j")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822j"); });
+    Promise.all([scriptsReady, domReady]).then(function () {
+      if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
+    }).catch(function (err) {
+      var msg = "Failed to load a fresh copy of the engine (" + (err && err.message) + "). Please reload the page.";
+      document.addEventListener("DOMContentLoaded", function () {
+        document.body.insertAdjacentHTML("afterbegin",
+          '<div style="background:#c00;color:#fff;padding:12px 16px;font:14px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;">' + msg + '</div>');
+      });
+    });
+  })();
+</script>
 <!-- Client-side "you're on stale code" detector -- browser caching (and a tab left open across a
      deploy) means the cache-buster above doesn't guarantee anyone actually SEES a fresh page.
      This periodically fetches a tiny, always-cache-busted version.txt and shows a reload banner
@@ -21,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822i";
+    var APP_VERSION = "20260822j";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -529,7 +566,11 @@
 </div>
 
 <script>
-(function () {
+// Defined here, not self-invoking -- called by the fetch(cache:"no-store") bootstrap up in
+// <head> once driver_assignment_engine.js/xlsx_surgical_patch.js are confirmed freshly loaded
+// AND the DOM is ready, instead of running the instant a plain <script src> tag finished
+// (which is no longer how those two get loaded -- see the comment up there for why).
+window.__initDriverAssignmentApp = function () {
   const STATION = "MAD";
   const E = window.DriverAssignmentEngine;
 
@@ -2934,7 +2975,7 @@
 
     setStatus(`Granted ${monthLabel} for ${STATION} (${savedKeys.length} of ${totalDays} day(s) saved) and downloaded a backup file.`);
   });
-})();
+};
 </script>
 </body>
 </html>
