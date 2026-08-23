@@ -1182,34 +1182,52 @@
     const created = [];
     const stillUnassigned = [];
 
-    unassignedDrivers.forEach((driver) => {
-      const st = rotationState[driver.id];
-      const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
-      let candidateTimes = ownIdx != null ? Array.from(timesByShift[ownIdx]) : [];
-      if (!candidateTimes.length && ownIdx != null) {
-        const fallback = parseHHMM(conditions.shifts[ownIdx].start);
-        if (fallback != null) candidateTimes = [fallback];
+    // An auto-created reserve task is a REAL duty, not a placeholder -- it must obey the exact
+    // same continuity rules as anything else this engine assigns, never rest time and never a
+    // backward jump in this driver's own real clock beyond the same-shift grace (see
+    // withinSameShiftForwardLimit above). Confirmed as a real, live bug: this path used to pick
+    // ANY real time already used elsewhere in the driver's own shift band that day, with no
+    // rest-time check and no continuity check at all -- so an unassigned driver whose real clock
+    // had been trending through the afternoon for a week could get auto-reserved at 05:00 the
+    // very next day purely because 05:00 happened to be the thinnest slot, undoing everything
+    // rules 2 and 4 otherwise guarantee. Confirmed directly: an auto-added reserve "should take
+    // into consideration the day before... so it goes smooth with what has been generated the
+    // days before."
+    function eligibleTimesForBand(driver, st, idx) {
+      let times = idx != null ? Array.from(timesByShift[idx]) : [];
+      if (!times.length && idx != null) {
+        const fallback = parseHHMM(conditions.shifts[idx].start);
+        if (fallback != null) times = [fallback];
       }
-      // An auto-created reserve task is a REAL duty, not a placeholder -- it must obey the exact
-      // same continuity rules as anything else this engine assigns, never rest time and never a
-      // backward jump in this driver's own real clock beyond the same-shift grace (see
-      // withinSameShiftForwardLimit above). Confirmed as a real, live bug: this path used to pick
-      // ANY real time already used elsewhere in the driver's own shift band that day, with no
-      // rest-time check and no continuity check at all -- so an unassigned driver whose real clock
-      // had been trending through the afternoon for a week could get auto-reserved at 05:00 the
-      // very next day purely because 05:00 happened to be the thinnest slot, undoing everything
-      // rules 2 and 4 otherwise guarantee. Confirmed directly: an auto-added reserve "should take
-      // into consideration the day before... so it goes smooth with what has been generated the
-      // days before." If every real time in the band fails this, same as everywhere else in this
-      // engine, the driver is left unassigned rather than forced into a jarring jump.
-      candidateTimes = candidateTimes.filter((t) => {
+      times = times.filter((t) => {
         if (st && st.lastDutyEndMin != null) {
           const gap = minutesBetween(st.lastDutyEndDateKey, st.lastDutyEndMin, day.dateKey, t);
           if (gap < conditions.restHours * 60) return false;
         }
         return !st || withinSameShiftForwardLimit(driver, st, day, t);
       });
-      const eligible = candidateTimes.filter((t) => (reserveCountByTime[t] || 0) < MAX_RESERVE_SLOTS_PER_TIME);
+      return times.filter((t) => (reserveCountByTime[t] || 0) < MAX_RESERVE_SLOTS_PER_TIME);
+    }
+
+    unassignedDrivers.forEach((driver) => {
+      const st = rotationState[driver.id];
+      const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+      let eligible = ownIdx != null ? eligibleTimesForBand(driver, st, ownIdx) : [];
+      // The driver's own locked shift has nothing usable today (no real time in that band, every
+      // one already at the 4-per-time cap, or every one fails rest/continuity) -- widen to exactly
+      // one shift up, bounds-checked, NEVER wrapping and NEVER backward. This mirrors the SAME
+      // "own shift, then exactly one shift up, never further" rule the normal per-task loop and
+      // auditRotationRules already use everywhere else in this engine (confirmed directly,
+      // explicitly: backward widening was removed entirely) -- a bidirectional/wrap-aware widening
+      // here (matching Chain Rescue's own, separate and more permissive tiering) would silently
+      // produce placements auditRotationRules then flags as violations, since that audit only
+      // recognizes this one specific forward step as legitimate. Confirmed a real gap: a driver's
+      // carried-over shift lock (e.g. from importing a completed prior month) not lining up with
+      // where THIS day's reserve slots happen to sit was leaving them stranded even when the one
+      // legitimate borrow-up would have been a perfectly smooth, reasonable fit.
+      if (!eligible.length && ownIdx != null && ownIdx + 1 < conditions.shifts.length) {
+        eligible = eligibleTimesForBand(driver, st, ownIdx + 1);
+      }
       if (!eligible.length) { stillUnassigned.push(driver); return; }
       // Thinnest time first; ties broken chronologically for determinism.
       eligible.sort((a, b) => (reserveCountByTime[a] || 0) - (reserveCountByTime[b] || 0) || a - b);
