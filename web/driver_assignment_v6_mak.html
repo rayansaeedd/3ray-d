@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822p")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822p"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822q")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822q"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822p";
+    var APP_VERSION = "20260822q";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1046,6 +1046,30 @@ window.__initDriverAssignmentApp = function () {
   }
   importMonthStartDateInput.addEventListener("change", updateImportMonthBtnEnabled);
 
+  // Once BOTH files are loaded, surface the auto-detected first day as its own explicit popup --
+  // confirmed directly as a real need: the auto-filled date field alone was too easy to miss, and
+  // a supervisor needs to actually SEE and confirm (or correct) it before relying on it, not just
+  // have it silently sitting in a small field. Only pops for a date this hasn't already been shown
+  // for (lastImportDatePromptKey), so re-dropping the same files or toggling the Roster back and
+  // forth doesn't nag repeatedly -- but a genuinely NEW detected date (a different file dropped)
+  // always gets its own fresh confirmation.
+  let lastImportDatePromptKey = null;
+  async function maybeConfirmDetectedStartDate() {
+    if (!importMonthTaskWb || !importMonthRosterData) return;
+    const val = importMonthStartDateInput.value;
+    if (!val || val === lastImportDatePromptKey) return;
+    lastImportDatePromptKey = val;
+    const d = new Date(val + "T00:00:00");
+    const dayName = d.toLocaleDateString("en-US", { weekday: "long" });
+    const prettyDate = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    const ok = await confirmEdit(`Detected the Task Program's first day as ${dayName}, ${prettyDate} -- read directly from the file's own "DAY:" cell. Is this correct?`);
+    if (!ok) {
+      lastImportDatePromptKey = null; // they're about to change it -- the new value deserves its own fresh prompt
+      setStatus("Correct the first-day field above by hand -- that corrected value is what Import will use.", true);
+      importMonthStartDateInput.focus();
+    }
+  }
+
   wireDropzone(importMonthDropzone, importMonthFileInput, importMonthBrowseLink, async (file) => {
     try {
       setStatus("Reading " + file.name + "...");
@@ -1067,6 +1091,7 @@ window.__initDriverAssignmentApp = function () {
       }
       setStatus("");
       updateImportMonthBtnEnabled();
+      await maybeConfirmDetectedStartDate();
     } catch (err) {
       console.error(err);
       setStatus("Could not read this file: " + err.message, true);
@@ -1083,6 +1108,7 @@ window.__initDriverAssignmentApp = function () {
       importMonthRosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
       setStatus("");
       updateImportMonthBtnEnabled();
+      await maybeConfirmDetectedStartDate();
     } catch (err) {
       console.error(err);
       setStatus("Could not read this file: " + err.message, true);
