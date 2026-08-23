@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822n")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822n"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822o")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822o"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822n";
+    var APP_VERSION = "20260822o";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -399,12 +399,13 @@
   <div class="card">
     <h2>3. Shift rotation history (optional)</h2>
     <div class="note">Only matters if you want this run's shift-lock rotation, rest-time and reserve/trip balance to continue from the PREVIOUS real month -- e.g. generating September correctly needs to know each driver's actual August shift. Skip this to start every driver fresh (each gets a shift seeded purely from this month's own demand, with no history behind it). Nothing is ever saved in this browser -- refreshing or reopening this page always starts with no history loaded, on purpose: the only source of truth is the real completed Task Program you drop below, read fresh every time, never a remembered copy that could quietly drift out of date or mismatch what's actually deployed.</div>
-    <div class="note" style="margin-top:10px;">Drop the PREVIOUS month's completed Task Program AND its Roster (both real files, already filled in). Both are required: the Task Program gives each driver's shift, reserve/trip mix and last real duty; the Roster is what lets this correctly tell "this driver had a real day off/training/vacation in between" apart from "this driver simply has no data for that day" -- without it, a driver who went quiet for training partway through the month looks identical to one who was simply idle, and a stale pre-break shift pattern can outweigh what they were actually doing most recently. Set the first date these files cover, then drop both below.</div>
+    <div class="note" style="margin-top:10px;">Drop the PREVIOUS month's completed Task Program AND its Roster (both real files, already filled in). Both are required: the Task Program gives each driver's shift, reserve/trip mix and last real duty; the Roster is what lets this correctly tell "this driver had a real day off/training/vacation in between" apart from "this driver simply has no data for that day" -- without it, a driver who went quiet for training partway through the month looks identical to one who was simply idle, and a stale pre-break shift pattern can outweigh what they were actually doing most recently.</div>
     <div class="date-range-row" style="margin-top:10px;">
-      <label class="field">First day these files cover
+      <label class="field">First day the Task Program below covers
         <input type="date" id="importMonthStartDate" />
       </label>
     </div>
+    <div class="note" style="margin-top:6px; margin-bottom:0;">Only the Task Program needs this -- its day-sheets aren't reliably self-dated, so this tells the engine which real calendar date the FIRST sheet is. The Roster doesn't need it and doesn't have to match: it reads its own real date columns straight from the file, so it's fine (better, even) if it covers more days than the Task Program does -- e.g. a full month's Roster alongside just the last two weeks' Task Program.</div>
     <div class="date-range-row" style="margin-top:10px; align-items:flex-start; gap:14px;">
       <div class="dropzone" id="importMonthDropzone" style="max-width:460px;">
         <div class="icon">&#8595;</div>
