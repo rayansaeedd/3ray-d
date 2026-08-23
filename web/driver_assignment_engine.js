@@ -1804,6 +1804,219 @@
     return state;
   }
 
+  // Length of a driver's own same-kind streak ending exactly at index i in their own chronological
+  // entries array -- used only to break ties between otherwise equally-good swaps below, never to
+  // block one: confirmed directly against a worked example where the only way to reach the fairest
+  // possible spread still left one reserve-reserve pair for every driver, and that was accepted.
+  function sameKindStreakAt(entries, i) {
+    let n = 1;
+    while (i - n >= 0 && entries[i - n].kind === entries[i].kind) n++;
+    return n;
+  }
+
+  // Runs the configured reserve/trip ratio (ratioReserveDays : ratioTripDays) as an actual
+  // correction pass, not just the normal per-task loop's one-shot soft nudge. Confirmed directly,
+  // with a worked 4-driver example, that the nudge alone isn't enough: it only ever influences a
+  // NEW assignment at the moment it's made and never revisits an already-placed task, so a driver
+  // can end up on 5-6 reserves in a stretch while someone else sits at exactly the target with
+  // room to spare, and nothing ever corrects it afterward. This does the correction: the
+  // configured ratio is a CEILING on trips (a driver's trip count within any rolling
+  // ratioReserveDays+ratioTripDays-long stretch of their own real working days may never exceed
+  // ratioTripDays as a RESULT of a swap -- a swap can only ever bring someone's trip count DOWN to
+  // or below that ceiling, never push anyone over it) -- and otherwise spreads however much
+  // reserve shortfall actually exists across the whole eligible roster as evenly as it can, even
+  // pulling a driver who's already exactly on target below it to help someone far worse off.
+  // Confirmed directly: two drivers already at 3 trips / 3 reserves each gave up one trip so two
+  // drivers stuck at 1 trip / 5 reserves could reach 2/4 -- landing everyone on the SAME number
+  // rather than leaving two comfortable and two badly off, because the total trip supply that
+  // period genuinely didn't stretch to 3 apiece for all four.
+  //
+  // A swap only ever trades which of TWO SPECIFIC TASKS a pair of drivers does on the SAME
+  // calendar day -- neither driver's actual working days change, only which task they do on a day
+  // they were already scheduled for. Never touches a task that already had a real answer before
+  // this run (originalDriverRawText -- the same "real, don't touch it" rule as everywhere else in
+  // this engine), and only ever swaps between two drivers who are each genuinely shift-eligible
+  // (their own currently-locked shift, exactly -- no widening, no borrowing) for the task they'd
+  // be receiving, and for whom the swap still respects rest time against each driver's own
+  // neighboring real duties. Deliberately runs strictly AFTER every other placement mechanism has
+  // fully settled every driver's real duties and shift locks -- confirmed directly: "implement
+  // this feature after the engine member divided mechanism" -- so it never second-guesses which
+  // shift a driver belongs to, only rearranges which task they do within it.
+  //
+  // `sortedDays` is the WHOLE generated range, every task already carrying its final `.driver`
+  // (post Generate, post Chain Rescue, post reserve auto-fill). Mutates task.driver in place for
+  // whichever pair of tasks each applied swap picks (the caller is responsible for the same
+  // roster-cell/engineWrites bookkeeping any other reassignment needs -- see applySwap's return
+  // value) and returns the list of swaps actually made, for the caller to apply and report.
+  function balanceReserveTripRatio(sortedDays, conditions, rotationState) {
+    const WINDOW = conditions.ratioReserveDays + conditions.ratioTripDays;
+    const TRIP_CAP = conditions.ratioTripDays;
+    const REST_MIN = conditions.restHours * 60;
+    const orderedDays = sortedDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
+
+    function buildByDriver() {
+      const byDriver = {};
+      orderedDays.forEach((day) => {
+        day.tasks.forEach((task) => {
+          if (!task.driver) return;
+          const kind = task.kind === "reserve" ? "reserve" : "trip";
+          const rec = (byDriver[task.driver.id] = byDriver[task.driver.id] || { driver: task.driver, entries: [] });
+          rec.entries.push({ day, task, kind, swappable: !task.originalDriverRawText });
+        });
+      });
+      return byDriver;
+    }
+
+    function maxRollingTripCount(entries) {
+      let max = 0;
+      for (let i = 0; i + WINDOW <= entries.length; i++) {
+        const c = entries.slice(i, i + WINDOW).filter((e) => e.kind === "trip").length;
+        if (c > max) max = c;
+      }
+      return max;
+    }
+
+    function ownShiftIdx(driverId, date) {
+      const st = rotationState[driverId];
+      return st ? computeShiftIndexForDriver(st, conditions, date) : null;
+    }
+
+    function isShiftEligible(driverId, task, day) {
+      const own = ownShiftIdx(driverId, day.date);
+      const taskIdx = classifyShiftForMinutes(conditions, task.startMin);
+      return own != null && taskIdx != null && own === taskIdx;
+    }
+
+    // entries[i] is the entry being replaced by newTask (same day, different task) -- checks rest
+    // against this driver's own immediately-preceding and immediately-following real duty.
+    function respectsRestAfterSwap(entries, i, newTask, day) {
+      const newStart = newTask.startMin;
+      const newEnd = newTask.endMin != null ? newTask.endMin : newTask.startMin;
+      if (i > 0) {
+        const prev = entries[i - 1];
+        const prevEnd = prev.task.endMin != null ? prev.task.endMin : prev.task.startMin;
+        const prevEndDateKey = dutyEndDateKey(prev.day, prev.task.startMin, prevEnd);
+        if (minutesBetween(prevEndDateKey, prevEnd, day.dateKey, newStart) < REST_MIN) return false;
+      }
+      if (i < entries.length - 1) {
+        const next = entries[i + 1];
+        const newEndDateKey = dutyEndDateKey(day, newStart, newEnd);
+        if (minutesBetween(newEndDateKey, newEnd, next.day.dateKey, next.task.startMin) < REST_MIN) return false;
+      }
+      return true;
+    }
+
+    // Every valid (tripTask/gId, reserveTask/rId) candidate for the day's swappable tasks, with
+    // both directions of eligibility/rest/cap already checked -- shared by both phases below so
+    // they can never disagree about what counts as a legal swap, only about which one to prefer.
+    function candidatesForDay(day, byDriver) {
+      const tripEntries = [], reserveEntries = [];
+      day.tasks.forEach((task) => {
+        if (!task.driver || task.originalDriverRawText) return;
+        const kind = task.kind === "reserve" ? "reserve" : "trip";
+        (kind === "reserve" ? reserveEntries : tripEntries).push({ task, driverId: task.driver.id });
+      });
+      if (!tripEntries.length || !reserveEntries.length) return [];
+      const out = [];
+      tripEntries.forEach(({ task: tripTask, driverId: gId }) => {
+        reserveEntries.forEach(({ task: reserveTask, driverId: rId }) => {
+          if (gId === rId) return;
+          if (!isShiftEligible(rId, tripTask, day) || !isShiftEligible(gId, reserveTask, day)) return;
+          const gEntries = byDriver[gId].entries, rEntries = byDriver[rId].entries;
+          const gIdx = gEntries.findIndex((e) => e.task === tripTask);
+          const rIdx = rEntries.findIndex((e) => e.task === reserveTask);
+          if (gIdx === -1 || rIdx === -1) return;
+          if (!respectsRestAfterSwap(gEntries, gIdx, reserveTask, day)) return;
+          if (!respectsRestAfterSwap(rEntries, rIdx, tripTask, day)) return;
+          // R is about to gain a trip -- confirm it never pushes R over the configured ceiling in
+          // any rolling window. G is about to LOSE a trip, which can never break the ceiling.
+          const rEntriesAfter = rEntries.slice();
+          rEntriesAfter[rIdx] = { ...rEntriesAfter[rIdx], kind: "trip", task: tripTask };
+          if (maxRollingTripCount(rEntriesAfter) > TRIP_CAP) return;
+          out.push({ day, tripTask, reserveTask, gId, rId, gIdx, rIdx, gEntries, rEntries });
+        });
+      });
+      return out;
+    }
+
+    function applySwap(c) {
+      const gDriver = c.tripTask.driver, rDriver = c.reserveTask.driver;
+      c.tripTask.driver = rDriver;
+      c.reserveTask.driver = gDriver;
+      swapsApplied.push({ day: c.day, tripTask: c.tripTask, reserveTask: c.reserveTask, from: gDriver, to: rDriver });
+    }
+
+    const swapsApplied = [];
+    const MAX_ROUNDS = 2000; // generous convergence cap -- a genuine safety net, not a real limit at this roster's scale
+
+    // Phase 1 -- MANDATORY: the configured ratio is a ceiling, never a floor. Neither the normal
+    // per-task loop, Chain Rescue, nor reserve auto-fill actually enforce a hard cap on trips (all
+    // three only ever nudge SOFTLY toward the target), so a driver can land over the ceiling with
+    // no swap of ours involved at all -- this phase exists specifically to fix that BEFORE the
+    // general fairness pass even starts, since general fairness can never be allowed to leave a
+    // ceiling violation sitting there uncorrected. Repeatedly finds whichever driver is currently
+    // furthest over the ceiling (in any rolling window) and gives away one of their trips to
+    // whichever eligible partner is most reserve-heavy (which also happens to serve Phase 2's own
+    // goal, so this rarely fights it) -- if a violator genuinely has no eligible partner anywhere
+    // (shift/rest ruling every candidate out), it's left as-is and the NEXT worst violator is tried
+    // instead, so one unfixable case can never block fixing the rest.
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const byDriver = buildByDriver();
+      const driverIds = Object.keys(byDriver);
+      const reserveTotal = {};
+      const severity = {};
+      driverIds.forEach((id) => {
+        reserveTotal[id] = byDriver[id].entries.filter((e) => e.kind === "reserve").length;
+        severity[id] = maxRollingTripCount(byDriver[id].entries) - TRIP_CAP;
+      });
+      const violators = driverIds.filter((id) => severity[id] > 0).sort((a, b) => severity[b] - severity[a]);
+      if (!violators.length) break; // no ceiling violations left -- Phase 2 takes over
+
+      let applied = false;
+      for (const gId of violators) {
+        let best = null;
+        orderedDays.forEach((day) => {
+          candidatesForDay(day, byDriver).forEach((c) => {
+            if (c.gId !== gId) return;
+            if (!best || reserveTotal[c.rId] > reserveTotal[best.rId]) best = c;
+          });
+        });
+        if (best) { applySwap(best); applied = true; break; }
+      }
+      if (!applied) break; // every current violator is genuinely unfixable right now -- stop rather than loop forever
+    }
+
+    // Phase 2 -- fairness: with the ceiling respected, spread whatever reserve shortfall remains
+    // as evenly as possible across the whole eligible roster, even pulling a driver who's already
+    // exactly on target below it to help someone far worse off (confirmed directly with a worked
+    // example: two drivers at 3/3 each gave up a trip so two drivers stuck at 1/5 could reach
+    // 2/4). Keeps finding the biggest remaining reserve-count gap between two eligible drivers and
+    // closing it one swap at a time until no swap would narrow any gap any further.
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const byDriver = buildByDriver();
+      const driverIds = Object.keys(byDriver);
+      const reserveTotal = {};
+      driverIds.forEach((id) => { reserveTotal[id] = byDriver[id].entries.filter((e) => e.kind === "reserve").length; });
+
+      let best = null;
+      orderedDays.forEach((day) => {
+        candidatesForDay(day, byDriver).forEach((c) => {
+          const gap = reserveTotal[c.rId] - reserveTotal[c.gId];
+          if (gap < 2) return; // no real imbalance left between this specific pair
+          const streakGain = sameKindStreakAt(c.gEntries, c.gIdx) + sameKindStreakAt(c.rEntries, c.rIdx);
+          if (!best || gap > best.gap || (gap === best.gap && streakGain > best.streakGain)) {
+            best = { ...c, gap, streakGain };
+          }
+        });
+      });
+
+      if (!best) break; // converged -- no remaining swap would narrow the gap between any eligible pair
+      applySwap(best);
+    }
+
+    return swapsApplied;
+  }
+
   // Self-check, not a filter: by the time this runs, every assignment it looks at has already
   // happened (Generate, a hand-edit, whatever) -- it can only report a violation, never prevent
   // one. Built after a real, still-unexplained case where a supervisor's actual browser run
@@ -2123,7 +2336,7 @@
     chainRescueSparePool, buildChainRescueMoves,
     readResolvedCell, parseResolvedNameCell, resolveExistingTaskAssignments,
     isOfficeDutyCode, syncOfficeDutyToRoster,
-    recordAssignment, rebuildRotationStateFromSavedDays, auditRotationRules,
+    recordAssignment, rebuildRotationStateFromSavedDays, balanceReserveTripRatio, auditRotationRules,
     buildMonthlySummary,
     minutesToHHMM, minutesToExcelTimeSerial, monthKeyFromDateKey, monthLabelFromDateKey,
     buildMemoryRows, parseMemoryWorkbook, formatDriverForTaskCell, spreadReserveTasks,

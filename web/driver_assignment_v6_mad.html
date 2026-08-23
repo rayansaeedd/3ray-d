@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822r")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822r"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822s")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822s"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822r";
+    var APP_VERSION = "20260822s";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2551,6 +2551,39 @@ window.__initDriverAssignmentApp = function () {
         livePlan.results[dateKey] = dayResult;
         livePlan.dayStatus[dateKey] = "generated";
       });
+      // A final pass over the WHOLE generated range, after every other placement mechanism has
+      // fully settled every driver's real duties and shift locks -- confirmed directly: "implement
+      // this feature after the engine member divided mechanism." Finds pairs of drivers where one
+      // is trip-comfortable and the other reserve-heavy and swaps which of two SAME-DAY tasks each
+      // does, closing the gap the normal soft-nudge preference alone was leaving behind. Applies
+      // the roster-cell bookkeeping directly here (rather than via setTaskDriver, which reads
+      // task.driver as "the old one" -- balanceReserveTripRatio already wrote the new driver onto
+      // each swapped task itself, so re-deriving "old" from `from`/`to` avoids re-reading a value
+      // that's already been overwritten).
+      const swaps = E.balanceReserveTripRatio(sortedDays, conditions, rotationState);
+      swaps.forEach(({ day, tripTask, reserveTask, from, to }) => {
+        const dk = day.dateKey;
+        const writes = livePlan.engineWrites[dk] = livePlan.engineWrites[dk] || {};
+        if (from.statusByDateKey[dk] === writes[from.id]) from.statusByDateKey[dk] = "";
+        if (to.statusByDateKey[dk] === writes[to.id]) to.statusByDateKey[dk] = "";
+        to.statusByDateKey[dk] = tripTask.code;
+        writes[to.id] = tripTask.code;
+        from.statusByDateKey[dk] = reserveTask.code;
+        writes[from.id] = reserveTask.code;
+      });
+      // The swap loop above changes WHICH task some drivers did on some days, which makes the
+      // rotationState this run built up while generating (lastDutyEnd*, recentKinds,
+      // cumulativeReserve/Trip) stale for exactly those drivers -- rebuilding fresh from the now-
+      // final sortedDays (every day "saved") re-derives it correctly, including for anyone
+      // untouched by a swap. shiftSeedAssignment keeps every driver's own shift anchor the same as
+      // before (the seed doesn't depend on which specific task they end up doing) -- swapping never
+      // moves anyone to a different shift, only which task they do within their own.
+      if (swaps.length) {
+        rotationState = E.rebuildRotationStateFromSavedDays(sortedDays, sortedDays.map((d) => d.dateKey), conditions, shiftSeedAssignment);
+        Object.keys(memoryRotationState).forEach((id) => {
+          if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
+        });
+      }
       livePlan.lastGeneratedRotationState = rotationState;
 
       // Self-check across the WHOLE month right after generating it, not just per-day -- re-derives
@@ -2572,6 +2605,7 @@ window.__initDriverAssignmentApp = function () {
       setMonthStatus(
         `Generated ${sortedDays.length} day(s) in one consistent pass. Added ${totalCreated} auto-reserve task${totalCreated === 1 ? "" : "s"} total` +
         (totalStillUnassigned ? `, ${totalStillUnassigned} driver${totalStillUnassigned === 1 ? "" : "s"} still couldn't get a slot` : "") +
+        (swaps.length ? `, rebalanced ${swaps.length} reserve/trip swap${swaps.length === 1 ? "" : "s"} to even out the ratio` : "") +
         `. Review below, hand-edit anything, and Download when you're happy with it.${violationNote}${guardNote}`,
         !!violations.length || !!totalGuarded
       );
