@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822l")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822l"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822m")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822m"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822l";
+    var APP_VERSION = "20260822m";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -235,8 +235,7 @@
   }
 
   .day-status-pending { color: #888; }
-  .day-status-generated { color: #a06a00; font-weight: 700; }
-  .day-status-saved { color: var(--ink); font-weight: 700; }
+  .day-status-generated { color: var(--ink); font-weight: 700; }
   .table-scroll { overflow-x: auto; }
 
   .roster-grid-table { white-space: nowrap; }
@@ -347,7 +346,7 @@
 
 <header>
   <h1>Driver Task Assignment v6 — Madinah Station</h1>
-  <div class="sub">Load both files, set your conditions, then Generate the whole month in one consistent pass. Review and hand-edit each day, Save it as a checkpoint, then Download once you're happy with the schedule.</div>
+  <div class="sub">Load both files, set your conditions, then Generate the whole month in one consistent pass. Review and hand-edit anything, then Download once you're happy with the schedule.</div>
 </header>
 
 <main>
@@ -394,7 +393,7 @@
         </div>
       </div>
     </div>
-    <div class="note">Download exports the CURRENT state of this whole session -- saved and not-yet-saved days alike -- so you can always grab a working copy without waiting until you've Granted the month. A hand-edited Start time changes what this session's own Generate sees but is not written into the exported file's Start column (that column expects a real Excel time value; this tool's file patcher only ever writes plain text into a cell, which is what Task/NAME/Roster cells already are).</div>
+    <div class="note">Download always exports the CURRENT state of this whole session -- there's no separate "finalize" step, so you can grab a working copy any time. A hand-edited Start time changes what this session's own Generate sees but is not written into the exported file's Start column (that column expects a real Excel time value; this tool's file patcher only ever writes plain text into a cell, which is what Task/NAME/Roster cells already are).</div>
   </div>
 
   <div class="card">
@@ -423,7 +422,7 @@
 
   <div class="card">
     <h2>5. Generate, then review day-by-day</h2>
-    <div class="note">Loading builds this session from the files/dates/conditions above. Generate the whole month in one consistent pass -- every day sees the exact same, complete picture, so there's no risk from generating out of order or skipping around. Then pick a day below to review it, hand-edit anything, and Save it as a checkpoint once you're happy. Saving is never final: you can Edit a saved day (which un-saves it) to change it and save again as many times as you like. Download (above) always exports the current state of the whole session, saved and not-yet-saved days alike -- there's no separate "finalize" step.</div>
+    <div class="note">Loading builds this session from the files/dates/conditions above. Generate the whole month in one consistent pass -- every day sees the exact same, complete picture. Then pick a day below to review it and hand-edit anything directly -- edits apply immediately, there's no separate edit mode and no need to save. Download (above) always exports the current state of the whole session.</div>
     <div class="generate-row">
       <button type="button" class="primary" id="startBtn" disabled>Load days for review</button>
       <span class="status-line" id="statusLine"></span>
@@ -438,9 +437,6 @@
         <label class="field" style="max-width:340px;">Day
           <select id="daySelect"></select>
         </label>
-        <button type="button" class="plain" id="dayGenerateBtn">Regenerate just this day</button>
-        <button type="button" class="plain" id="daySaveBtn">Save this day</button>
-        <button type="button" class="plain" id="dayUnsaveBtn">Edit this day (undo save)</button>
       </div>
       <div class="status-line" id="dayStatusLine"></div>
       <table class="summary-table" id="dayResultTable" style="margin-top:12px; display:none;"></table>
@@ -605,9 +601,6 @@ window.__initDriverAssignmentApp = function () {
   const generateMonthBtn = document.getElementById("generateMonthBtn");
   const monthStatusLine = document.getElementById("monthStatusLine");
   const daySelect = document.getElementById("daySelect");
-  const dayGenerateBtn = document.getElementById("dayGenerateBtn");
-  const daySaveBtn = document.getElementById("daySaveBtn");
-  const dayUnsaveBtn = document.getElementById("dayUnsaveBtn");
   const dayStatusLine = document.getElementById("dayStatusLine");
   const dayResultTable = document.getElementById("dayResultTable");
   const allDaysTable = document.getElementById("allDaysTable");
@@ -643,12 +636,11 @@ window.__initDriverAssignmentApp = function () {
 
   let taskWorkbook = null, taskArrayBuffer = null, taskFileName = null;
   let rosterWorkbook = null, rosterArrayBuffer = null, rosterFileName = null;
-  // livePlan: { taskDays, rosterData, dayStatus: {dateKey: "pending"|"generated"|"saved"},
+  // livePlan: { taskDays, rosterData, dayStatus: {dateKey: "pending"|"generated"},
   // results: {dateKey: <assignWithConditions perDay[0] result>} } -- lives only for this browser
-  // tab's session, same lifetime as v1's loaded workbooks. See rebuildRotationStateFromSavedDays
-  // in the engine for how a day's rotation state is derived fresh from whatever's saved right
-  // now, rather than being mutated in a way that couldn't be undone by editing a saved day. Grant
-  // (below) is a separate, month-level action that finalizes whatever's saved at that point.
+  // tab's session, same lifetime as v1's loaded workbooks. Every day shares the same status at any
+  // given moment (all "pending" before the first Generate, all "generated" after) since there's a
+  // single whole-month Generate path and no per-day granularity.
   let livePlan = null;
 
   function setStatus(msg, isError) {
@@ -805,7 +797,7 @@ window.__initDriverAssignmentApp = function () {
   // existed yet, or the supervisor confirmed discarding it); false means the caller should abort.
   async function invalidateLivePlanIfNeeded(reason) {
     if (!livePlan) return true;
-    const ok = await confirmEdit(`${reason} This restarts the whole day-by-day session from scratch -- every day's progress in this session (including already-saved days) will be lost, since it re-reads the files fresh. Continue?`);
+    const ok = await confirmEdit(`${reason} This restarts the whole day-by-day session from scratch -- every day's progress in this session will be lost, since it re-reads the files fresh. Continue?`);
     if (!ok) return false;
     livePlan = null;
     dayWorkflow.style.display = "none";
@@ -996,12 +988,12 @@ window.__initDriverAssignmentApp = function () {
     }
   });
 
-  function statusLabel(s) { return s === "saved" ? "saved ✓" : s === "generated" ? "generated, not yet saved" : "pending"; }
+  function statusLabel(s) { return s === "generated" ? "generated" : "pending"; }
   function statusClass(s) { return "day-status-" + s; }
 
   startBtn.addEventListener("click", async () => {
     if (livePlan) {
-      const ok = await confirmEdit("Reload the day-by-day session from the current files/dates/conditions? Every day's progress in this session (including already-saved days) will be lost, since it re-reads the files fresh.");
+      const ok = await confirmEdit("Reload the day-by-day session from the current files/dates/conditions? Every day's progress in this session will be lost, since it re-reads the files fresh.");
       if (!ok) return;
     }
     try {
@@ -1157,7 +1149,7 @@ window.__initDriverAssignmentApp = function () {
         <tr><th>Shift</th><th class="num">Total tasks</th><th class="num">Total share</th><th class="num">Still open</th><th class="num">Open share</th><th class="num">Drivers seeded</th></tr>
         ${rows}
       </table>
-      <div class="note" style="margin-top:6px; margin-bottom:0;">A shift's "total" count includes tasks that already had a real driver in the original file (nothing to do with this session) -- "still open" is what actually needs a driver, and that's what "Drivers seeded" is sized against, not the total. In a real, already-partly-staffed month these two can differ a lot: a shift can carry a small total share but most of what's LEFT to fill, if the rest of its tasks were already answered before this session started. "Drivers seeded" is how many of the ${totalDrivers} roster drivers a brand-new (never-before-locked) driver's FIRST shift lock will land in -- a driver already carried over from saved/granted history keeps their real shift untouched.</div>
+      <div class="note" style="margin-top:6px; margin-bottom:0;">A shift's "total" count includes tasks that already had a real driver in the original file (nothing to do with this session) -- "still open" is what actually needs a driver, and that's what "Drivers seeded" is sized against, not the total. In a real, already-partly-staffed month these two can differ a lot: a shift can carry a small total share but most of what's LEFT to fill, if the rest of its tasks were already answered before this session started. "Drivers seeded" is how many of the ${totalDrivers} roster drivers a brand-new (never-before-locked) driver's FIRST shift lock will land in -- a driver already carried over from imported cross-month history keeps their real shift untouched.</div>
     `;
   }
 
@@ -1295,7 +1287,7 @@ window.__initDriverAssignmentApp = function () {
     });
 
     // Reads from the same session-replay + cross-month-memory blend, so this is literally "from
-    // the memory" the supervisor loaded or has already saved this session. Confirmed directly:
+    // the memory" the supervisor imported for this session. Confirmed directly:
     // this used to show a PROJECTED band for a fixed reference week (computed from the rotation
     // formula, not real duty data -- could even say "no day-by-day record" while still showing a
     // color), which the supervisor found confusing next to the real evidence in the popup below.
@@ -1307,8 +1299,8 @@ window.__initDriverAssignmentApp = function () {
     // A second, real (not projected) duty from roughly one full shift-lock period before the
     // most recent one -- confirmed directly: "if the supervisor uploaded a file... with two
     // weeks, not only two days or one week, then you will have the ability to see two shift of
-    // certain driver... add the shift code next to the name." Only shown when the loaded/saved
-    // range genuinely reaches back that far for this specific driver -- never a guess. Every real
+    // certain driver... add the shift code next to the name." Only shown when the loaded range
+    // genuinely reaches back that far for this specific driver -- never a guess. Every real
     // duty (original pre-fill or engine-decided alike, matching how "real duty" is already
     // defined everywhere else on this page) is collected once per driver here rather than
     // rescanned per row; for each, the latest one at or before (most recent real duty's date -
@@ -2145,10 +2137,10 @@ window.__initDriverAssignmentApp = function () {
   // to its driver exactly like a manual reassignment would -- including folding each new pairing
   // into dayResult.assignments itself, so the day's own "Assigned" count (and every other count
   // that reads off this same result object) reflects it immediately, not just "Unassigned
-  // drivers" going down. Shared by generateDay() (runs this automatically right after every
-  // Generate, confirmed directly: "can we [do this] automatically... the supervisor will know
-  // with the highlight that it has been added") and the button below (kept as a manual re-run for
-  // the rarer case where a later hand-edit leaves a NEW driver unassigned).
+  // drivers" going down. Runs automatically right after every Generate (confirmed directly: "can
+  // we [do this] automatically... the supervisor will know with the highlight that it has been
+  // added") and is also available as a manual re-run below, for the rarer case where a later
+  // hand-edit leaves a NEW driver unassigned.
   function applyReserveAutoFill(dateKey, day, dayResult, rotationState) {
     // Hard safety check at this exact boundary -- reserve auto-fill must never be handed a driver
     // who already has a real task somewhere else today. Confirmed as a real, previously-shipped
@@ -2236,15 +2228,16 @@ window.__initDriverAssignmentApp = function () {
     );
   }
 
-  // The exact same rotationState recipe generateDay() uses (replay of this session's saved days,
-  // falling back to cross-month memory for anyone not covered) -- read-only here, just to look up
-  // where a driver was locked into a week before the day being reassigned, so a supervisor
-  // reassigning a task can see at a glance whether picking this driver means a big jump from their
-  // recent shift ("I want to know the other driver what was his shift on the last week").
+  // Replay of every already-generated day in this session (real, current data -- hand-edited or
+  // not, there's no separate "saved" tier anymore), falling back to imported cross-month history
+  // for anyone not covered -- read-only here, just to look up where a driver was locked into a
+  // week before the day being reassigned, so a supervisor reassigning a task can see at a glance
+  // whether picking this driver means a big jump from their recent shift ("I want to know the
+  // other driver what was his shift on the last week").
   function computeReadOnlyRotationState() {
-    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
+    const generatedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "generated");
     const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
-    const state = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
+    const state = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, generatedKeys, conditions, shiftSeedAssignment);
     Object.keys(memoryRotationState).forEach((id) => {
       if (!state[id]) state[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
     });
@@ -2323,35 +2316,22 @@ window.__initDriverAssignmentApp = function () {
     renderAllDaysTable();
   });
 
-  // Generate the WHOLE loaded month in one consistent pass, instead of requiring the supervisor to
-  // click Generate/Save one day at a time in order. Confirmed directly as a real, reported risk:
-  // "if the supervisor hit day one and save then go to day three by mistake and save then go back
-  // to day two, unsafe... this makes a lot of mistakes" -- generating out of order (or generating a
-  // later day before an earlier one is saved) was already a known, explicitly-guarded-against
-  // failure mode (see the "earlier day isn't saved yet" confirm in the single-day Generate handler
-  // below) -- this removes the whole class of risk by never letting a later day be computed without
-  // every earlier day's real result already threaded through it, in the same pass.
-  //
-  // Confirmed decision on the trade-off this creates: a hand-edit to an already-SAVED day does NOT
-  // automatically ripple forward through the rest of the month -- edits stay local. Re-running this
-  // after some days are saved leaves those SAVED days completely untouched (their real, possibly
-  // hand-edited assignments are replayed into rotation state exactly like a normal Generate would,
-  // via rebuildRotationStateFromSavedDays) and only (re)generates whatever isn't saved yet, in
-  // chronological order, threading state day-to-day within this one pass -- never gated behind
-  // whether each individual day happened to be saved first, which is exactly the gap that let two
-  // days generated at different, out-of-order moments end up looking mutually inconsistent.
+  // Generate the WHOLE loaded month in one consistent pass -- the ONLY Generate path there is, no
+  // per-day regenerate exists to disagree with it or to be run out of order. Confirmed directly as
+  // a real, reported risk with an earlier per-day workflow: "if the supervisor hit day one and
+  // save then go to day three by mistake... this makes a lot of mistakes." A single whole-month
+  // pass removes that entire class of risk by never letting any day be computed without every
+  // earlier day's real result already threaded through it, in the same pass, every time. The only
+  // thing that seeds it before day 1 is imported cross-month history (memoryRotationState), never
+  // anything from this session's own prior run, since that prior run's data is about to be
+  // recomputed by this exact same pass anyway.
   async function generateWholeMonth() {
     if (!livePlan) return;
     const sortedDays = livePlan.taskDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
-    const toGenerate = sortedDays.filter((d) => livePlan.dayStatus[d.dateKey] !== "saved");
-    if (!toGenerate.length) {
-      setMonthStatus("Every day is already saved -- nothing left to generate. Edit a day first if you want to redo it.");
-      return;
-    }
-    const alreadyGenerated = toGenerate.filter((d) => livePlan.dayStatus[d.dateKey] === "generated");
+    const alreadyGenerated = sortedDays.filter((d) => livePlan.dayStatus[d.dateKey] === "generated");
     if (alreadyGenerated.length) {
       const ok = await confirmEdit(
-        `${alreadyGenerated.length} day(s) were already generated (not yet saved) -- regenerating the whole month will replace their current assignments. Already-SAVED days are never touched. Continue?`
+        `${alreadyGenerated.length} day(s) were already generated -- regenerating the whole month will replace their current assignments, including any hand-edits since the last Generate. Continue?`
       );
       if (!ok) return;
     }
@@ -2359,14 +2339,13 @@ window.__initDriverAssignmentApp = function () {
     generateMonthBtn.disabled = true;
     try {
       const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
-      const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
-      let rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
+      let rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, [], conditions, shiftSeedAssignment);
       Object.keys(memoryRotationState).forEach((id) => {
         if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
       });
 
       let totalCreated = 0, totalStillUnassigned = 0, totalGuarded = 0;
-      toGenerate.forEach((day) => {
+      sortedDays.forEach((day) => {
         const dateKey = day.dateKey;
         const prevWrites = livePlan.engineWrites[dateKey] || {};
         Object.keys(prevWrites).forEach((driverId) => {
@@ -2402,8 +2381,8 @@ window.__initDriverAssignmentApp = function () {
 
       // Self-check across the WHOLE month right after generating it, not just per-day -- re-derives
       // every driver's state fresh across all of sortedDays (auditRotationRules's own job), started
-      // from cross-month memory anchors so a driver continuing from a prior granted month is
-      // checked correctly from day 1.
+      // from imported cross-month memory anchors so a driver continuing from an imported prior
+      // month is checked correctly from day 1.
       const violations = E.auditRotationRules(sortedDays, conditions, memoryRotationState);
       const violationNote = violations.length
         ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} across the month: ` +
@@ -2417,9 +2396,9 @@ window.__initDriverAssignmentApp = function () {
       onDaySelectChange();
       const guardNote = totalGuarded ? ` ⚠ ${totalGuarded} driver${totalGuarded === 1 ? "" : "s"} were incorrectly flagged unassigned while already having a real task somewhere -- see console, this should never happen.` : "";
       setMonthStatus(
-        `Generated ${toGenerate.length} day(s) in one consistent pass. Added ${totalCreated} auto-reserve task${totalCreated === 1 ? "" : "s"} total` +
+        `Generated ${sortedDays.length} day(s) in one consistent pass. Added ${totalCreated} auto-reserve task${totalCreated === 1 ? "" : "s"} total` +
         (totalStillUnassigned ? `, ${totalStillUnassigned} driver${totalStillUnassigned === 1 ? "" : "s"} still couldn't get a slot` : "") +
-        `. Review each day below and Save when you're happy with it.${violationNote}${guardNote}`,
+        `. Review below, hand-edit anything, and Download when you're happy with it.${violationNote}${guardNote}`,
         !!violations.length || !!totalGuarded
       );
     } catch (err) {
@@ -2434,9 +2413,6 @@ window.__initDriverAssignmentApp = function () {
   function onDaySelectChange() {
     const dateKey = daySelect.value;
     const status = livePlan.dayStatus[dateKey];
-    dayGenerateBtn.disabled = false;
-    daySaveBtn.disabled = status !== "generated";
-    dayUnsaveBtn.disabled = status !== "saved";
     renderDayResultTable(dateKey);
     renderTaskView(dateKey);
     renderRosterGrid();
@@ -2444,171 +2420,6 @@ window.__initDriverAssignmentApp = function () {
     setDayStatus(`${dateKey}: ${statusLabel(status)}.`);
   }
   daySelect.addEventListener("change", onDaySelectChange);
-
-  async function generateDay(dateKey) {
-    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
-
-    // Undo this engine's own previous writes for this exact day (if any) so those drivers are
-    // reconsidered available -- but only a cell still holding exactly what Generate itself wrote
-    // last time; a cell the supervisor hand-edited since is left alone (and that driver correctly
-    // stays unavailable for this Generate, per isAvailable's "must be blank" contract).
-    const prevWrites = livePlan.engineWrites[dateKey] || {};
-    Object.keys(prevWrites).forEach((driverId) => {
-      const driver = livePlan.rosterData.drivers.find((d) => d.id === driverId);
-      if (driver && driver.statusByDateKey[dateKey] === prevWrites[driverId]) {
-        driver.statusByDateKey[dateKey] = "";
-      }
-    });
-
-    const savedKeys = Object.keys(livePlan.dayStatus).filter((k) => livePlan.dayStatus[k] === "saved");
-    // Demand comes from the WHOLE loaded range (livePlan.taskDays), not just this one day, even
-    // though only this day gets generated right now -- a brand-new driver's very first shift lock
-    // should already reflect the month's real shape, not whatever this single day happens to need.
-    // Computed BEFORE the replay below and passed into it too, so a first-seen driver's locked
-    // shift always comes from this same real-demand seed, exactly like a live cold-start would --
-    // never guessed from whatever task the replay happens to see first, which could itself have
-    // been a cross-shift borrow (see rebuildRotationStateFromSavedDays in engine.js for the bug
-    // this fixed: a borrowed task silently became a driver's new "real" baseline, letting later
-    // borrows creep further from it day after day instead of staying one genuine step).
-    const shiftSeedAssignment = E.computeShiftSeedAssignment(livePlan.rosterData, livePlan.taskDays, conditions);
-    const rotationState = E.rebuildRotationStateFromSavedDays(livePlan.taskDays, savedKeys, conditions, shiftSeedAssignment);
-    // Any driver not already covered by this session's own saved history starts from the
-    // cross-month memory loaded in section 3 instead of cold, same idea as v1's memory carry-over.
-    Object.keys(memoryRotationState).forEach((id) => {
-      if (!rotationState[id]) rotationState[id] = JSON.parse(JSON.stringify(memoryRotationState[id]));
-    });
-    // A task with a real pre-existing answer (originalDriverRawText) is never reset here -- its
-    // driver, whatever it resolved to at load, stays exactly as-is across every re-Generate.
-    day.tasks.forEach((t) => { if (!t.originalDriverRawText) { t.driver = null; t.chainRescued = false; } });
-    // Also passes the WHOLE loaded range as the lookahead so a fresh assignment on this one day
-    // never gets stranded ahead of a real, already-fixed pre-existing duty on a LATER day this
-    // session hasn't generated yet (see buildFutureFixedShiftIndex in engine.js) -- without this,
-    // this page's per-day Generate would only ever see today's single-day taskDays array and have no way
-    // to know a future day already has a real answer waiting.
-    const result = E.assignWithConditions(livePlan.rosterData, [day], conditions, rotationState, SPECIAL_RULES, shiftSeedAssignment, livePlan.taskDays);
-    const dayResult = result.perDay[0];
-    const newWrites = {};
-    dayResult.assignments.forEach(({ task, driver }) => {
-      const t = day.tasks.find((x) => x.row === task.row);
-      if (t) t.driver = driver;
-      // Writes the Roster grid's cell too -- Generate is what keeps both views consistent; after
-      // this, the two grids are independently editable (no ongoing auto-sync back the other way).
-      // Full code, suffix and all -- matches setTaskDriver()'s own write below.
-      driver.statusByDateKey[dateKey] = task.code;
-      newWrites[driver.id] = task.code;
-    });
-    livePlan.engineWrites[dateKey] = newWrites;
-    // Chain Rescue runs before reserve auto-fill, same rotationState reasoning as the comment
-    // below -- it needs to know each driver's real rest-time history, not a blank cold start.
-    applyChainRescue(dateKey, day, dayResult, rotationState);
-    // Automatically top up a real reserve task for every driver still unassigned after the normal
-    // pass -- confirmed directly: "we don't want to leave a driver with no task... can we [do
-    // this] automatically... the supervisor will know with the highlight that it has been added."
-    // Uses THIS rotationState (not computeReadOnlyRotationState(), which by design never has an
-    // entry for a driver who was merely available but got nothing) since it just went through
-    // assignWithConditions's own cold-start seeding loop for every available driver, assigned or
-    // not -- so a brand-new unassigned driver's shift is already known, no separate click needed.
-    const reserveFill = applyReserveAutoFill(dateKey, day, dayResult, rotationState);
-    livePlan.results[dateKey] = dayResult;
-    livePlan.dayStatus[dateKey] = "generated";
-    livePlan.lastGeneratedRotationState = rotationState;
-    return reserveFill;
-  }
-
-  dayGenerateBtn.addEventListener("click", async () => {
-    const dateKey = daySelect.value;
-    // Continuity (shift lock, rest time, reserve/trip mix) only ever comes from SAVED days --
-    // rebuildRotationStateFromSavedDays replays saved days alone, by design ("only what's saved
-    // now matters"). Generating a day while an EARLIER day in the range is still un-saved silently
-    // starts every driver fresh for this day instead of continuing from what actually happened --
-    // confirmed as a real, live source of confusion: a whole week generated without saving each
-    // day in order produced wildly inconsistent shifts and reserve/trip streaks day to day, none
-    // of it because of a borrow-widening mistake -- purely because nothing was there to continue
-    // from. Catching this HERE, before it happens, rather than only describing it in Save's own
-    // status text, is what actually prevents it.
-    const earlierUnsaved = livePlan.taskDays
-      .filter((d) => d.dateKey < dateKey && livePlan.dayStatus[d.dateKey] !== "saved")
-      .map((d) => d.dateKey);
-    if (earlierUnsaved.length) {
-      const list = earlierUnsaved.length <= 3
-        ? earlierUnsaved.join(", ")
-        : `${earlierUnsaved.slice(0, 3).join(", ")} and ${earlierUnsaved.length - 3} more`;
-      const plural = earlierUnsaved.length !== 1;
-      const proceed = await confirmEdit(
-        `${earlierUnsaved.length} earlier day${plural ? "s" : ""} (${list}) ${plural ? "aren't" : "isn't"} saved yet. Generating ${dateKey} now means it won't see ${plural ? "their" : "its"} results at all -- every driver's shift, rest time and reserve/trip mix will start completely fresh for ${dateKey}, as if ${plural ? "those days" : "that day"} never happened. Save ${plural ? "them" : "it"} first if you want ${dateKey} to build on ${plural ? "them" : "it"} -- or continue anyway if that's really what you want.`
-      );
-      if (!proceed) return;
-    }
-    const status = livePlan.dayStatus[dateKey];
-    if (status !== "pending") {
-      const ok = await confirmEdit(status === "saved"
-        ? `${dateKey} is already saved. Re-generating will undo that save and replace its current assignments -- continue?`
-        : `${dateKey} was already generated. Re-generating will replace its current assignments -- continue?`);
-      if (!ok) return;
-    }
-    try {
-      dayGenerateBtn.disabled = true;
-      const reserveFill = await generateDay(dateKey);
-      renderDaySelector();
-      renderAllDaysTable();
-      renderRosterGrid();
-      onDaySelectChange();
-      const reserveNote = reserveFill.createdCount
-        ? ` Added ${reserveFill.createdCount} reserve task${reserveFill.createdCount === 1 ? "" : "s"} automatically for driver${reserveFill.createdCount === 1 ? "" : "s"} this left unassigned -- look for the light-blue highlight in the Task view and Roster grid below.`
-        : "";
-      // Self-check right after Generate, not just at Grant time -- catches a rule-1/rule-4
-      // violation the moment it happens, with the exact driver/date, instead of only being
-      // discoverable later in an exported file with no trace back to which Generate produced it.
-      // auditRotationRules replays chronologically from scratch across whatever days it's given --
-      // passing ONLY today's day here would mean a driver's very first task of the day always
-      // looks like the start of a brand-new stretch, with no real history to compare a backward
-      // jump against, so a genuine rule-4 violation could never be caught this way (confirmed as a
-      // real gap: it let an auto-created reserve task jump a driver's clock backward hours with no
-      // warning at all). Passing every already-SAVED earlier day too, in order, plus today, gives
-      // the check the same real continuity Generate itself used -- then only today's own
-      // violations are surfaced, since earlier days would already have been shown on their own
-      // Generate.
-      const priorSavedKeys = livePlan.taskDays
-        .filter((d) => d.dateKey < dateKey && livePlan.dayStatus[d.dateKey] === "saved")
-        .map((d) => d.dateKey);
-      const auditDays = livePlan.taskDays.filter((d) => d.dateKey === dateKey || priorSavedKeys.includes(d.dateKey));
-      const violations = E.auditRotationRules(auditDays, conditions, livePlan.lastGeneratedRotationState)
-        .filter((v) => v.dateKey === dateKey);
-      const violationNote = violations.length
-        ? ` ⚠ ${violations.length} rule violation${violations.length === 1 ? "" : "s"} in this day's result: ` +
-          violations.map((v) => `${v.driverName} -- ${v.detail}`).join(" | ")
-        : "";
-      const guardNote = reserveFill.guardedCount
-        ? ` ⚠ ${reserveFill.guardedCount} driver${reserveFill.guardedCount === 1 ? "" : "s"} were incorrectly flagged unassigned while already having a real task -- see console, this should never happen.`
-        : "";
-      setDayStatus(`Generated ${dateKey}. Review the counts below, then Save when you're happy with it.${reserveNote}${violationNote}${guardNote}`, !!violations.length || !!reserveFill.guardedCount);
-    } catch (err) {
-      console.error(err);
-      setDayStatus("Could not generate this day: " + err.message, true);
-    } finally {
-      dayGenerateBtn.disabled = false;
-    }
-  });
-
-  daySaveBtn.addEventListener("click", () => {
-    const dateKey = daySelect.value;
-    livePlan.dayStatus[dateKey] = "saved";
-    renderDaySelector();
-    renderAllDaysTable();
-    onDaySelectChange();
-    setDayStatus(`${dateKey} saved -- it'll now feed the next day's Generate. This isn't final: Edit this day any time to change it and save again.`);
-  });
-
-  dayUnsaveBtn.addEventListener("click", async () => {
-    const dateKey = daySelect.value;
-    const ok = await confirmEdit(`Edit ${dateKey}? This undoes its save (back to "generated") so you can change it and save again. Any later day that's already saved keeps whatever it was saved with -- it will NOT be recomputed just because you edited an earlier day.`);
-    if (!ok) return;
-    livePlan.dayStatus[dateKey] = "generated";
-    renderDaySelector();
-    renderAllDaysTable();
-    onDaySelectChange();
-    setDayStatus(`${dateKey} is editable again.`);
-  });
 
   function downloadBlob(blob, fileName) {
     const url = URL.createObjectURL(blob);
@@ -2621,9 +2432,9 @@ window.__initDriverAssignmentApp = function () {
     URL.revokeObjectURL(url);
   }
 
-  // Walks the ENTIRE live model (every day, saved or not) into the same {row, col, value} patch
-  // shape xlsx_surgical_patch.js already expects -- Download is always exporting a full, current
-  // snapshot, not just what's been saved so far. Only emits a patch for a cell that's actually
+  // Walks the ENTIRE live model into the same {row, col, value} patch shape xlsx_surgical_patch.js
+  // already expects -- Download is always exporting a full, current snapshot of everything. Only
+  // emits a patch for a cell that's actually
   // different from what was originally parsed (see the originalTaskCodes/originalRosterValues
   // snapshots taken once at session-load time), so an export doesn't needlessly rewrite every
   // untouched cell in the whole date range. A task's own code cell is patched whenever it's a
