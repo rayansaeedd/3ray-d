@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822m")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822m"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822n")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822n"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822m";
+    var APP_VERSION = "20260822n";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -399,17 +399,30 @@
   <div class="card">
     <h2>3. Shift rotation history (optional)</h2>
     <div class="note">Only matters if you want this run's shift-lock rotation, rest-time and reserve/trip balance to continue from the PREVIOUS real month -- e.g. generating September correctly needs to know each driver's actual August shift. Skip this to start every driver fresh (each gets a shift seeded purely from this month's own demand, with no history behind it). Nothing is ever saved in this browser -- refreshing or reopening this page always starts with no history loaded, on purpose: the only source of truth is the real completed Task Program you drop below, read fresh every time, never a remembered copy that could quietly drift out of date or mismatch what's actually deployed.</div>
-    <div class="note" style="margin-top:10px;">Drop the PREVIOUS month's completed Task Program (the real file, with driver names already filled in) and this reads each driver's shift, reserve/trip mix and last duty straight out of it. Only the Task Program is needed -- no Roster upload, since every task's own NAME cell already says who did it. Set the first date this file covers, then drop it below.</div>
+    <div class="note" style="margin-top:10px;">Drop the PREVIOUS month's completed Task Program AND its Roster (both real files, already filled in). Both are required: the Task Program gives each driver's shift, reserve/trip mix and last real duty; the Roster is what lets this correctly tell "this driver had a real day off/training/vacation in between" apart from "this driver simply has no data for that day" -- without it, a driver who went quiet for training partway through the month looks identical to one who was simply idle, and a stale pre-break shift pattern can outweigh what they were actually doing most recently. Set the first date these files cover, then drop both below.</div>
     <div class="date-range-row" style="margin-top:10px;">
-      <label class="field">First day this completed Task Program covers
+      <label class="field">First day these files cover
         <input type="date" id="importMonthStartDate" />
       </label>
     </div>
-    <div class="dropzone" id="importMonthDropzone" style="margin-top:10px; max-width:460px;">
-      <div class="icon">&#8595;</div>
-      <div><strong>Import the previous month's completed Task Program</strong></div>
-      <div class="hint">Drop the completed Task Program .xlsx here, or <span class="browse-link" id="importMonthBrowseLink">browse</span>. Set the date above first.</div>
-      <input type="file" id="importMonthFileInput" accept=".xlsx" />
+    <div class="date-range-row" style="margin-top:10px; align-items:flex-start; gap:14px;">
+      <div class="dropzone" id="importMonthDropzone" style="max-width:460px;">
+        <div class="icon">&#8595;</div>
+        <div><strong>Task Program</strong></div>
+        <div class="hint">Drop the completed Task Program .xlsx here, or <span class="browse-link" id="importMonthBrowseLink">browse</span>.</div>
+        <input type="file" id="importMonthFileInput" accept=".xlsx" />
+      </div>
+      <div class="dropzone" id="importMonthRosterDropzone" style="max-width:460px;">
+        <div class="icon">&#8595;</div>
+        <div><strong>Roster</strong></div>
+        <div class="hint">Drop the same month's Roster .xlsx here, or <span class="browse-link" id="importMonthRosterBrowseLink">browse</span>.</div>
+        <input type="file" id="importMonthRosterFileInput" accept=".xlsx" />
+      </div>
+    </div>
+    <div class="drop-loaded" id="importMonthTaskLoadedLabel">No Task Program loaded yet.</div>
+    <div class="drop-loaded" id="importMonthRosterLoadedLabel">No Roster loaded yet.</div>
+    <div class="generate-row" style="margin-top:10px;">
+      <button type="button" class="primary" id="importMonthBtn" disabled>Import shift rotation history</button>
     </div>
     <div class="drop-loaded" id="memoryStatusLabel">Starting fresh -- no shift rotation history loaded.</div>
   </div>
@@ -594,6 +607,12 @@ window.__initDriverAssignmentApp = function () {
   const importMonthDropzone = document.getElementById("importMonthDropzone");
   const importMonthFileInput = document.getElementById("importMonthFileInput");
   const importMonthBrowseLink = document.getElementById("importMonthBrowseLink");
+  const importMonthTaskLoadedLabel = document.getElementById("importMonthTaskLoadedLabel");
+  const importMonthRosterDropzone = document.getElementById("importMonthRosterDropzone");
+  const importMonthRosterFileInput = document.getElementById("importMonthRosterFileInput");
+  const importMonthRosterBrowseLink = document.getElementById("importMonthRosterBrowseLink");
+  const importMonthRosterLoadedLabel = document.getElementById("importMonthRosterLoadedLabel");
+  const importMonthBtn = document.getElementById("importMonthBtn");
   const startBtn = document.getElementById("startBtn");
   const statusLine = document.getElementById("statusLine");
   const dayWorkflow = document.getElementById("dayWorkflow");
@@ -834,21 +853,95 @@ window.__initDriverAssignmentApp = function () {
     }
   }
 
-  // --- Import a completed month's Task Program directly into memory ---------------------------
+  // --- Import a completed month's Task Program + Roster directly into memory -------------------
   // A completed month's Task Program already has every task's NAME cell resolved to a real
   // driver (VLOOKUP result "<possible 'T- ' prefix><ID>-<NAME><phone, no separator>") -- reading
   // that directly is more reliable than cross-referencing the Roster's own day-by-day codes,
   // which strip the letter suffix that actually says reserve vs trip vs sweep. Confirmed directly
   // against a real August file: 70% of that month's tasks shared a same-day stripped code with at
   // least one other task, which made a first attempt at Roster-based matching genuinely
-  // misattribute at least one driver's history to someone else entirely. No Roster upload is
-  // needed for this at all -- the Task Program alone carries who did what, its real kind, and its
-  // real start/end time. readResolvedCell/parseResolvedNameCell now live in engine.js (E.*),
-  // shared with resolveExistingTaskAssignments -- same resolution logic, two different uses.
+  // misattribute at least one driver's history to someone else entirely. So the Task Program
+  // alone still carries who did what, its real kind, and its real start/end time.
+  //
+  // The Roster IS required here now though, for a real gap this session confirmed against actual
+  // data: without it, a driver who went quiet for training/leave partway through the imported
+  // month looks IDENTICAL to one who simply had no task that day for no particular reason -- both
+  // are just "missing" from the Task Program. The one and only thing that tells them apart is the
+  // Roster's own day-by-day status cell (a real non-blank code like "830/7T" or "F"), which is
+  // what shiftAnchorForDriver below uses to find genuine break boundaries. readResolvedCell/
+  // parseResolvedNameCell live in engine.js (E.*), shared with resolveExistingTaskAssignments.
+
+  // The anchor used to be the driver's shift on their FIRST appearance in the imported file -- a
+  // real, serious bug confirmed directly against a real result: seeding September from an August
+  // anchor set as early as the 1st meant computeShiftIndexForDriver had to extrapolate forward
+  // through every week in between using pure elapsed-time math, with no way to notice if real
+  // life (leave, an adjustment, an uneven week) ever stopped matching a perfectly uninterrupted
+  // rotation. Confirmed: 28 of 91 drivers touched 4 different shift bands in just 21 days of the
+  // following month, when correct behavior is at most 2.
+  //
+  // Anchoring purely on frequency (the MODE band across the last shiftLockWeeks-sized window) was
+  // the next attempt, and fixed that -- but confirmed as its own real gap against actual data: a
+  // driver who worked one shift for most of a window, then had a real training/leave break, then
+  // came back working a genuinely DIFFERENT shift for their last few real duties, got anchored to
+  // the OLDER (pre-break) band anyway, purely because it had more raw occurrences -- exactly
+  // backwards, since the break is real evidence their CURRENT pattern is the post-break one.
+  //
+  // So this now finds the driver's most recent unbroken RUN of real duties -- walking backward
+  // from their last real duty, a run continues through an ordinary day with no task recorded (no
+  // way to tell what that meant) but STOPS the moment the Roster shows a genuine non-blank status
+  // (training, leave, vacation, whatever) on a day in between two duties, since that's real
+  // evidence of a break. The mode over just that most-recent run is the anchor -- unless the run
+  // has fewer than 2 real duties in it (a single data point is exactly the "one-off borrow"
+  // instability rebuildRotationStateFromSavedDays's own history already warned against), in which
+  // case it widens to include the run before the break too, and keeps widening run by run until
+  // there are at least 2 real duties to found the anchor on, or the driver's whole history is
+  // used up. A driver with no Roster entry at all (shouldn't happen now that it's required, but
+  // stay safe) falls back to the plain no-boundary-detection window-mode behavior.
+  function shiftAnchorForDriver(observed, rosterStatusByDateKey, lastFileDateKey, conditions) {
+    const sorted = observed.slice().sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+    if (!sorted.length) return 0;
+    if (!rosterStatusByDateKey) {
+      const windowStart = E.addDays(new Date(lastFileDateKey + "T00:00:00"), -(conditions.shiftLockWeeks * 7) + 1);
+      const recent = sorted.filter((o) => o.dateKey >= E.dateKey(windowStart));
+      return modeOf(recent.length ? recent : sorted);
+    }
+    // Real (non-blank, non-available) Roster status strictly between two given dates -- true
+    // evidence of a break, not just "no task recorded that day."
+    function hasRealBreakBetween(fromDateKey, toDateKey) {
+      let d = E.addDays(new Date(fromDateKey + "T00:00:00"), 1);
+      const stop = new Date(toDateKey + "T00:00:00");
+      while (d < stop) {
+        const status = rosterStatusByDateKey[E.dateKey(d)];
+        if (status && String(status).trim() && !E.isAvailable(status)) return true;
+        d = E.addDays(d, 1);
+      }
+      return false;
+    }
+    // Single forward pass, oldest to newest -- start a new run every time a real break separates
+    // this duty from the previous one, otherwise extend the current run.
+    const runs = [[sorted[0]]];
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1], cur = sorted[i];
+      if (hasRealBreakBetween(prev.dateKey, cur.dateKey)) runs.push([cur]);
+      else runs[runs.length - 1].push(cur);
+    }
+    // Walk from the most recent run backward, accumulating until there are >=2 real duties.
+    let pool = [];
+    for (let i = runs.length - 1; i >= 0 && pool.length < 2; i--) pool = runs[i].concat(pool);
+    return modeOf(pool.length ? pool : sorted);
+  }
+  function modeOf(observedList) {
+    const counts = {};
+    observedList.forEach((o) => { counts[o.shiftIdx] = (counts[o.shiftIdx] || 0) + 1; });
+    let bestIdx = null, bestCount = -1;
+    Object.keys(counts).forEach((k) => { if (counts[k] > bestCount) { bestCount = counts[k]; bestIdx = Number(k); } });
+    return bestIdx;
+  }
 
   // No endDate -- processes every day-sheet this file actually has, whatever range that turns out
-  // to be, rather than assuming a fixed month length.
-  function computeStateFromCompletedTaskProgram(taskWb, startDate) {
+  // to be, rather than assuming a fixed month length. rosterData is required (parsed from the
+  // SAME month's Roster file) so shiftAnchorForDriver can tell a real break apart from silence.
+  function computeStateFromCompletedTaskProgram(taskWb, startDate, rosterData) {
     const taskDays = E.parseTaskProgram(taskWb, startDate);
     if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in this file.");
 
@@ -881,38 +974,15 @@ window.__initDriverAssignmentApp = function () {
       });
     });
 
-    // The anchor used to be the driver's shift on their FIRST appearance in the imported file --
-    // a real, serious bug confirmed directly against a real result: seeding September from an
-    // August anchor set as early as the 1st meant computeShiftIndexForDriver had to extrapolate
-    // forward through every week in between using pure elapsed-time math, with no way to notice
-    // if real life (leave, an adjustment, an uneven week) ever stopped matching a perfectly
-    // uninterrupted rotation -- the longer that gap, the more it could silently drift from what
-    // the driver's shift actually was by month's end. Confirmed: 28 of 91 drivers touched 4
-    // different shift bands in just 21 days of the following month, when correct behavior is at
-    // most 2 (their locked band plus one legitimate rotation).
-    //
-    // Anchoring from the LAST real duty in the file instead shrinks that extrapolation down to
-    // just the real gap between the imported month's end and the new month's start -- typically a
-    // few days, not weeks. Using the single most recent duty alone would reintroduce a DIFFERENT
-    // known bug though (see rebuildRotationStateFromSavedDays's own history): a one-off
-    // shortage-borrow on the very last real day would get mistaken for the driver's real lock and
-    // silently become their new "normal". So this takes the MODE (most common band) across the
-    // driver's real duties within the last shiftLockWeeks-sized window ending at the file's own
-    // last covered date -- robust to a single borrowed day, still anchored to the recent truth
-    // rather than the distant past.
     const lastFileDateKey = taskDays[taskDays.length - 1].dateKey;
-    const windowStart = E.addDays(new Date(lastFileDateKey + "T00:00:00"), -(conditions.shiftLockWeeks * 7) + 1);
+    const rosterDriverById = {};
+    (rosterData ? rosterData.drivers : []).forEach((d) => { rosterDriverById[d.id] = d; });
     Object.keys(state).forEach((id) => {
       const obs = observedByDriver[id] || [];
-      const recent = obs.filter((o) => new Date(o.dateKey + "T00:00:00") >= windowStart);
-      const pool = recent.length ? recent : obs; // no duty at all in that window -- fall back to their whole history
       state[id].shiftAnchorDate = lastFileDateKey;
-      if (!pool.length) { state[id].shiftAnchorIndex = 0; return; }
-      const counts = {};
-      pool.forEach((o) => { counts[o.shiftIdx] = (counts[o.shiftIdx] || 0) + 1; });
-      let bestIdx = null, bestCount = -1;
-      Object.keys(counts).forEach((k) => { if (counts[k] > bestCount) { bestCount = counts[k]; bestIdx = Number(k); } });
-      state[id].shiftAnchorIndex = bestIdx;
+      if (!obs.length) { state[id].shiftAnchorIndex = 0; return; }
+      const rosterDriver = rosterDriverById[id];
+      state[id].shiftAnchorIndex = shiftAnchorForDriver(obs, rosterDriver ? rosterDriver.statusByDateKey : null, lastFileDateKey, conditions);
     });
 
     return {
@@ -956,35 +1026,80 @@ window.__initDriverAssignmentApp = function () {
     }
   });
 
-  // Sole source of shift rotation history now -- computed fresh from the real file every time,
+  // Sole source of shift rotation history now -- computed fresh from the real files every time,
   // used only for THIS session, never written to localStorage or downloaded as a separate backup
-  // (nothing reads that format back in anymore, so a backup file would just be dead weight).
+  // (nothing reads that format back in anymore, so a backup file would just be dead weight). Both
+  // the Task Program and Roster are loaded independently (either order) and just held here until
+  // both are present and the supervisor explicitly clicks Import -- importedRosterByDriverId is
+  // also kept around after a successful import so its statusByDateKey (the imported month's real
+  // day-by-day status, training/leave/etc included) can be merged onto the matching driver in
+  // THIS month's own roster right before Generate runs, letting rest-time/continuity checks see a
+  // real day off even when it falls in a date range this month's own Roster file has no columns
+  // for at all.
+  let importMonthTaskWb = null, importMonthTaskFileName = null;
+  let importMonthRosterData = null, importMonthRosterFileName = null;
+  let importedRosterByDriverId = null;
+
+  function updateImportMonthBtnEnabled() {
+    importMonthBtn.disabled = !(importMonthTaskWb && importMonthRosterData && importMonthStartDateInput.value);
+  }
+  importMonthStartDateInput.addEventListener("change", updateImportMonthBtnEnabled);
+
   wireDropzone(importMonthDropzone, importMonthFileInput, importMonthBrowseLink, async (file) => {
     try {
-      if (!importMonthStartDateInput.value) {
-        setStatus("Set \"First day this completed Task Program covers\" above before dropping the file.", true);
-        return;
-      }
       setStatus("Reading " + file.name + "...");
       const loaded = await loadWorkbook(file);
+      importMonthTaskWb = loaded.wb;
+      importMonthTaskFileName = file.name;
+      importMonthTaskLoadedLabel.textContent = `Loaded: ${file.name} (${loaded.wb.worksheets.length} sheet${loaded.wb.worksheets.length === 1 ? "" : "s"})`;
+      setStatus("");
+      updateImportMonthBtnEnabled();
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  wireDropzone(importMonthRosterDropzone, importMonthRosterFileInput, importMonthRosterBrowseLink, async (file) => {
+    try {
+      setStatus("Reading " + file.name + "...");
+      const loaded = await loadWorkbook(file);
+      const data = E.parseRoster(loaded.wb);
+      importMonthRosterData = data;
+      importMonthRosterFileName = file.name;
+      importMonthRosterLoadedLabel.textContent = `Loaded: ${file.name} (${data.drivers.length} drivers)`;
+      setStatus("");
+      updateImportMonthBtnEnabled();
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not read this file: " + err.message, true);
+    }
+  });
+
+  importMonthBtn.addEventListener("click", async () => {
+    if (!importMonthTaskWb || !importMonthRosterData || !importMonthStartDateInput.value) return;
+    try {
       const [y, m, d] = importMonthStartDateInput.value.split("-").map((x) => parseInt(x, 10));
       const startDate = new Date(y, m - 1, d);
-      const result = computeStateFromCompletedTaskProgram(loaded.wb, startDate);
+      const result = computeStateFromCompletedTaskProgram(importMonthTaskWb, startDate, importMonthRosterData);
 
       const monthLabel = E.monthLabelFromDateKey(result.firstDateKey);
       const driverCount = Object.keys(result.state).length;
       const ok = await confirmEdit(
-        `Import ${result.firstDateKey} to ${result.lastDateKey} from "${file.name}"? This resolved ${result.resolvedTasks} of ${result.totalTasks} task rows to a real driver and computed shift rotation history for ${driverCount} driver(s), for THIS session only.`
+        `Import ${result.firstDateKey} to ${result.lastDateKey} from "${importMonthTaskFileName}" and "${importMonthRosterFileName}"? This resolved ${result.resolvedTasks} of ${result.totalTasks} task rows to a real driver, computed shift rotation history for ${driverCount} driver(s), and will carry the Roster's real day-by-day status over for anyone matched by ID in this month's own Roster -- all for THIS session only.`
       );
       if (!ok) { setStatus(""); return; }
 
       memoryRotationState = result.state;
-      setMemoryStatus(`Imported ${monthLabel} directly from its Task Program (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved.`);
+      const rosterById = {};
+      importMonthRosterData.drivers.forEach((d) => { rosterById[d.id] = d.statusByDateKey; });
+      importedRosterByDriverId = rosterById;
+      setMemoryStatus(`Imported ${monthLabel} from its Task Program and Roster (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved.`);
       setStatus("");
       renderRosterGrid();
     } catch (err) {
       console.error(err);
-      setStatus("Could not import this Task Program: " + err.message, true);
+      setStatus("Could not import this month: " + err.message, true);
     }
   });
 
@@ -1225,7 +1340,7 @@ window.__initDriverAssignmentApp = function () {
     const byDateCode = {}; // dateKey -> code -> [driver names]
     livePlan.rosterData.drivers.forEach((driver) => {
       Object.entries(driver.statusByDateKey || {}).forEach(([dateKey, raw]) => {
-        const code = (raw || "").trim();
+        const code = String(raw || "").trim();
         if (!code || !startMinFromCode(code) || E.isOfficeDutyCode(code) || TRAINING_CODE_RE.test(code)) return;
         const byCode = (byDateCode[dateKey] = byDateCode[dateKey] || {});
         (byCode[code] = byCode[code] || []).push(driver.name);
@@ -1487,7 +1602,7 @@ window.__initDriverAssignmentApp = function () {
     } else {
       livePlan.rosterData.drivers.forEach((d) => {
         Object.values(d.statusByDateKey || {}).forEach((v) => {
-          const code = (v || "").trim();
+          const code = String(v || "").trim();
           if (!code || seen.has(code) || !TRAINING_CODE_RE.test(code)) return;
           seen.add(code);
           out.push(code);
@@ -2327,6 +2442,22 @@ window.__initDriverAssignmentApp = function () {
   // recomputed by this exact same pass anyway.
   async function generateWholeMonth() {
     if (!livePlan) return;
+    // Merge the imported month's real day-by-day Roster status onto the matching driver (by real
+    // staff ID) in THIS month's own roster -- purely additive, only ever adding entries for dates
+    // this month's Roster file has no columns for at all, so it can never overwrite this month's
+    // own real data. This is what lets hadRealDayOffSince see a genuine training/leave day that
+    // falls in the imported month, instead of that date silently reading as "available" just
+    // because it isn't in this month's own file. Re-merging on every Generate is harmless (same
+    // source data every time).
+    if (importedRosterByDriverId) {
+      livePlan.rosterData.drivers.forEach((driver) => {
+        const importedStatus = importedRosterByDriverId[driver.id];
+        if (!importedStatus) return;
+        Object.keys(importedStatus).forEach((dk) => {
+          if (!(dk in driver.statusByDateKey)) driver.statusByDateKey[dk] = importedStatus[dk];
+        });
+      });
+    }
     const sortedDays = livePlan.taskDays.slice().sort((a, b) => (a.dateKey < b.dateKey ? -1 : a.dateKey > b.dateKey ? 1 : 0));
     const alreadyGenerated = sortedDays.filter((d) => livePlan.dayStatus[d.dateKey] === "generated");
     if (alreadyGenerated.length) {
