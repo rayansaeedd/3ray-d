@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822o")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822o"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822p")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822p"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822o";
+    var APP_VERSION = "20260822p";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -405,7 +405,7 @@
         <input type="date" id="importMonthStartDate" />
       </label>
     </div>
-    <div class="note" style="margin-top:6px; margin-bottom:0;">Only the Task Program needs this -- its day-sheets aren't reliably self-dated, so this tells the engine which real calendar date the FIRST sheet is. The Roster doesn't need it and doesn't have to match: it reads its own real date columns straight from the file, so it's fine (better, even) if it covers more days than the Task Program does -- e.g. a full month's Roster alongside just the last two weeks' Task Program.</div>
+    <div class="note" style="margin-top:6px; margin-bottom:0;">Filled in automatically once you drop the Task Program below, read straight from the real "DAY:" date already sitting on its first sheet -- double-check it, then correct it by hand if it's ever wrong for a particular file. Only the Task Program needs this at all: the Roster reads its own real date columns straight from the file and doesn't have to match it -- it's fine (better, even) if the Roster covers more days than the Task Program does, e.g. a full month's Roster alongside just the last two weeks' Task Program.</div>
     <div class="date-range-row" style="margin-top:10px; align-items:flex-start; gap:14px;">
       <div class="dropzone" id="importMonthDropzone" style="max-width:460px;">
         <div class="icon">&#8595;</div>
@@ -1052,7 +1052,19 @@ window.__initDriverAssignmentApp = function () {
       const loaded = await loadWorkbook(file);
       importMonthTaskWb = loaded.wb;
       importMonthTaskFileName = file.name;
-      importMonthTaskLoadedLabel.textContent = `Loaded: ${file.name} (${loaded.wb.worksheets.length} sheet${loaded.wb.worksheets.length === 1 ? "" : "s"})`;
+      // Real day-sheets carry their own real date right on the sheet (next to a "DAY:" label) --
+      // read it directly instead of making the supervisor type in a start date that has to
+      // exactly match, a real, confirmed source of error (a mistyped date here silently shifts
+      // every day-sheet's assigned calendar date). Still just fills the same editable field
+      // rather than hiding it, so a file this doesn't work for (or a supervisor who wants to
+      // override it) still has a normal manual fallback.
+      const detected = E.detectTaskProgramStartDate(loaded.wb);
+      if (detected) {
+        importMonthStartDateInput.value = E.dateKey(detected);
+        importMonthTaskLoadedLabel.textContent = `Loaded: ${file.name} (${loaded.wb.worksheets.length} sheet${loaded.wb.worksheets.length === 1 ? "" : "s"}) -- first day detected as ${E.dateKey(detected)} from the sheet's own "DAY:" cell.`;
+      } else {
+        importMonthTaskLoadedLabel.textContent = `Loaded: ${file.name} (${loaded.wb.worksheets.length} sheet${loaded.wb.worksheets.length === 1 ? "" : "s"}) -- could not auto-detect the first day from this file, set it by hand above.`;
+      }
       setStatus("");
       updateImportMonthBtnEnabled();
     } catch (err) {

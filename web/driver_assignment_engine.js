@@ -131,6 +131,29 @@
     return null;
   }
 
+  // Every real day-sheet carries its own real date right on the sheet itself, next to a "DAY:"
+  // label (confirmed directly against real files: "DAY: 14/08/26" sitting right beside the
+  // day-name banner) -- reading that is strictly more reliable than asking a supervisor to type in
+  // a start date that has to exactly match the first sheet, a real, confirmed source of error (a
+  // mistyped or misremembered start date here silently shifts every single day-sheet's assigned
+  // calendar date by however far off it is, with nothing to catch it). Only checks the FIRST
+  // worksheet -- parseTaskProgram counts every later sheet forward from whatever date this
+  // returns, matching how every real file seen so far actually lays sheets out in order. Returns
+  // null (not a throw) if this specific file doesn't have that label where expected, so a caller
+  // can fall back to asking directly rather than silently guessing.
+  function detectTaskProgramStartDate(workbook) {
+    const ws = workbook.worksheets[0];
+    if (!ws) return null;
+    const dayCell = findHeaderCell(ws, "DAY:", 15);
+    if (!dayCell) return null;
+    const row = ws.getRow(dayCell.row);
+    for (let c = dayCell.col + 1; c <= dayCell.col + 6; c++) {
+      const v = displayValue(row.getCell(c));
+      if (v instanceof Date) return v;
+    }
+    return null;
+  }
+
   // --- Roster (Control Staff) parsing ------------------------------------------------------
   function parseRoster(workbook) {
     const ws = workbook.worksheets[0];
@@ -2040,7 +2063,7 @@
 
   return {
     dateKey, addDays, isAvailable, classifyCode, classifyDestination, stripCodeForRoster,
-    parseRoster, parseTaskProgram, assignSimple, buildPatches,
+    parseRoster, parseTaskProgram, detectTaskProgramStartDate, assignSimple, buildPatches,
     SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
