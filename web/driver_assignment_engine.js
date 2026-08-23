@@ -578,6 +578,23 @@
     return bestIdx;
   }
 
+  // The 9 fine-grained bands group into 3 broad periods, 3 bands each, in the fixed order they're
+  // defined in (Early/Late Morning bands = period 0, Afternoon bands = period 1, Night bands =
+  // period 2) -- confirmed directly: a forward move within a driver's own broad period (Early
+  // Morning -> Morning -> Late Morning, say) is fine even if it crosses a fine-band boundary, but
+  // a forward move that leaves the period entirely (Morning -> Night) is "really exhausting" for
+  // the driver and must never happen, no matter how many small legal-looking hops it takes to get
+  // there. Every mechanism that can move a driver OUT of their own locked band (the own-shift/one-
+  // step-back widening below, Chain Rescue's tiering, and the reserve auto-fill's one-step-up
+  // widening) is bounded by this so none of them can cross a period boundary on their own.
+  function shiftPeriodForIndex(shiftIdx) {
+    return shiftIdx == null ? null : Math.floor(shiftIdx / 3);
+  }
+  function samePeriod(idxA, idxB) {
+    const a = shiftPeriodForIndex(idxA), b = shiftPeriodForIndex(idxB);
+    return a != null && b != null && a === b;
+  }
+
   // A driver's locked shift for a given date is computed purely from an anchor point (the date
   // and shift index they were locked into at some point) plus how many whole shiftLockWeeks
   // blocks have elapsed since then, cycling through the fixed Early Morning -> Late Morning ->
@@ -1061,11 +1078,17 @@
       let directChosen = null;
       if (band === latestActiveBand) {
         const restEligible = freeDrivers.filter((d) => !usedDriverIds.has(d.id) && chainRescuePassesRest(conditions, rotationState, d.id, day, task));
-        const withDistance = restEligible.map((d) => {
-          const st = rotationState[d.id];
-          const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
-          return { d, distance: ownIdx != null ? chainRescueBandDistance(ownIdx, band) : 999 };
-        });
+        // A driver whose own locked shift is in a DIFFERENT broad period than `band` is never a
+        // direct-fill candidate at all, no matter how far the distance tiering below would
+        // otherwise let them reach -- this is what actually stops a Morning-locked driver from
+        // ever landing on a Night task as chain rescue's own last resort (see samePeriod above).
+        const withDistance = restEligible
+          .map((d) => {
+            const st = rotationState[d.id];
+            const ownIdx = st ? computeShiftIndexForDriver(st, conditions, day.date) : null;
+            return { d, ownIdx, distance: ownIdx != null ? chainRescueBandDistance(ownIdx, band) : 999 };
+          })
+          .filter((x) => samePeriod(x.ownIdx, band));
         const byDistance = {};
         withDistance.forEach((x) => { (byDistance[x.distance] = byDistance[x.distance] || []).push(x); });
         Object.keys(byDistance).map(Number).sort((a, b) => a - b).some((dist) => {
@@ -1086,7 +1109,13 @@
         usedDriverIds.add(directChosen.d.id);
         return { driver: directChosen.d, vacatedTask: null };
       }
-      if (band < 8) {
+      // A hop only ever moves whoever's currently at band+1 back to cover `band` -- a small,
+      // adjacent-band step. That step itself has to stay within the same broad period as the
+      // direct-fill guard above, or a chain could walk itself right across a period seam one
+      // "small" hop at a time even though every individual hop looked smooth in isolation. Only 2
+      // of the 8 band+1 seams actually cross a period (Late Morning->Early Afternoon, Late
+      // Afternoon->Early Night); this only blocks hopping at exactly those two.
+      if (band < 8 && samePeriod(band, band + 1)) {
         const candidates = (filledByBand[band + 1] || [])
           .filter((a) => !reassignedTasks.has(a.task) && !usedDriverIds.has(a.driver.id))
           .map((a) => ({ a, step: a.task.startMin - task.startMin }))
@@ -1238,7 +1267,10 @@
       let eligible = ownIdx != null ? eligibleTimesForBand(driver, st, ownIdx) : [];
       // The driver's own locked shift has nothing usable today (no real time in that band, every
       // one already at the 4-per-time cap, or every one fails rest/continuity) -- widen to exactly
-      // one shift up, bounds-checked, NEVER wrapping and NEVER backward. This mirrors the SAME
+      // one shift up, bounds-checked, NEVER wrapping and NEVER backward, and only when that one
+      // step stays within the driver's own broad period (samePeriod) -- so a driver locked at the
+      // very top of a period (Late Morning, Late Afternoon) never gets borrowed into the next
+      // period's reserve slots just because it's numerically adjacent. This mirrors the SAME
       // "own shift, then exactly one shift up, never further" rule the normal per-task loop and
       // auditRotationRules already use everywhere else in this engine (confirmed directly,
       // explicitly: backward widening was removed entirely) -- a bidirectional/wrap-aware widening
@@ -1248,7 +1280,7 @@
       // carried-over shift lock (e.g. from importing a completed prior month) not lining up with
       // where THIS day's reserve slots happen to sit was leaving them stranded even when the one
       // legitimate borrow-up would have been a perfectly smooth, reasonable fit.
-      if (!eligible.length && ownIdx != null && ownIdx + 1 < conditions.shifts.length) {
+      if (!eligible.length && ownIdx != null && ownIdx + 1 < conditions.shifts.length && samePeriod(ownIdx, ownIdx + 1)) {
         eligible = eligibleTimesForBand(driver, st, ownIdx + 1);
       }
       if (!eligible.length) { stillUnassigned.push(driver); return; }
@@ -1504,6 +1536,26 @@
         (byShift[idx] = byShift[idx] || []).push(d);
       });
 
+      // A task that already had a real driver BEFORE this run touched it (originalDriverRawText --
+      // resolveExistingTaskAssignments) is real ground truth, but it was never being folded into
+      // `state` at all: workableTasks below deliberately excludes it from the normal per-task loop
+      // (never reassign an already-answered cell), and that loop is the ONLY place recordAssignment
+      // used to run. Confirmed as a real, serious gap: a driver's genuine duty today -- a normal
+      // trip, a reserve, or a training/course commitment like "830/7T" -- left st.lastDutyEndMin
+      // untouched, so restFilter's very next check (`if (st.lastDutyEndMin != null)`) saw it as
+      // null and treated the driver as having had NO duty at all, silently skipping the rest-time
+      // check entirely for their next assignment (potentially the very next day). Folding these in
+      // here, once per real pre-existing task, before any of today's OTHER tasks are considered,
+      // fixes this for every caller of assignWithConditions (both the whole-month-in-one-call and
+      // day-by-day callers) without double-recording anything the loop below still records itself.
+      day.tasks.forEach((t) => {
+        if (!t.originalDriverRawText || !t.driver) return;
+        if (!state[t.driver.id]) {
+          state[t.driver.id] = { shiftAnchorDate: null, shiftAnchorIndex: null, lastDutyEndDateKey: null, lastDutyEndMin: null, lastDutyDateKey: null, lastDutyStartMin: null, recentKinds: [], cumulativeReserve: 0, cumulativeTrip: 0 };
+        }
+        recordAssignment(state, day, t, t.driver, conditions);
+      });
+
       const usedDriverIds = new Set();
       const assignments = [];
       const unassignedTasks = [];
@@ -1565,7 +1617,7 @@
         // earlier than their last real duty purely because they were reached via the widening
         // branch instead of their own shift. Traced from a real supervisor report of exactly this
         // (a driver's day2 task landing 3-4 hours earlier than day1's, no day off between).
-        if (!pool.length && shiftIdx != null && shiftIdx > 0) {
+        if (!pool.length && shiftIdx != null && shiftIdx > 0 && samePeriod(shiftIdx, shiftIdx - 1)) {
           const priorShiftPool = (byShift[shiftIdx - 1] || []).filter((d) => !usedDriverIds.has(d.id));
           pool = restFilter(priorShiftPool, task).filter((d) => withinSameShiftForwardLimit(d, state[d.id], day, task.startMin));
         }

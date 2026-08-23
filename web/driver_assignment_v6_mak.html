@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822q")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822q"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822r")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822r"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822q";
+    var APP_VERSION = "20260822r";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2334,6 +2334,10 @@ window.__initDriverAssignmentApp = function () {
       day.tasks.splice(insertAt, 0, task);
       setTaskDriver(dateKey, task, driver);
       dayResult.assignments.push({ task, driver, shiftIdx: E.classifyShiftForMinutes(conditions, startMin) });
+      // Same gap as the pre-filled-task fix in engine.js: without this, a reserve auto-fill
+      // placement never updated the driver's lastDutyEnd/recentKinds, so the NEXT day's Generate
+      // had no idea this driver worked today at all.
+      E.recordAssignment(rotationState, day, task, driver, conditions);
     });
     dayResult.unassignedDrivers = stillUnassigned; // only genuinely un-placeable drivers remain flagged
     return { createdCount: created.length, stillUnassignedCount: stillUnassigned.length, guardedCount: bogusUnassigned.length };
