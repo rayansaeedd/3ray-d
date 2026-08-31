@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822t")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822t"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822u")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822u"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822t";
+    var APP_VERSION = "20260822u";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1730,7 +1730,7 @@ window.__initDriverAssignmentApp = function () {
     const destination = kind === "trip" ? E.classifyDestination(code) : null;
     const row = livePlan.nextFreeRow[dateKey]++;
     const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null };
-    let insertAt = day.tasks.findIndex((t) => (t.startMin ?? Infinity) > (startMin ?? Infinity));
+    let insertAt = day.tasks.findIndex((t) => E.effectiveDisplayMin(conditions, t.startMin) > E.effectiveDisplayMin(conditions, startMin));
     if (insertAt === -1) insertAt = day.tasks.length;
     day.tasks.splice(insertAt, 0, task);
     setTaskDriver(dateKey, task, driver);
@@ -2340,7 +2340,13 @@ window.__initDriverAssignmentApp = function () {
       // chronological convention the day's tasks are already sorted in at load time. `row` (the
       // real spreadsheet row this exports to) is untouched by this -- it still always lands after
       // the last real row, same append-only, no-row-insertion approach as every other Add Task.
-      let insertAt = day.tasks.findIndex((t) => (t.startMin ?? Infinity) > startMin);
+      // A fabricated Late Night time (e.g. "0000", the last-resort fallback when no real time
+      // exists in that band -- see buildReserveTasksForUnassignedDrivers) sorts by
+      // effectiveDisplayMin, not raw clock minutes, so it lands after the day's real Night tasks
+      // instead of before its earliest Early Morning ones -- confirmed as a real bug: a real file
+      // never carries a genuine midnight-area row, so this had nothing legitimate to match
+      // against and always landed at the very top of the day by mistake.
+      let insertAt = day.tasks.findIndex((t) => E.effectiveDisplayMin(conditions, t.startMin) > E.effectiveDisplayMin(conditions, startMin));
       if (insertAt === -1) insertAt = day.tasks.length;
       day.tasks.splice(insertAt, 0, task);
       setTaskDriver(dateKey, task, driver);
@@ -2751,7 +2757,7 @@ window.__initDriverAssignmentApp = function () {
     livePlan.taskDays.forEach((day) => {
       const added = day.tasks.filter((t) => t.engineAddedReserve && t.driver);
       if (!added.length) return;
-      const plan = E.planReserveRowInsertions(day, added);
+      const plan = E.planReserveRowInsertions(day, added, conditions);
       if (!plan.length) return;
       insertionsBySheetIndex[day.sheetIndex] = plan.map((group) => ({
         beforeRow: group.beforeRow,

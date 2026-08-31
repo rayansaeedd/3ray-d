@@ -532,6 +532,20 @@
     return h * 60 + mm;
   }
 
+  // A time before the FIRST configured shift's own start (e.g. "0000"/"0100" when the day's
+  // earliest real shift is Early Morning at 03:00) is the tail end of the overnight Late Night
+  // band, not the start of the day -- real Task Programs never carry a genuine midnight-area row
+  // at all (confirmed directly: a real file's earliest real task is always right at the first
+  // shift's own start), so there's no existing row to match against; sorting it by raw clock
+  // minutes lands it before everything else instead of after Night, where it actually belongs.
+  // Push it a day forward for DISPLAY/INSERTION ORDERING PURPOSES ONLY -- this must never be used
+  // for shift classification, rest-time math, or anything that cares about the real calendar day.
+  function effectiveDisplayMin(conditions, startMin) {
+    if (startMin == null) return Infinity;
+    const firstShiftStart = conditions.shifts && conditions.shifts.length ? parseHHMM(conditions.shifts[0].start) : null;
+    return firstShiftStart != null && startMin < firstShiftStart ? startMin + 1440 : startMin;
+  }
+
   function conditionsAreComplete(conditions) {
     if (!conditions) return false;
     const shiftsOk = conditions.shifts.length === SHIFT_NAMES.length
@@ -1315,17 +1329,23 @@
   // earlier Generate are excluded, since `addedReserveTasks` is the fresh list being planned now.
   // A new task whose time is at or after every real row's own time lands one past the last real
   // row (plain append, same as before) -- there's nothing real after it to land in front of.
-  function planReserveRowInsertions(day, addedReserveTasks) {
+  // A fabricated Late Night time (e.g. "0000", used as a last-resort fallback when no real time
+  // exists in that band at all -- see buildReserveTasksForUnassignedDrivers) sorts by
+  // effectiveDisplayMin instead of raw clock minutes, so it lands after the day's real Night rows
+  // instead of before its earliest Early Morning ones -- confirmed as a real bug: a real file
+  // NEVER carries a genuine midnight-area row at all, so raw-minutes comparison had nothing
+  // legitimate to match against and always put it at the very top of the day by mistake.
+  function planReserveRowInsertions(day, addedReserveTasks, conditions) {
     const realRows = day.tasks
       .filter((t) => !t.engineAddedReserve && t.row != null)
-      .map((t) => ({ row: t.row, startMin: t.startMin != null ? t.startMin : Infinity }))
+      .map((t) => ({ row: t.row, startMin: effectiveDisplayMin(conditions, t.startMin) }))
       .sort((a, b) => a.row - b.row);
     const lastRealRow = realRows.length ? realRows[realRows.length - 1].row : 0;
 
-    const sorted = addedReserveTasks.slice().sort((a, b) => (a.startMin != null ? a.startMin : Infinity) - (b.startMin != null ? b.startMin : Infinity));
+    const sorted = addedReserveTasks.slice().sort((a, b) => effectiveDisplayMin(conditions, a.startMin) - effectiveDisplayMin(conditions, b.startMin));
     const groups = [];
     sorted.forEach((task) => {
-      const taskStart = task.startMin != null ? task.startMin : Infinity;
+      const taskStart = effectiveDisplayMin(conditions, task.startMin);
       const target = realRows.find((r) => r.startMin > taskStart);
       const beforeRow = target ? target.row : lastRealRow + 1;
       let group = groups.find((g) => g.beforeRow === beforeRow);
@@ -2329,7 +2349,7 @@
   return {
     dateKey, addDays, isAvailable, classifyCode, classifyDestination, stripCodeForRoster,
     parseRoster, parseTaskProgram, detectTaskProgramStartDate, assignSimple, buildPatches,
-    SHIFT_NAMES, defaultConditions, parseHHMM, conditionsAreComplete,
+    SHIFT_NAMES, defaultConditions, parseHHMM, effectiveDisplayMin, conditionsAreComplete,
     classifyShiftForMinutes, computeShiftIndexForDriver, assignWithConditions,
     computeShiftDemand, computeOpenShiftDemand, computeShiftSeedAssignment, buildFutureFixedShiftIndex,
     buildReserveTasksForUnassignedDrivers, findNextFreeTaskRow, planReserveRowInsertions,
