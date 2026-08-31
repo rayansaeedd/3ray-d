@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822u")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822u"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822v")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822v"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822u";
+    var APP_VERSION = "20260822v";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -404,8 +404,12 @@
       <label class="field">First day the Task Program below covers
         <input type="date" id="importMonthStartDate" />
       </label>
+      <label class="field">Last day to trust (optional)
+        <input type="date" id="importMonthEndDate" />
+      </label>
     </div>
-    <div class="note" style="margin-top:6px; margin-bottom:0;">Filled in automatically once you drop the Task Program below, read straight from the real "DAY:" date already sitting on its first sheet -- double-check it, then correct it by hand if it's ever wrong for a particular file. Only the Task Program needs this at all: the Roster reads its own real date columns straight from the file and doesn't have to match it -- it's fine (better, even) if the Roster covers more days than the Task Program does, e.g. a full month's Roster alongside just the last two weeks' Task Program.</div>
+    <div class="note" style="margin-top:6px; margin-bottom:0;">Start is filled in automatically once you drop the Task Program below, read straight from the real "DAY:" date already sitting on its first sheet -- double-check it, then correct it by hand if it's ever wrong for a particular file. Only the Task Program needs Start at all: the Roster reads its own real date columns straight from the file and doesn't have to match it -- it's fine (better, even) if the Roster covers more days than the Task Program does, e.g. a full month's Roster alongside just the last two weeks' Task Program.</div>
+    <div class="note" style="margin-top:6px; margin-bottom:0;">Leave End blank to use every day-sheet the file actually has (a driver's own last real duty is what matters, not the file's own final sheet, so a completely blank trailing day or two is already handled correctly with no need to set this). Only set it if the file has REAL entries near the end that you don't actually trust yet -- provisional, not yet finalized, entered by someone still learning -- and want ignored regardless of whether they're filled in.</div>
     <div class="date-range-row" style="margin-top:10px; align-items:flex-start; gap:14px;">
       <div class="dropzone" id="importMonthDropzone" style="max-width:460px;">
         <div class="icon">&#8595;</div>
@@ -605,6 +609,7 @@ window.__initDriverAssignmentApp = function () {
   const rosterDownloadBtn = document.getElementById("rosterDownloadBtn");
   const memoryStatusLabel = document.getElementById("memoryStatusLabel");
   const importMonthStartDateInput = document.getElementById("importMonthStartDate");
+  const importMonthEndDateInput = document.getElementById("importMonthEndDate");
   const importMonthDropzone = document.getElementById("importMonthDropzone");
   const importMonthFileInput = document.getElementById("importMonthFileInput");
   const importMonthBrowseLink = document.getElementById("importMonthBrowseLink");
@@ -939,11 +944,16 @@ window.__initDriverAssignmentApp = function () {
     return bestIdx;
   }
 
-  // No endDate -- processes every day-sheet this file actually has, whatever range that turns out
-  // to be, rather than assuming a fixed month length. rosterData is required (parsed from the
+  // endDate is optional -- omitted (null), this processes every day-sheet the file actually has,
+  // whatever range that turns out to be, rather than assuming a fixed month length. Pass it only
+  // when the supervisor explicitly wants to cap how far this trusts the file, regardless of
+  // whether the later day-sheets are blank or genuinely filled in -- a trailing blank stretch is
+  // already handled correctly without this (see the per-driver anchor-date comment below), so
+  // this is specifically for REAL entries near the end that aren't trusted yet (provisional, not
+  // yet finalized, entered by someone still learning). rosterData is required (parsed from the
   // SAME month's Roster file) so shiftAnchorForDriver can tell a real break apart from silence.
-  function computeStateFromCompletedTaskProgram(taskWb, startDate, rosterData) {
-    const taskDays = E.parseTaskProgram(taskWb, startDate);
+  function computeStateFromCompletedTaskProgram(taskWb, startDate, rosterData, endDate) {
+    const taskDays = E.parseTaskProgram(taskWb, startDate, endDate || undefined);
     if (!taskDays.length) throw new Error("No day-sheets with a recognizable \"Tasks\"/\"NAME\" header were found in this file.");
 
     const state = {};
@@ -1131,7 +1141,12 @@ window.__initDriverAssignmentApp = function () {
     try {
       const [y, m, d] = importMonthStartDateInput.value.split("-").map((x) => parseInt(x, 10));
       const startDate = new Date(y, m - 1, d);
-      const result = computeStateFromCompletedTaskProgram(importMonthTaskWb, startDate, importMonthRosterData);
+      let endDate = null;
+      if (importMonthEndDateInput.value) {
+        const [ey, em, ed] = importMonthEndDateInput.value.split("-").map((x) => parseInt(x, 10));
+        endDate = new Date(ey, em - 1, ed);
+      }
+      const result = computeStateFromCompletedTaskProgram(importMonthTaskWb, startDate, importMonthRosterData, endDate);
 
       const monthLabel = E.monthLabelFromDateKey(result.firstDateKey);
       const driverCount = Object.keys(result.state).length;
@@ -1142,7 +1157,17 @@ window.__initDriverAssignmentApp = function () {
 
       memoryRotationState = result.state;
       const rosterById = {};
-      importMonthRosterData.drivers.forEach((d) => { rosterById[d.id] = d.statusByDateKey; });
+      // Same "Last day to trust" cap applies here too -- if the supervisor doesn't trust the Task
+      // Program's driver assignments past a certain date, the Roster's day-off/training/leave
+      // status for those same trailing dates isn't automatically exempted either, since both came
+      // from the same not-yet-finalized stretch of the file.
+      const endDateKey = endDate ? E.dateKey(endDate) : null;
+      importMonthRosterData.drivers.forEach((d) => {
+        if (!endDateKey) { rosterById[d.id] = d.statusByDateKey; return; }
+        const filtered = {};
+        Object.keys(d.statusByDateKey).forEach((dk) => { if (dk <= endDateKey) filtered[dk] = d.statusByDateKey[dk]; });
+        rosterById[d.id] = filtered;
+      });
       importedRosterByDriverId = rosterById;
       setMemoryStatus(`Imported ${monthLabel} from its Task Program and Roster (${result.firstDateKey} to ${result.lastDateKey}): ${driverCount} driver(s), ${result.resolvedTasks} of ${result.totalTasks} task rows resolved.`);
       setStatus("");
