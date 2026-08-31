@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822v")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822v"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822w")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822w"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822v";
+    var APP_VERSION = "20260822w";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -931,10 +931,16 @@ window.__initDriverAssignmentApp = function () {
       if (hasRealBreakBetween(prev.dateKey, cur.dateKey)) runs.push([cur]);
       else runs[runs.length - 1].push(cur);
     }
-    // Walk from the most recent run backward, accumulating until there are >=2 real duties.
-    let pool = [];
-    for (let i = runs.length - 1; i >= 0 && pool.length < 2; i--) pool = runs[i].concat(pool);
-    return modeOf(pool.length ? pool : sorted);
+    // The most recent run alone, however few real duties it has -- never blended with whatever
+    // came before the last real break. Confirmed
+    // directly as a real gap in the previous ">=2 duties or widen backward" rule: a driver's
+    // SINGLE real duty right after a genuine break isn't noise to be outvoted by two-week-old
+    // history, it's the freshest, most relevant evidence there is of what they're doing now --
+    // "if the supervisor already put a task like this after off... do not count what shift she was
+    // before for this specific case." The old widen-backward behavior is still exactly right for a
+    // one-off WITHIN an unbroken stretch (no real break at all) -- that case never reaches this
+    // line, since runs.length is 1 and the "most recent run" already IS the whole history.
+    return modeOf(runs[runs.length - 1]);
   }
   function modeOf(observedList) {
     const counts = {};
