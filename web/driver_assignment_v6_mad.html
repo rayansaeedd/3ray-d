@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822s")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822s"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260822t")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260822t"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822s";
+    var APP_VERSION = "20260822t";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -978,12 +978,23 @@ window.__initDriverAssignmentApp = function () {
     const lastFileDateKey = taskDays[taskDays.length - 1].dateKey;
     const rosterDriverById = {};
     (rosterData ? rosterData.drivers : []).forEach((d) => { rosterDriverById[d.id] = d; });
+    // Anchor each driver on THEIR OWN last real observed date, never the file's last day-sheet --
+    // confirmed as a real, serious bug against a real file whose last 3 day-sheets (28th-30th)
+    // were still completely blank: every one of its 88 real drivers got stamped with a
+    // shiftAnchorDate of the 30th even though NONE of them had a single real duty past the 27th.
+    // computeShiftIndexForDriver measures elapsed time FROM this date, so a stale (too-late) anchor
+    // date understates how much time has really passed since the driver's last known shift the
+    // next time this memory gets used -- silently delaying their rotation by exactly that gap. This
+    // isn't only a trailing-blank-days problem either: any driver whose real data stops days or
+    // weeks before the file's own final sheet (an ordinary training/leave gap near the end) was
+    // hitting the same bug even in an otherwise fully "complete" file.
     Object.keys(state).forEach((id) => {
       const obs = observedByDriver[id] || [];
-      state[id].shiftAnchorDate = lastFileDateKey;
-      if (!obs.length) { state[id].shiftAnchorIndex = 0; return; }
+      if (!obs.length) { state[id].shiftAnchorDate = lastFileDateKey; state[id].shiftAnchorIndex = 0; return; }
+      const ownLastDateKey = obs.reduce((latest, o) => (o.dateKey > latest ? o.dateKey : latest), obs[0].dateKey);
+      state[id].shiftAnchorDate = ownLastDateKey;
       const rosterDriver = rosterDriverById[id];
-      state[id].shiftAnchorIndex = shiftAnchorForDriver(obs, rosterDriver ? rosterDriver.statusByDateKey : null, lastFileDateKey, conditions);
+      state[id].shiftAnchorIndex = shiftAnchorForDriver(obs, rosterDriver ? rosterDriver.statusByDateKey : null, ownLastDateKey, conditions);
     });
 
     return {
