@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260822w";
+    var APP_VERSION = "20260822x";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2083,7 +2083,7 @@ window.__initDriverAssignmentApp = function () {
       removedTasksList.innerHTML = "";
     } else {
       removedTasksList.style.display = "block";
-      removedTasksList.innerHTML = `<div class="removed-tasks-title">Removed tasks (blanked for export, row untouched in the real file) -- Restore brings one back:</div>` +
+      removedTasksList.innerHTML = `<div class="removed-tasks-title">Removed tasks (whole row deleted on export, everything below shifts up) -- Restore brings one back:</div>` +
         removed.map((entry) => `<div class="removed-task-row">
           <span class="removed-task-code">${escapeAttr(entry.originalCode || "(blank code)")}${entry.originalDriverName ? ` -- was ${escapeAttr(entry.originalDriverName)}` : ""}</span>
           <button type="button" class="plain removed-task-restore-btn" data-task-row="${entry.task.row}">Restore</button>
@@ -2137,11 +2137,13 @@ window.__initDriverAssignmentApp = function () {
 
   // Every row's remove button lands here. An added row (Add Task/bulk-reserve, this session
   // only) deletes outright -- there's nothing to preserve, re-adding it is one click away. An
-  // original row can't actually be deleted (the surgical patcher only ever edits cell values in
-  // place, never deletes/shifts a real spreadsheet row) so it's blanked instead: Code and Driver
-  // both cleared, which is what actually lands in the exported file, and the task is moved into
-  // day.removedTasks -- kept there (not just discarded) so buildLivePatches() still visits it to
-  // emit the blanking patches, AND so Restore can bring the exact original code/driver back.
+  // original row is queued for TRUE removal on export: XlsxSurgicalPatch.applyRowDeletions
+  // physically deletes that spreadsheet row and shifts everything below it up, rather than just
+  // blanking its Code/Driver cells. The task is moved into day.removedTasks -- kept there (not
+  // discarded) purely so Restore can bring it back exactly as it was any time before download;
+  // buildLivePatches() no longer visits it (there's nothing left to patch once the row itself is
+  // gone), and buildRemovedRowDeletionsBySheetIndex() is what actually turns this list into real
+  // row deletions at download time.
   taskViewTable.addEventListener("click", async (e) => {
     const btn = e.target.closest(".task-delete-btn");
     if (!btn) return;
@@ -2163,7 +2165,7 @@ window.__initDriverAssignmentApp = function () {
       day.tasks.splice(idx, 1);
       setDayStatus(`Deleted ${label}.`);
     } else {
-      const ok = await confirmEdit(`Remove ${label} from the Task Program${driverNote}? Its Code and Driver cells will be cleared blank when you export -- the row itself stays in the real file untouched, and you can Restore it any time before you export.`);
+      const ok = await confirmEdit(`Remove ${label} from the Task Program${driverNote}? The whole row will be deleted from the file when you export -- everything below it shifts up -- and you can Restore it any time before you export.`);
       if (!ok) return;
       const originalDriver = task.driver;
       const originalCode = task.code;
@@ -2172,7 +2174,7 @@ window.__initDriverAssignmentApp = function () {
       day.tasks.splice(idx, 1);
       day.removedTasks = day.removedTasks || [];
       day.removedTasks.push({ task, originalCode, originalDriverId: originalDriver ? originalDriver.id : null, originalDriverName: originalDriver ? originalDriver.name : null });
-      setDayStatus(`Removed ${label} -- it'll export blank; Restore it any time from the list below.`);
+      setDayStatus(`Removed ${label} -- its whole row will be deleted on export; Restore it any time from the list below.`);
     }
     renderTaskView(dateKey);
     renderRosterGrid();
@@ -2720,13 +2722,11 @@ window.__initDriverAssignmentApp = function () {
     for (const day of livePlan.taskDays) {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
-      // Removed original tasks aren't in day.tasks anymore (see the removedTasks handler above),
-      // but their Code/Driver still need to be patched blank on export -- they're already blank
-      // on the task object itself (task.code = "", task.driver = null), so folding them into the
-      // same loop just works: the diff against origCodes below naturally produces a blanking
-      // patch for them.
-      const removedTasks = (day.removedTasks || []).map((entry) => entry.task);
-      for (const task of day.tasks.concat(removedTasks)) {
+      // Removed original tasks aren't in day.tasks anymore (see the removedTasks handler above)
+      // and don't need any cell patch here -- their whole row gets physically deleted at download
+      // time instead (see buildRemovedRowDeletionsBySheetIndex / applyRowDeletions), so there's
+      // nothing left in the file for a blanking patch to touch.
+      for (const task of day.tasks) {
         // engineAddedReserve rows get a real chronological row via applyRowInsertions instead of
         // being patched here at their in-app placeholder row -- see buildTaskDownloadArrayBuffer.
         if (task.engineAddedReserve) continue;
@@ -2804,6 +2804,29 @@ window.__initDriverAssignmentApp = function () {
     return insertionsBySheetIndex;
   }
 
+  // Every removed original task, across every day, translated to the row number it actually sits
+  // at in the buffer applyRowDeletions will run against -- i.e. AFTER applyRowInsertions has
+  // already run on that same buffer. Insertions shift rows below their own beforeRow down; a
+  // removed task's original row number needs the same shift applied to it here so the deletion
+  // targets the right physical row, exactly mirroring the shiftMap math XlsxSurgicalPatch itself
+  // uses internally for applyRowInsertions.
+  function buildRemovedRowDeletionsBySheetIndex(insertionsBySheetIndex) {
+    const deletionsBySheetIndex = {};
+    livePlan.taskDays.forEach((day) => {
+      const removed = day.removedTasks || [];
+      if (!removed.length) return;
+      const insertionsForSheet = insertionsBySheetIndex[day.sheetIndex] || [];
+      const rows = removed.map((entry) => {
+        let shift = 0;
+        insertionsForSheet.forEach((ins) => { if (entry.task.row >= ins.beforeRow) shift += ins.rows.length; });
+        return entry.task.row + shift;
+      });
+      if (!deletionsBySheetIndex[day.sheetIndex]) deletionsBySheetIndex[day.sheetIndex] = [];
+      deletionsBySheetIndex[day.sheetIndex].push(...rows);
+    });
+    return deletionsBySheetIndex;
+  }
+
   taskDownloadBtn.addEventListener("click", async () => {
     if (!livePlan) return;
     try {
@@ -2813,6 +2836,10 @@ window.__initDriverAssignmentApp = function () {
       const insertionsBySheetIndex = buildReserveInsertionsBySheetIndex();
       if (Object.keys(insertionsBySheetIndex).length) {
         buf = await XlsxSurgicalPatch.applyRowInsertions(buf, insertionsBySheetIndex);
+      }
+      const deletionsBySheetIndex = buildRemovedRowDeletionsBySheetIndex(insertionsBySheetIndex);
+      if (Object.keys(deletionsBySheetIndex).length) {
+        buf = await XlsxSurgicalPatch.applyRowDeletions(buf, deletionsBySheetIndex);
       }
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
       setStatus("Downloaded the current Task Program.");

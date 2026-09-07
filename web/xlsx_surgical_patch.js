@@ -789,10 +789,232 @@
     return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
+  // Real TRUE row deletion -- the physical inverse of applyRowInsertions. Removes the target
+  // row(s) entirely from a sheet (not just blanking their cells) and shifts every row below them
+  // up to fill the gap, exactly as a real "Delete row" in Excel would. Reuses the same formula-
+  // safety guarantee applyRowInsertions relies on: every formula found in this file's real Task
+  // Program sheets is either self-referencing (reads a cell in its own row only, e.g. the NAME
+  // column's per-row VLOOKUP) or points at a fully `$`-anchored range in an *external* workbook
+  // that never shifts -- confirmed directly against a real file, there are no in-sheet range
+  // formulas (e.g. a SUM spanning many rows) that a row disappearing could silently corrupt.
+  // Shared-formula groups (Excel's "don't repeat this formula text" optimization) are converted to
+  // independent plain formulas on every surviving cell, same as insertion does, since a shared
+  // formula's declared `ref` range can't stay correct once rows inside it disappear.
+  //
+  // deletionsBySheetIndex: { [sheetIndex]: [rowNum, rowNum, ...] } -- 1-indexed row numbers, in
+  // whatever numbering the passed-in buffer's sheet currently has, to remove entirely. Multiple
+  // rows (same sheet or different sheets) in one call are supported.
+  async function applyRowDeletions(originalArrayBuffer, deletionsBySheetIndex) {
+    const zip = await JSZip.loadAsync(originalArrayBuffer);
+    const originalNames = new Set(Object.keys(zip.files));
+    const sheetParts = await getSheetPartNames(zip);
+    const drawingParts = await getDrawingPartNames(zip);
+    const EMU_PER_PT = 12700;
+    const DEFAULT_ROW_HEIGHT_PT = 13.2;
+
+    for (const sheetIndexStr of Object.keys(deletionsBySheetIndex)) {
+      const sheetIndex = parseInt(sheetIndexStr, 10);
+      const deletedRows = Array.from(new Set(deletionsBySheetIndex[sheetIndex] || [])).sort((a, b) => a - b);
+      if (!deletedRows.length) continue;
+      const deletedSet = new Set(deletedRows);
+
+      const partName = sheetParts[sheetIndex];
+      if (!partName) throw new Error(`No worksheet part found for sheet index ${sheetIndex}.`);
+      let sheetXml = await zip.file(partName).async("string");
+      const drawingPartName = drawingParts[sheetIndex];
+      let drawingXml = drawingPartName ? await zip.file(drawingPartName).async("string") : null;
+
+      function shiftMap(oldRow) {
+        let removedBefore = 0;
+        for (const d of deletedRows) if (d < oldRow) removedBefore++;
+        return oldRow - removedBefore;
+      }
+      // For a merge/conditional-formatting/dimension corner that may itself land on a deleted
+      // row: snap the start corner forward to the next surviving row, the end corner backward to
+      // the previous surviving row -- a range entirely inside deleted rows collapses (newStart >
+      // newEnd afterward) and gets dropped outright; a range that only partly overlaps deleted
+      // rows shrinks to just what actually survives.
+      function snapSurviving(oldRow, forward) {
+        let r = oldRow;
+        if (forward) { while (deletedSet.has(r)) r++; } else { while (deletedSet.has(r)) r--; }
+        return r;
+      }
+
+      const sheetDataMatch = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(sheetXml);
+
+      // --- Shared-formula master templates: capture BEFORE any edits (same technique as
+      // applyRowInsertions), so a template whose OWNER row happens to be one being deleted is
+      // still captured correctly. ---
+      const sharedFormulaTemplates = {};
+      const masterRe = /<f t="shared" ref="[^"]*" si="(\d+)">([^<]*)<\/f>/g;
+      let mm;
+      while ((mm = masterRe.exec(sheetDataMatch[1]))) {
+        const si = mm[1], masterFormula = mm[2];
+        const before = sheetDataMatch[1].slice(0, mm.index);
+        const ownerMatch = /<c r="[A-Z]+(\d+)"[^>]*>[^<]*$/.exec(before.slice(-60));
+        const ownerRow = ownerMatch ? ownerMatch[1] : null;
+        sharedFormulaTemplates[si] = ownerRow
+          ? masterFormula.replace(new RegExp(`([A-Za-z]+)${ownerRow}(?!\\d)`, "g"), "$1{R}")
+          : null;
+      }
+
+      // --- Walk every row: drop the deleted ones outright, remap every surviving row's own
+      // number, its cell addresses, self-referencing formula tokens, and shared-formula cells. ---
+      const rowChunkRe = /<row r="(\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g;
+      const oldRows = [];
+      let rm;
+      while ((rm = rowChunkRe.exec(sheetDataMatch[1]))) oldRows.push({ oldRow: parseInt(rm[1], 10), xml: rm[0] });
+
+      const cellAddrRe = /<c r="([A-Z]+)(\d+)"/g;
+      const survivingRows = oldRows.filter((r) => !deletedSet.has(r.oldRow));
+      const remappedRows = survivingRows.map(({ oldRow, xml }) => {
+        const newRow = shiftMap(oldRow);
+        let x = xml.replace(new RegExp(`^<row r="${oldRow}"`), `<row r="${newRow}"`);
+        x = x.replace(cellAddrRe, (m0, colLetters, rowDigits) => {
+          if (parseInt(rowDigits, 10) !== oldRow) return m0;
+          return `<c r="${colLetters}${newRow}"`;
+        });
+        if (newRow !== oldRow) {
+          // Self-referencing formulas anywhere in this row need their own row token updated to
+          // match, or they'd silently read a different row after the shift.
+          x = x.replace(new RegExp(`\\b([A-Z]+)${oldRow}\\b`, "g"), (m0, colLetters) => `${colLetters}${newRow}`);
+        }
+        x = x.replace(/<f t="shared"(?: ref="[^"]*")? si="(\d+)"(?:>[^<]*)?<\/f>|<f t="shared"(?: ref="[^"]*")? si="(\d+)"\/>/g, (m0, si1, si2) => {
+          const si = si1 || si2;
+          const tmpl = sharedFormulaTemplates[si];
+          return tmpl ? `<f>${tmpl.split("{R}").join(newRow)}</f>` : m0;
+        });
+        return { newRow, xml: x };
+      });
+
+      const newSheetDataInner = remappedRows.map((r) => r.xml).join("");
+      sheetXml = sheetXml.slice(0, sheetDataMatch.index) + `<sheetData>${newSheetDataInner}</sheetData>` + sheetXml.slice(sheetDataMatch.index + sheetDataMatch[0].length);
+
+      // --- Shift (and, where a range collapses entirely onto deleted rows, drop) merged cells,
+      // conditional-formatting ranges, and the sheet's own dimension. ---
+      function shiftRefDropIfCollapsed(ref) {
+        const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(ref);
+        if (!m) return ref; // a single-cell ref (some conditional-formatting sqref entries)
+        const startRow = snapSurviving(parseInt(m[2], 10), true);
+        const endRow = snapSurviving(parseInt(m[4], 10), false);
+        if (startRow > endRow) return null;
+        return `${m[1]}${shiftMap(startRow)}:${m[3]}${shiftMap(endRow)}`;
+      }
+      sheetXml = sheetXml.replace(/<mergeCell ref="([^"]+)"\/>/g, (m0, ref) => {
+        const shifted = shiftRefDropIfCollapsed(ref);
+        return shifted ? `<mergeCell ref="${shifted}"/>` : "";
+      });
+      const remainingMergeCount = (sheetXml.match(/<mergeCell ref=/g) || []).length;
+      if (remainingMergeCount === 0) {
+        sheetXml = sheetXml.replace(/<mergeCells count="\d+">\s*<\/mergeCells>/, "");
+      } else {
+        sheetXml = sheetXml.replace(/<mergeCells count="\d+">/, `<mergeCells count="${remainingMergeCount}">`);
+      }
+
+      sheetXml = sheetXml.replace(/<conditionalFormatting sqref="([^"]+)">([\s\S]*?)<\/conditionalFormatting>/g, (m0, sqref, inner) => {
+        const shifted = sqref.split(" ").map(shiftRefDropIfCollapsed).filter(Boolean).join(" ");
+        return shifted ? `<conditionalFormatting sqref="${shifted}">${inner}</conditionalFormatting>` : "";
+      });
+
+      const dimMatch = /<dimension ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/.exec(sheetXml);
+      if (dimMatch) {
+        const newDimStart = shiftMap(snapSurviving(parseInt(dimMatch[2], 10), true));
+        const newDimEnd = shiftMap(snapSurviving(parseInt(dimMatch[4], 10), false));
+        sheetXml = sheetXml.replace(dimMatch[0], `<dimension ref="${dimMatch[1]}${newDimStart}:${dimMatch[3]}${newDimEnd}"/>`);
+      }
+      zip.file(partName, sheetXml);
+
+      // --- Drawing shapes: drop any shape anchored to a deleted row outright, then shift every
+      // surviving shape to its new row and recompute its cached absolute y-offset against the new
+      // (post-deletion) row-height layout -- mirrors applyRowInsertions' own math, shrinking
+      // instead of growing. ---
+      if (drawingXml) {
+        const finalHeightByNewRow = {};
+        survivingRows.forEach(({ oldRow, xml }) => {
+          const htMatch = /\sht="([\d.]+)"/.exec(xml);
+          finalHeightByNewRow[shiftMap(oldRow)] = htMatch ? parseFloat(htMatch[1]) : DEFAULT_ROW_HEIGHT_PT;
+        });
+        function cumulativeEmuAtTopOfNewRow(newRow1) {
+          let pt = 0;
+          for (let r = 1; r < newRow1; r++) pt += (finalHeightByNewRow[r] != null ? finalHeightByNewRow[r] : DEFAULT_ROW_HEIGHT_PT);
+          return Math.round(pt * EMU_PER_PT);
+        }
+        function shapeAnchorRow1(shapeXml) {
+          const fm = /<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row>/.exec(shapeXml);
+          return fm ? parseInt(fm[1], 10) + 1 : null;
+        }
+
+        // Each shape is mapped to either its shifted XML or "" (dropped) while preserving the
+        // SAME order/length as the original match list -- required so the positional .shift()
+        // pairing below lines up the Nth original anchor with the Nth processed result, even
+        // though a dropped shape's slot is now empty instead of removed from the array.
+        const twoCellRe = /<xdr:twoCellAnchor>[\s\S]*?<\/xdr:twoCellAnchor>/g;
+        const allTwoCellAnchors = drawingXml.match(twoCellRe) || [];
+        const processedTwoCell = allTwoCellAnchors.map((shapeXml) => {
+          const anchorRow = shapeAnchorRow1(shapeXml);
+          if (anchorRow != null && deletedSet.has(anchorRow)) return "";
+          let s = shapeXml;
+          const fromMatch = /<xdr:from><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:from>/.exec(s);
+          const toMatch = /<xdr:to><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:to>/.exec(s);
+          const fromNew0 = shiftMap(snapSurviving(parseInt(fromMatch[3], 10) + 1, true)) - 1;
+          const toNew0 = shiftMap(snapSurviving(parseInt(toMatch[3], 10) + 1, false)) - 1;
+          s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${fromNew0}$2`);
+          s = s.replace(/(<xdr:to><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${toNew0}$2`);
+          const newY = cumulativeEmuAtTopOfNewRow(fromNew0 + 1) + parseInt(fromMatch[4], 10);
+          s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+          return s;
+        });
+        drawingXml = drawingXml.replace(twoCellRe, () => processedTwoCell.shift());
+
+        const oneCellRe = /<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/g;
+        const allOneCellAnchors = drawingXml.match(oneCellRe) || [];
+        const processedOneCell = allOneCellAnchors.map((shapeXml) => {
+          const anchorRow = shapeAnchorRow1(shapeXml);
+          if (anchorRow != null && deletedSet.has(anchorRow)) return "";
+          let s = shapeXml;
+          const fromMatch = /<xdr:from><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:from>/.exec(s);
+          const fromNew0 = shiftMap(snapSurviving(parseInt(fromMatch[3], 10) + 1, true)) - 1;
+          s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${fromNew0}$2`);
+          const newY = cumulativeEmuAtTopOfNewRow(fromNew0 + 1) + parseInt(fromMatch[4], 10);
+          s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+          return s;
+        });
+        drawingXml = drawingXml.replace(oneCellRe, () => processedOneCell.shift());
+
+        zip.file(drawingPartName, drawingXml);
+      }
+    }
+
+    // calcChain.xml is a pure performance-hint index; once any formula has moved, it's stale, and
+    // a stale one is a real trigger for Excel's "needs repair" flow. Only remove it (plus its two
+    // references) if it's actually present -- not every workbook has one.
+    if (zip.files["xl/calcChain.xml"]) {
+      delete zip.files["xl/calcChain.xml"];
+      const ctFile = zip.file("[Content_Types].xml");
+      if (ctFile) {
+        const ct = await ctFile.async("string");
+        zip.file("[Content_Types].xml", ct.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*?\/>/, ""));
+      }
+      const relsFile = zip.file("xl/_rels/workbook.xml.rels");
+      if (relsFile) {
+        const rels = await relsFile.async("string");
+        zip.file("xl/_rels/workbook.xml.rels", rels.replace(/<Relationship[^>]*Target="calcChain\.xml"\/>/, ""));
+      }
+    }
+
+    for (const name of Object.keys(zip.files)) {
+      const entry = zip.files[name];
+      if (entry && entry.dir && !originalNames.has(name)) delete zip.files[name];
+    }
+
+    return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+  }
+
   return {
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
     patchCellInSheetXml, patchCellStyleInSheetXml, patchCellValueAndStyleInSheetXml, ensureFillStyle,
     pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES, pickShiftColors, SHIFT_FLAG_ARGB_CANDIDATES,
     getDrawingPartNames, findPassengerMarkedRows, getCellStyleIndex, applyRowInsertions,
+    applyRowDeletions,
   };
 });
