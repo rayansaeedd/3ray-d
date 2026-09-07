@@ -594,8 +594,14 @@
       });
 
       // --- Per-insertion template row: nearest earlier row with exactly CLEAN_BAR_SHAPE_COUNT
-      // drawing shapes (a plain reserve bar, no real trip legs mixed in) -- falls back to just the
-      // row immediately before the insertion point (style-only, no shape clone) if none is found. ---
+      // drawing shapes (a plain reserve bar, no real trip legs mixed in). A reserve landing before
+      // the day's very FIRST real task (e.g. a 03:00 reserve ahead of the day's earliest original
+      // duty) has no earlier row to borrow from at all -- confirmed as a real, silent gap: that
+      // reserve's row got its cells and styling but no drawn "Madinah ... RESERVE ... Madinah" bar,
+      // unlike every other reserve on the same day. Falling back to search FORWARD (the nearest
+      // LATER clean-bar row) covers exactly that case. Only if neither direction finds one at all
+      // (a sheet with no drawing part, or genuinely zero clean-bar rows anywhere) does this fall
+      // back further to style-only cloning with no shape. ---
       let allDrawingAnchors = [];
       const shapeCountByOldRow0 = {};
       if (drawingXml) {
@@ -607,10 +613,16 @@
           shapeCountByOldRow0[r] = (shapeCountByOldRow0[r] || 0) + 1;
         });
       }
+      const maxOldRow = oldRows.length ? Math.max(...oldRows.map((r) => r.oldRow)) : 0;
       insertions.forEach((ins) => {
         let templateRow1 = null;
         for (let r1 = ins.beforeRow - 1; r1 >= 1; r1--) {
           if (shapeCountByOldRow0[r1 - 1] === CLEAN_BAR_SHAPE_COUNT) { templateRow1 = r1; break; }
+        }
+        if (templateRow1 == null) {
+          for (let r1 = ins.beforeRow; r1 <= maxOldRow; r1++) {
+            if (shapeCountByOldRow0[r1 - 1] === CLEAN_BAR_SHAPE_COUNT) { templateRow1 = r1; break; }
+          }
         }
         ins.styleTemplateRow1 = templateRow1 || Math.max(1, ins.beforeRow - 1);
         ins.shapeTemplateRow1 = templateRow1; // null -> no bar graphic for this insertion's new rows
