@@ -66,10 +66,12 @@
       <select id="driverSelect"></select>
     </label>
   </div>
-  <p style="font-size:13px; margin-top:14px;">Click a row below -- this is the REAL Task Program for the
-  selected day, read straight from your linked file (same Code/Kind/Start/Driver shape as the real tool's
-  own Task Program view), not a simplified list.</p>
-  <table id="taskTable" style="width:100%;"></table>
+  <p style="font-size:13px; margin-top:14px;">This is the ACTUAL sheet for the selected day -- every real
+  column and row exactly as they sit in your linked file, not a simplified list. Click any task row to
+  select it for assignment.</p>
+  <div style="overflow-x:auto; max-width:100%;">
+    <table id="taskTable" style="font-size:11px;"></table>
+  </div>
   <div class="field-row">
     <button id="assignBtn" class="primary" disabled>Write this assignment into both linked files</button>
   </div>
@@ -183,21 +185,71 @@
     }
   });
 
-  // Same Code/Kind/Start/Driver shape as the real tool's own Task Program view -- a genuine table
-  // of the REAL rows read from your linked file, not an abstracted dropdown. Click a row to pick
-  // which task this assignment applies to.
+  // Same cell-resolution rule the real engine uses (readResolvedCell/displayValue): unwrap a
+  // formula's cached {formula, result} down to its real displayed value, and turn Excel's
+  // time-only serial dates (anchored to 1899-12-30) back into a plain HH:MM.
+  function cellDisplayValue(cell) {
+    let v = cell.value;
+    if (v && typeof v === "object" && !(v instanceof Date) && "result" in v) {
+      v = v.result;
+      if (v && typeof v === "object" && "error" in v) return null;
+    }
+    if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) v = d;
+    }
+    return v;
+  }
+  function formatCellForDisplay(v) {
+    if (v == null) return "";
+    if (v instanceof Date) {
+      if (v.getUTCFullYear() === 1899 && v.getUTCMonth() === 11 && v.getUTCDate() === 30) {
+        return String(v.getUTCHours()).padStart(2, "0") + ":" + String(v.getUTCMinutes()).padStart(2, "0");
+      }
+      return v.toISOString().slice(0, 10);
+    }
+    return String(v);
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // Mirrors the ACTUAL sheet for the selected day -- every real row and column exactly as they
+  // sit in the linked file (banner rows, the real Tasks/NAME/REAL/Start columns, whatever else is
+  // there), not a hand-picked subset -- so this genuinely looks like the original file, not an
+  // abstraction of it. Only rows that correspond to a real task (day.tasks) are clickable, since
+  // those are the only ones with anything to assign a driver to.
   function renderTaskTable() {
     selectedTaskIndex = null;
     assignBtn.disabled = true;
     const day = taskDays[parseInt(daySelect.value || "0", 10)];
-    const rows = day.tasks.map((t, i) => {
-      const driverLabel = t.originalDriverRawText ? t.originalDriverRawText : "-- unassigned --";
-      const startLabel = t.startMin != null ? E.minutesToHHMM(t.startMin) : "";
-      return `<tr data-index="${i}" style="cursor:pointer;">` +
-        `<td>${t.row}</td><td>${t.code}</td><td>${t.kind}</td><td>${startLabel}</td><td>${driverLabel}</td></tr>`;
-    }).join("");
-    taskTable.innerHTML =
-      `<tr><th>Row</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th></tr>${rows}`;
+    const ws = taskWb.worksheets[day.sheetIndex];
+    const lastTaskRow = day.tasks.reduce((m, t) => Math.max(m, t.row), 0);
+    const capCol = Math.min(ws.columnCount, 35);
+    let maxCol = 1;
+    for (let r = 1; r <= lastTaskRow; r++) {
+      const row = ws.getRow(r);
+      for (let c = 1; c <= capCol; c++) {
+        if (cellDisplayValue(row.getCell(c)) != null) maxCol = Math.max(maxCol, c);
+      }
+    }
+
+    const taskRowToIndex = {};
+    day.tasks.forEach((t, i) => { taskRowToIndex[t.row] = i; });
+
+    let html = "<tr><th></th>";
+    for (let c = 1; c <= maxCol; c++) html += `<th>${XlsxSurgicalPatch.colNumberToLetter(c)}</th>`;
+    html += "</tr>";
+    for (let r = 1; r <= lastTaskRow; r++) {
+      const isTaskRow = taskRowToIndex[r] !== undefined;
+      html += `<tr${isTaskRow ? ` data-index="${taskRowToIndex[r]}" style="cursor:pointer;"` : ""}><th>${r}</th>`;
+      const row = ws.getRow(r);
+      for (let c = 1; c <= maxCol; c++) {
+        html += `<td>${escapeHtml(formatCellForDisplay(cellDisplayValue(row.getCell(c))))}</td>`;
+      }
+      html += "</tr>";
+    }
+    taskTable.innerHTML = html;
     Array.from(taskTable.querySelectorAll("tr[data-index]")).forEach((tr) => {
       tr.addEventListener("click", () => {
         selectedTaskIndex = parseInt(tr.dataset.index, 10);
@@ -240,9 +292,11 @@
       await w2.write(patchedRosterBuf);
       await w2.close();
 
-      // Reflect the change immediately in the table -- same in-memory update pattern the real
-      // tool uses (task.driver/originalDriverRawText), so the grid shows the real new value
-      // without a full re-read/re-parse round trip.
+      // Re-load taskWb from the bytes we just wrote -- the mirror renders straight off taskWb's
+      // own cells, so it must reflect the REAL file's new ground truth, not a JS-object shortcut
+      // that could quietly drift from what's actually on disk.
+      taskWb = new ExcelJS.Workbook();
+      await taskWb.xlsx.load(patchedTaskBuf.slice(0));
       task.originalDriverRawText = nameValue;
       renderTaskTable();
 
