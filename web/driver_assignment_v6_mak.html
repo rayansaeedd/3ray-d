@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907c";
+    var APP_VERSION = "20260907d";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1290,9 +1290,14 @@ window.__initDriverAssignmentApp = function () {
       // exported file's diff minimal (same "touch only what changed" philosophy as v1's
       // buildPatches) instead of rewriting every cell in the whole date range on every export.
       const originalTaskCodes = {};
+      const originalTaskStartMins = {};
       taskDays.forEach((day) => {
         originalTaskCodes[day.dateKey] = {};
-        day.tasks.forEach((t) => { originalTaskCodes[day.dateKey][t.row] = t.code; });
+        originalTaskStartMins[day.dateKey] = {};
+        day.tasks.forEach((t) => {
+          originalTaskCodes[day.dateKey][t.row] = t.code;
+          originalTaskStartMins[day.dateKey][t.row] = t.startMin;
+        });
       });
       const originalRosterValues = {};
       rosterData.drivers.forEach((d) => {
@@ -1303,7 +1308,7 @@ window.__initDriverAssignmentApp = function () {
       // grid for that day BECAUSE of this UI (Generate or a driver reassignment), as opposed to a
       // genuine original leave code or a supervisor's own direct hand-edit of that cell. Lets a
       // re-Generate safely undo only its own (or a reassignment's) prior writes before re-running.
-      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalRosterValues, lastGeneratedRotationState: {} };
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalTaskStartMins, originalRosterValues, lastGeneratedRotationState: {} };
       dayWorkflow.style.display = "block";
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
@@ -2872,6 +2877,7 @@ window.__initDriverAssignmentApp = function () {
     for (const day of livePlan.taskDays) {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
+      const origStartMins = livePlan.originalTaskStartMins[day.dateKey] || {};
       // Removed original tasks aren't in day.tasks anymore (see the removedTasks handler above)
       // and don't need any cell patch here -- their whole row gets physically deleted at download
       // time instead (see buildRemovedRowDeletionsBySheetIndex / applyRowDeletions), so there's
@@ -2888,6 +2894,20 @@ window.__initDriverAssignmentApp = function () {
             if (styleIndex != null) patch.styleIndex = styleIndex;
           }
           taskPatches[day.sheetIndex].push(patch);
+        }
+        // A confirmed real gap: hand-editing the Start time input (.task-start-input) updated
+        // task.startMin for live sorting/shift-classification/display, but nothing ever wrote it
+        // back into the actual Start cell -- the downloaded file kept showing whatever time the
+        // ORIGINAL file had there, silently diverging from what the Task view showed. Same
+        // "only patch what actually changed" comparison as the Code column above, against the
+        // real Start value snapshotted at load time (originalTaskStartMins).
+        if (day.startCol != null && (isNewRow || origStartMins[task.row] !== task.startMin)) {
+          const startPatch = { row: task.row, col: day.startCol, value: task.startMin != null ? E.minutesToExcelTimeSerial(task.startMin) : null };
+          if (isNewRow) {
+            const styleIndex = await templateStyleIndex(day, day.startCol);
+            if (styleIndex != null) startPatch.styleIndex = styleIndex;
+          }
+          taskPatches[day.sheetIndex].push(startPatch);
         }
         // A row that already had a real answer in the original file (task.originalDriverRawText)
         // only gets a name patch if it now points to a DIFFERENT resolved driver than before --
