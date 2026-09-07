@@ -62,13 +62,14 @@
     <label>Day
       <select id="daySelect"></select>
     </label>
-    <label>Task
-      <select id="taskSelect"></select>
-    </label>
-    <label>Driver
+    <label>Driver to assign
       <select id="driverSelect"></select>
     </label>
   </div>
+  <p style="font-size:13px; margin-top:14px;">Click a row below -- this is the REAL Task Program for the
+  selected day, read straight from your linked file (same Code/Kind/Start/Driver shape as the real tool's
+  own Task Program view), not a simplified list.</p>
+  <table id="taskTable" style="width:100%;"></table>
   <div class="field-row">
     <button id="assignBtn" class="primary" disabled>Write this assignment into both linked files</button>
   </div>
@@ -89,10 +90,11 @@
   const parseBtn = document.getElementById("parseBtn");
   const parseStatusEl = document.getElementById("parseStatus");
   const daySelect = document.getElementById("daySelect");
-  const taskSelect = document.getElementById("taskSelect");
+  const taskTable = document.getElementById("taskTable");
   const driverSelect = document.getElementById("driverSelect");
   const assignBtn = document.getElementById("assignBtn");
   const assignStatusEl = document.getElementById("assignStatus");
+  let selectedTaskIndex = null;
 
   function setStatus(el, text, cls) {
     el.style.display = "block";
@@ -175,26 +177,44 @@
 
       daySelect.innerHTML = taskDays.map((d, i) => `<option value="${i}">${d.dateKey}</option>`).join("");
       driverSelect.innerHTML = rosterData.drivers.map((d) => `<option value="${d.id}">${d.name} (${d.id})</option>`).join("");
-      renderTaskOptions();
-      assignBtn.disabled = false;
+      renderTaskTable();
     } catch (err) {
       setStatus(parseStatusEl, "Parse failed: " + err.message, "error");
     }
   });
 
-  function renderTaskOptions() {
+  // Same Code/Kind/Start/Driver shape as the real tool's own Task Program view -- a genuine table
+  // of the REAL rows read from your linked file, not an abstracted dropdown. Click a row to pick
+  // which task this assignment applies to.
+  function renderTaskTable() {
+    selectedTaskIndex = null;
+    assignBtn.disabled = true;
     const day = taskDays[parseInt(daySelect.value || "0", 10)];
-    taskSelect.innerHTML = day.tasks.map((t, i) =>
-      `<option value="${i}">${t.code}${t.originalDriverRawText ? " -- currently: " + t.originalDriverRawText : " -- currently blank"}</option>`
-    ).join("");
+    const rows = day.tasks.map((t, i) => {
+      const driverLabel = t.originalDriverRawText ? t.originalDriverRawText : "-- unassigned --";
+      const startLabel = t.startMin != null ? E.minutesToHHMM(t.startMin) : "";
+      return `<tr data-index="${i}" style="cursor:pointer;">` +
+        `<td>${t.row}</td><td>${t.code}</td><td>${t.kind}</td><td>${startLabel}</td><td>${driverLabel}</td></tr>`;
+    }).join("");
+    taskTable.innerHTML =
+      `<tr><th>Row</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th></tr>${rows}`;
+    Array.from(taskTable.querySelectorAll("tr[data-index]")).forEach((tr) => {
+      tr.addEventListener("click", () => {
+        selectedTaskIndex = parseInt(tr.dataset.index, 10);
+        Array.from(taskTable.querySelectorAll("tr[data-index]")).forEach((r) => { r.style.background = ""; });
+        tr.style.background = "#dce8ff";
+        assignBtn.disabled = false;
+      });
+    });
   }
-  daySelect.addEventListener("change", renderTaskOptions);
+  daySelect.addEventListener("change", renderTaskTable);
 
   assignBtn.addEventListener("click", async () => {
     assignBtn.disabled = true;
     try {
+      if (selectedTaskIndex == null) throw new Error("Click a task row first.");
       const day = taskDays[parseInt(daySelect.value, 10)];
-      const task = day.tasks[parseInt(taskSelect.value, 10)];
+      const task = day.tasks[selectedTaskIndex];
       const driver = rosterData.drivers.find((d) => d.id === driverSelect.value);
       if (!driver) throw new Error("Pick a driver.");
 
@@ -219,6 +239,12 @@
       const w2 = await rosterHandle.createWritable();
       await w2.write(patchedRosterBuf);
       await w2.close();
+
+      // Reflect the change immediately in the table -- same in-memory update pattern the real
+      // tool uses (task.driver/originalDriverRawText), so the grid shows the real new value
+      // without a full re-read/re-parse round trip.
+      task.originalDriverRawText = nameValue;
+      renderTaskTable();
 
       setStatus(
         assignStatusEl,
