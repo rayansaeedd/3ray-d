@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Direct-write-to-local-file demo</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 760px; margin: 30px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 30px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  button { padding: 8px 14px; font-size: 14px; cursor: pointer; border-radius: 6px; border: 1px solid #999; background: #f5f5f5; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { background: #2a6df5; color: white; border-color: #2a6df5; }
+  input[type="text"], input[type="number"] { padding: 6px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+  .status { margin-top: 10px; padding: 10px; border-radius: 6px; background: #f0f0f0; white-space: pre-wrap; font-family: monospace; font-size: 12.5px; }
+  .status.error { background: #fde8e8; color: #a12626; }
+  .status.ok { background: #e8f7ee; color: #1a7a3f; }
+  .warn-banner { background: #fff4e0; border: 1px solid #f0c36d; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
+  .field-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .field-row label { font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+  table { border-collapse: collapse; margin-top: 10px; font-size: 12.5px; }
+  td, th { border: 1px solid #ccc; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<h1>Demo: write directly into a local Excel file (no download)</h1>
+<div class="warn-banner">
+  <strong>This is a standalone experiment, completely separate from the real driver-assignment tool.</strong>
+  Nothing here touches the engine, and it never will unless this works and you approve it.
+  <br /><br />
+  <strong>Test this on a spare copy of a spreadsheet first, not a real important file</strong>, until you're
+  comfortable with how it behaves.
+</div>
+
+<div class="card">
+  <h2>1. Browser support check</h2>
+  <div id="supportStatus" class="status"></div>
+</div>
+
+<div class="card">
+  <h2>2. Link a local .xlsx file</h2>
+  <p>Pick any real .xlsx file on your computer (ideally a spare test copy). This does NOT copy it anywhere --
+  the tool keeps a direct reference to that exact file.</p>
+  <button id="linkBtn">Link a file...</button>
+  <div id="linkStatus" class="status" style="display:none;"></div>
+  <div id="preview"></div>
+</div>
+
+<div class="card">
+  <h2>3. Write a value directly into that same file</h2>
+  <p>Pick a cell and a value, then write it straight into the file on disk -- no "Save As", no download,
+  no second copy. If the file is open in Excel at the time, close and reopen it afterward to see the change
+  (Excel doesn't auto-refresh when another program edits a file it has open).</p>
+  <div class="field-row">
+    <label>Sheet index (0 = first sheet)
+      <input type="number" id="sheetIndexInput" value="0" min="0" style="width:70px;" />
+    </label>
+    <label>Row
+      <input type="number" id="rowInput" value="1" min="1" style="width:70px;" />
+    </label>
+    <label>Column
+      <input type="number" id="colInput" value="1" min="1" style="width:70px;" />
+    </label>
+    <label>New value
+      <input type="text" id="valueInput" value="written by demo" style="width:200px;" />
+    </label>
+  </div>
+  <div class="field-row">
+    <button id="writeBtn" class="primary" disabled>Write directly to linked file</button>
+  </div>
+  <div id="writeStatus" class="status" style="display:none;"></div>
+</div>
+
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="xlsx_surgical_patch.js"></script>
+<script>
+(function () {
+  const supportStatusEl = document.getElementById("supportStatus");
+  const linkBtn = document.getElementById("linkBtn");
+  const linkStatusEl = document.getElementById("linkStatus");
+  const previewEl = document.getElementById("preview");
+  const writeBtn = document.getElementById("writeBtn");
+  const writeStatusEl = document.getElementById("writeStatus");
+
+  const supported = typeof window.showOpenFilePicker === "function";
+  if (supported) {
+    supportStatusEl.className = "status ok";
+    supportStatusEl.textContent = "This browser supports direct local file writes. You're good to try this demo.";
+  } else {
+    supportStatusEl.className = "status error";
+    supportStatusEl.textContent =
+      "This browser does NOT support the File System Access API (it's Chrome/Edge only -- Safari and Firefox " +
+      "don't have it). This whole approach won't work in the browser you're using right now.";
+    linkBtn.disabled = true;
+  }
+
+  let fileHandle = null;
+  let originalArrayBuffer = null;
+
+  function setStatus(el, text, cls) {
+    el.style.display = "block";
+    el.className = "status" + (cls ? " " + cls : "");
+    el.textContent = text;
+  }
+
+  linkBtn.addEventListener("click", async () => {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: "Excel files", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
+        excludeAcceptAllOption: false,
+        multiple: false,
+      });
+      fileHandle = handle;
+
+      // Confirm we actually have (or can get) permission to WRITE to this file, not just read it --
+      // asking now, at link time, rather than waiting until the write button is clicked.
+      const perm = await fileHandle.queryPermission({ mode: "readwrite" });
+      if (perm !== "granted") {
+        const req = await fileHandle.requestPermission({ mode: "readwrite" });
+        if (req !== "granted") {
+          setStatus(linkStatusEl, "Write permission was not granted for this file. Link it again and choose Allow.", "error");
+          return;
+        }
+      }
+
+      const file = await fileHandle.getFile();
+      originalArrayBuffer = await file.arrayBuffer();
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(originalArrayBuffer.slice(0));
+      const sheetNames = wb.worksheets.map((ws) => ws.name);
+
+      setStatus(
+        linkStatusEl,
+        `Linked: "${file.name}" (${(file.size / 1024).toFixed(1)} KB)\nSheets found: ${sheetNames.join(", ")}\n` +
+        `Write permission: granted.`,
+        "ok"
+      );
+
+      // Show the first 3x3 cells of the first sheet as a live read-back, proving this is the real file.
+      const ws0 = wb.worksheets[0];
+      let html = "<strong>First sheet preview (top-left 5x5):</strong><table>";
+      for (let r = 1; r <= 5; r++) {
+        html += "<tr>";
+        for (let c = 1; c <= 5; c++) {
+          const v = ws0.getRow(r).getCell(c).value;
+          html += `<td>${v == null ? "" : String(v).replace(/</g, "&lt;")}</td>`;
+        }
+        html += "</tr>";
+      }
+      html += "</table>";
+      previewEl.innerHTML = html;
+
+      writeBtn.disabled = false;
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        setStatus(linkStatusEl, "Could not link that file: " + err.message, "error");
+      }
+    }
+  });
+
+  writeBtn.addEventListener("click", async () => {
+    if (!fileHandle || !originalArrayBuffer) return;
+    writeBtn.disabled = true;
+    try {
+      const sheetIndex = parseInt(document.getElementById("sheetIndexInput").value, 10);
+      const row = parseInt(document.getElementById("rowInput").value, 10);
+      const col = parseInt(document.getElementById("colInput").value, 10);
+      const value = document.getElementById("valueInput").value;
+
+      // Re-read the CURRENT bytes right before patching -- someone may have edited the file in
+      // Excel since we linked it, and patching a stale copy would silently discard that.
+      const freshFile = await fileHandle.getFile();
+      const freshBuffer = await freshFile.arrayBuffer();
+
+      const patchedArrayBuffer = await XlsxSurgicalPatch.applyCellPatches(freshBuffer, {
+        [sheetIndex]: [{ row, col, value }],
+      });
+
+      const writable = await fileHandle.createWritable();
+      await writable.write(patchedArrayBuffer);
+      await writable.close();
+
+      originalArrayBuffer = patchedArrayBuffer;
+      setStatus(
+        writeStatusEl,
+        `Wrote "${value}" into sheet ${sheetIndex}, row ${row}, column ${col} -- directly into the linked file ` +
+        `on disk. No download happened. If that file is open in Excel, close and reopen it to see the change.`,
+        "ok"
+      );
+    } catch (err) {
+      setStatus(writeStatusEl, "Write failed: " + err.message, "error");
+    } finally {
+      writeBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
