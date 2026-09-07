@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Demo: engine reads/writes the real original files directly</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 820px; margin: 30px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin-top: 30px; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  button { padding: 8px 14px; font-size: 14px; cursor: pointer; border-radius: 6px; border: 1px solid #999; background: #f5f5f5; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary { background: #2a6df5; color: white; border-color: #2a6df5; }
+  select { padding: 6px; font-size: 14px; border-radius: 4px; }
+  .status { margin-top: 10px; padding: 10px; border-radius: 6px; background: #f0f0f0; white-space: pre-wrap; font-family: monospace; font-size: 12.5px; }
+  .status.error { background: #fde8e8; color: #a12626; }
+  .status.ok { background: #e8f7ee; color: #1a7a3f; }
+  .warn-banner { background: #fff4e0; border: 1px solid #f0c36d; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
+  .field-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .field-row label { font-size: 13px; display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+  table { border-collapse: collapse; margin-top: 10px; font-size: 12.5px; }
+  td, th { border: 1px solid #ccc; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<h1>Demo: link BOTH real original files, assign one task, write straight back into them</h1>
+<div class="warn-banner">
+  <strong>Standalone experiment -- doesn't touch the real driver-assignment tool or engine.js's own app pages.</strong>
+  Reuses the exact same parsing/patching code that tool already uses on real files, just pointed at files you
+  link directly instead of drop-and-download.
+  <br /><br />
+  <strong>Use spare test copies of a real Task Program and Roster the first time</strong> -- not your live files
+  -- until you've seen how this behaves.
+</div>
+
+<div class="card">
+  <h2>1. Browser support check</h2>
+  <div id="supportStatus" class="status"></div>
+</div>
+
+<div class="card">
+  <h2>2. Link your two real original files</h2>
+  <div class="field-row">
+    <button id="linkTaskBtn">Link Task Program (original)...</button>
+    <button id="linkRosterBtn">Link Roster (original)...</button>
+  </div>
+  <div id="linkStatus" class="status" style="display:none;"></div>
+</div>
+
+<div class="card">
+  <h2>3. Real parse of both linked files</h2>
+  <p>Uses the exact same <code>parseTaskProgram</code>/<code>parseRoster</code>/<code>resolveExistingTaskAssignments</code>
+  code the real tool runs on dropped files -- just fed from the linked file handles instead.</p>
+  <button id="parseBtn" disabled>Parse linked files</button>
+  <div id="parseStatus" class="status" style="display:none;"></div>
+</div>
+
+<div class="card">
+  <h2>4. Assign one task, write directly into BOTH original files</h2>
+  <div class="field-row">
+    <label>Day
+      <select id="daySelect"></select>
+    </label>
+    <label>Task
+      <select id="taskSelect"></select>
+    </label>
+    <label>Driver
+      <select id="driverSelect"></select>
+    </label>
+  </div>
+  <div class="field-row">
+    <button id="assignBtn" class="primary" disabled>Write this assignment into both linked files</button>
+  </div>
+  <div id="assignStatus" class="status" style="display:none;"></div>
+</div>
+
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="driver_assignment_engine.js"></script>
+<script src="xlsx_surgical_patch.js"></script>
+<script>
+(function () {
+  const E = window.DriverAssignmentEngine;
+  const supportStatusEl = document.getElementById("supportStatus");
+  const linkTaskBtn = document.getElementById("linkTaskBtn");
+  const linkRosterBtn = document.getElementById("linkRosterBtn");
+  const linkStatusEl = document.getElementById("linkStatus");
+  const parseBtn = document.getElementById("parseBtn");
+  const parseStatusEl = document.getElementById("parseStatus");
+  const daySelect = document.getElementById("daySelect");
+  const taskSelect = document.getElementById("taskSelect");
+  const driverSelect = document.getElementById("driverSelect");
+  const assignBtn = document.getElementById("assignBtn");
+  const assignStatusEl = document.getElementById("assignStatus");
+
+  function setStatus(el, text, cls) {
+    el.style.display = "block";
+    el.className = "status" + (cls ? " " + cls : "");
+    el.textContent = text;
+  }
+
+  const supported = typeof window.showOpenFilePicker === "function";
+  if (supported) {
+    setStatus(supportStatusEl, "This browser supports direct local file writes. You're good to try this demo.", "ok");
+  } else {
+    setStatus(supportStatusEl, "This browser does NOT support the File System Access API (Chrome/Edge only). This approach won't work here.", "error");
+    linkTaskBtn.disabled = true;
+    linkRosterBtn.disabled = true;
+  }
+
+  let taskHandle = null, rosterHandle = null;
+  let taskWb = null, rosterWb = null;
+  let taskDays = null, rosterData = null;
+
+  async function linkFile(kind) {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: "Excel files", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }],
+      excludeAcceptAllOption: false,
+      multiple: false,
+    });
+    const perm = await handle.queryPermission({ mode: "readwrite" });
+    if (perm !== "granted") {
+      const req = await handle.requestPermission({ mode: "readwrite" });
+      if (req !== "granted") throw new Error("Write permission was not granted.");
+    }
+    if (kind === "task") taskHandle = handle; else rosterHandle = handle;
+    return handle;
+  }
+
+  function updateLinkStatus() {
+    const lines = [];
+    lines.push("Task Program: " + (taskHandle ? "linked (" + taskHandle.name + ")" : "not linked yet"));
+    lines.push("Roster: " + (rosterHandle ? "linked (" + rosterHandle.name + ")" : "not linked yet"));
+    setStatus(linkStatusEl, lines.join("\n"), taskHandle && rosterHandle ? "ok" : "");
+    parseBtn.disabled = !(taskHandle && rosterHandle);
+  }
+
+  linkTaskBtn.addEventListener("click", async () => {
+    try { await linkFile("task"); updateLinkStatus(); }
+    catch (err) { if (err.name !== "AbortError") setStatus(linkStatusEl, "Could not link Task Program: " + err.message, "error"); }
+  });
+  linkRosterBtn.addEventListener("click", async () => {
+    try { await linkFile("roster"); updateLinkStatus(); }
+    catch (err) { if (err.name !== "AbortError") setStatus(linkStatusEl, "Could not link Roster: " + err.message, "error"); }
+  });
+
+  parseBtn.addEventListener("click", async () => {
+    try {
+      const taskFile = await taskHandle.getFile();
+      const taskBuf = await taskFile.arrayBuffer();
+      taskWb = new ExcelJS.Workbook();
+      await taskWb.xlsx.load(taskBuf.slice(0));
+
+      const rosterFile = await rosterHandle.getFile();
+      const rosterBuf = await rosterFile.arrayBuffer();
+      rosterWb = new ExcelJS.Workbook();
+      await rosterWb.xlsx.load(rosterBuf.slice(0));
+
+      rosterData = E.parseRoster(rosterWb);
+
+      const detected = E.detectTaskProgramStartDate(taskWb);
+      if (!detected) throw new Error('Could not auto-detect the Task Program\'s first day from its own "DAY:" cell.');
+      taskDays = E.parseTaskProgram(taskWb, detected);
+      if (!taskDays.length) throw new Error("No day-sheets with a recognizable Tasks/NAME header found.");
+      E.resolveExistingTaskAssignments(taskDays, taskWb, rosterData);
+
+      setStatus(
+        parseStatusEl,
+        `Parsed with the REAL engine code:\n` +
+        `Task Program: ${taskDays.length} day(s), ${E.dateKey(taskDays[0].date)} to ${E.dateKey(taskDays[taskDays.length - 1].date)}\n` +
+        `Roster: ${rosterData.drivers.length} driver(s)`,
+        "ok"
+      );
+
+      daySelect.innerHTML = taskDays.map((d, i) => `<option value="${i}">${d.dateKey}</option>`).join("");
+      driverSelect.innerHTML = rosterData.drivers.map((d) => `<option value="${d.id}">${d.name} (${d.id})</option>`).join("");
+      renderTaskOptions();
+      assignBtn.disabled = false;
+    } catch (err) {
+      setStatus(parseStatusEl, "Parse failed: " + err.message, "error");
+    }
+  });
+
+  function renderTaskOptions() {
+    const day = taskDays[parseInt(daySelect.value || "0", 10)];
+    taskSelect.innerHTML = day.tasks.map((t, i) =>
+      `<option value="${i}">${t.code}${t.originalDriverRawText ? " -- currently: " + t.originalDriverRawText : " -- currently blank"}</option>`
+    ).join("");
+  }
+  daySelect.addEventListener("change", renderTaskOptions);
+
+  assignBtn.addEventListener("click", async () => {
+    assignBtn.disabled = true;
+    try {
+      const day = taskDays[parseInt(daySelect.value, 10)];
+      const task = day.tasks[parseInt(taskSelect.value, 10)];
+      const driver = rosterData.drivers.find((d) => d.id === driverSelect.value);
+      if (!driver) throw new Error("Pick a driver.");
+
+      // Re-read current bytes right before patching, in case either file changed since parsing.
+      const freshTaskBuf = await (await taskHandle.getFile()).arrayBuffer();
+      const freshRosterBuf = await (await rosterHandle.getFile()).arrayBuffer();
+
+      const nameValue = E.formatDriverForTaskCell(driver);
+      const patchedTaskBuf = await XlsxSurgicalPatch.applyCellPatches(freshTaskBuf, {
+        [day.sheetIndex]: [{ row: task.row, col: day.nameCol, value: nameValue }],
+      });
+
+      const rosterValue = E.stripCodeForRoster(task.code);
+      const patchedRosterBuf = await XlsxSurgicalPatch.applyCellPatches(freshRosterBuf, {
+        0: [{ row: driver.row, col: driver.colByDateKey[day.dateKey], value: rosterValue }],
+      });
+
+      const w1 = await taskHandle.createWritable();
+      await w1.write(patchedTaskBuf);
+      await w1.close();
+
+      const w2 = await rosterHandle.createWritable();
+      await w2.write(patchedRosterBuf);
+      await w2.close();
+
+      setStatus(
+        assignStatusEl,
+        `Wrote "${nameValue}" into the Task Program's NAME cell for ${day.dateKey} / ${task.code} (row ${task.row}), ` +
+        `AND "${rosterValue}" into the Roster's cell for ${driver.name} on ${day.dateKey} -- both directly into the ` +
+        `original files on disk, no download, no copy-paste. Close and reopen either file in Excel if it was open.`,
+        "ok"
+      );
+    } catch (err) {
+      setStatus(assignStatusEl, "Write failed: " + err.message, "error");
+    } finally {
+      assignBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
