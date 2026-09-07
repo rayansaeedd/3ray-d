@@ -1022,11 +1022,205 @@
     return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
   }
 
+  // Reorders an existing, contiguous block of rows within a sheet to a new sequence -- no rows
+  // added or removed, so nothing outside the block (row count, dimension, every row below the
+  // block) changes at all; a pure permutation, unlike applyRowInsertions/applyRowDeletions which
+  // both change the sheet's total row count. Built so the DOWNLOADED file's physical row order can
+  // match exactly what the live Task view already shows on screen -- confirmed directly as a real,
+  // reported gap: the app's own display re-sorts tasks by time (and respects a supervisor's manual
+  // drag reorder), but every other patch in this module only ever changes a row's CONTENT in
+  // place, never its position, so the exported file kept the ORIGINAL file's row order regardless.
+  //
+  // reordersBySheetIndex: { [sheetIndex]: { blockStartRow, newRowOrder: [oldRow, oldRow, ...] } }
+  // `blockStartRow` is the 1-indexed row the block starts at; `newRowOrder` lists, top to bottom,
+  // which OLD row's full content (every cell, its exact style/formula, and every drawn shape
+  // anchored to it) should land at each successive row starting there. Every row named in
+  // newRowOrder must already be a real row in this sheet, each exactly once, and no merged-cell or
+  // conditional-formatting range may touch any row inside the block -- refuses the whole sheet's
+  // reorder (throws) rather than risk misplacing or corrupting anything if either doesn't hold
+  // (confirmed directly against real files: no merge ever touches an individual task row, only
+  // banner rows well outside any task block -- but silently reordering through one anyway would be
+  // real corruption, not a cosmetic issue, so this checks rather than assumes).
+  async function applyRowReorder(originalArrayBuffer, reordersBySheetIndex) {
+    const zip = await JSZip.loadAsync(originalArrayBuffer);
+    const originalNames = new Set(Object.keys(zip.files));
+    const sheetParts = await getSheetPartNames(zip);
+    const drawingParts = await getDrawingPartNames(zip);
+    const EMU_PER_PT = 12700;
+    const DEFAULT_ROW_HEIGHT_PT = 13.2;
+
+    for (const sheetIndexStr of Object.keys(reordersBySheetIndex)) {
+      const sheetIndex = parseInt(sheetIndexStr, 10);
+      const { blockStartRow, newRowOrder } = reordersBySheetIndex[sheetIndex] || {};
+      if (!newRowOrder || !newRowOrder.length) continue;
+      const blockEndRow = blockStartRow + newRowOrder.length - 1;
+
+      const oldToNew = {};
+      newRowOrder.forEach((oldRow, i) => { oldToNew[oldRow] = blockStartRow + i; });
+      if (Object.keys(oldToNew).length !== newRowOrder.length) {
+        throw new Error(`applyRowReorder: newRowOrder for sheet ${sheetIndex} names a row more than once.`);
+      }
+      function newRowFor(oldRow) { return oldToNew[oldRow] != null ? oldToNew[oldRow] : oldRow; }
+
+      const partName = sheetParts[sheetIndex];
+      if (!partName) throw new Error(`No worksheet part found for sheet index ${sheetIndex}.`);
+      let sheetXml = await zip.file(partName).async("string");
+      const drawingPartName = drawingParts[sheetIndex];
+      let drawingXml = drawingPartName ? await zip.file(drawingPartName).async("string") : null;
+
+      const sheetDataMatch = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(sheetXml);
+      const rowChunkRe = /<row r="(\d+)"[^>]*?(?:\/>|>[\s\S]*?<\/row>)/g;
+      const oldRows = [];
+      let rm;
+      while ((rm = rowChunkRe.exec(sheetDataMatch[1]))) oldRows.push({ oldRow: parseInt(rm[1], 10), xml: rm[0] });
+
+      // --- Safety checks: the block must exactly match newRowOrder (a real permutation, no gaps,
+      // no leftovers), and nothing structural may touch it. ---
+      const rowsInBlock = oldRows.filter((r) => r.oldRow >= blockStartRow && r.oldRow <= blockEndRow).map((r) => r.oldRow);
+      const namedSet = new Set(newRowOrder);
+      const blockSet = new Set(rowsInBlock);
+      const mismatch = rowsInBlock.length !== newRowOrder.length || rowsInBlock.some((r) => !namedSet.has(r)) || newRowOrder.some((r) => !blockSet.has(r));
+      if (mismatch) {
+        throw new Error(`applyRowReorder: sheet ${sheetIndex}'s row block ${blockStartRow}-${blockEndRow} doesn't exactly match newRowOrder -- refusing to reorder.`);
+      }
+      // Merged cells are checked and refused (a merge ties SPECIFIC cell content together
+      // positionally -- reordering the content underneath one without moving it would visually
+      // join newly-unrelated rows). Conditional formatting is deliberately NOT checked here: its
+      // ranges (confirmed directly against a real file: a "flag duplicate driver" rule and an
+      // "over/under 8 hours" threshold rule, both spanning the whole task-row block) are
+      // content-driven and re-evaluated by Excel against whatever ends up in each cell -- they
+      // don't care which row USED to hold that content, so leaving their sqref exactly as-is
+      // after a reorder is correct, not a gap.
+      let mm;
+      const mergeRe = /<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"\/>/g;
+      while ((mm = mergeRe.exec(sheetXml))) {
+        const r1 = parseInt(mm[2], 10), r2 = parseInt(mm[4], 10);
+        if (r1 <= blockEndRow && r2 >= blockStartRow) {
+          throw new Error(`applyRowReorder: a merged cell (${mm[0]}) touches sheet ${sheetIndex}'s row block ${blockStartRow}-${blockEndRow} -- refusing to reorder rather than risk corrupting it.`);
+        }
+      }
+
+      // --- Shared-formula master templates: capture BEFORE any edits (same technique as
+      // applyRowInsertions/applyRowDeletions). ---
+      const sharedFormulaTemplates = {};
+      const masterRe = /<f t="shared" ref="[^"]*" si="(\d+)">([^<]*)<\/f>/g;
+      while ((mm = masterRe.exec(sheetDataMatch[1]))) {
+        const si = mm[1], masterFormula = mm[2];
+        const before = sheetDataMatch[1].slice(0, mm.index);
+        const ownerMatch = /<c r="[A-Z]+(\d+)"[^>]*>[^<]*$/.exec(before.slice(-60));
+        const ownerRow = ownerMatch ? ownerMatch[1] : null;
+        sharedFormulaTemplates[si] = ownerRow
+          ? masterFormula.replace(new RegExp(`([A-Za-z]+)${ownerRow}(?!\\d)`, "g"), "$1{R}")
+          : null;
+      }
+
+      // --- Rebuild every row: an identity row (outside the block) is a no-op remap; a block row
+      // lands at its new number with every cell address, self-referencing formula token, and
+      // shared-formula cell remapped -- identical technique to applyRowInsertions/Deletions. ---
+      const cellAddrRe = /<c r="([A-Z]+)(\d+)"/g;
+      const remappedRows = oldRows.map(({ oldRow, xml }) => {
+        const newRow = newRowFor(oldRow);
+        let x = xml.replace(new RegExp(`^<row r="${oldRow}"`), `<row r="${newRow}"`);
+        x = x.replace(cellAddrRe, (m0, colLetters, rowDigits) => {
+          if (parseInt(rowDigits, 10) !== oldRow) return m0;
+          return `<c r="${colLetters}${newRow}"`;
+        });
+        if (newRow !== oldRow) {
+          x = x.replace(new RegExp(`\\b([A-Z]+)${oldRow}\\b`, "g"), (m0, colLetters) => `${colLetters}${newRow}`);
+        }
+        x = x.replace(/<f t="shared"(?: ref="[^"]*")? si="(\d+)"(?:>[^<]*)?<\/f>|<f t="shared"(?: ref="[^"]*")? si="(\d+)"\/>/g, (m0, si1, si2) => {
+          const si = si1 || si2;
+          const tmpl = sharedFormulaTemplates[si];
+          return tmpl ? `<f>${tmpl.split("{R}").join(newRow)}</f>` : m0;
+        });
+        return { newRow, xml: x };
+      });
+
+      const newSheetDataInner = remappedRows.slice().sort((a, b) => a.newRow - b.newRow).map((r) => r.xml).join("");
+      sheetXml = sheetXml.slice(0, sheetDataMatch.index) + `<sheetData>${newSheetDataInner}</sheetData>` + sheetXml.slice(sheetDataMatch.index + sheetDataMatch[0].length);
+      zip.file(partName, sheetXml);
+
+      // --- Move each shape anchored INSIDE the block to its row's new position. A pure reorder
+      // never changes the block's TOTAL height (same set of rows, just resequenced), so nothing
+      // below the block shifts at all -- only shapes anchored inside the block need their Y-offset
+      // recomputed, against the cumulative height of the block's new internal order (each row's
+      // own height moves WITH its content, same as everything else about that row). ---
+      if (drawingXml) {
+        const heightByOldRow = {};
+        oldRows.forEach(({ oldRow, xml }) => {
+          const htMatch = /\sht="([\d.]+)"/.exec(xml);
+          heightByOldRow[oldRow] = htMatch ? parseFloat(htMatch[1]) : DEFAULT_ROW_HEIGHT_PT;
+        });
+        let cumulativeAboveBlockPt = 0;
+        for (let r = 1; r < blockStartRow; r++) cumulativeAboveBlockPt += (heightByOldRow[r] != null ? heightByOldRow[r] : DEFAULT_ROW_HEIGHT_PT);
+        const cumulativeAboveBlockEmu = Math.round(cumulativeAboveBlockPt * EMU_PER_PT);
+
+        const heightByNewRowInBlock = {};
+        newRowOrder.forEach((oldRow, i) => { heightByNewRowInBlock[blockStartRow + i] = heightByOldRow[oldRow]; });
+        function cumulativeEmuAtTopOfNewRow(newRow1) {
+          if (newRow1 <= blockStartRow) return cumulativeAboveBlockEmu;
+          let pt = 0;
+          for (let r = blockStartRow; r < newRow1; r++) pt += (heightByNewRowInBlock[r] != null ? heightByNewRowInBlock[r] : DEFAULT_ROW_HEIGHT_PT);
+          return cumulativeAboveBlockEmu + Math.round(pt * EMU_PER_PT);
+        }
+
+        function remapAnchors(re) {
+          const all = drawingXml.match(re) || [];
+          return all.map((shapeXml) => {
+            const fromMatch = /<xdr:from><xdr:col>(\d+)<\/xdr:col><xdr:colOff>(\d+)<\/xdr:colOff><xdr:row>(\d+)<\/xdr:row><xdr:rowOff>(\d+)<\/xdr:rowOff><\/xdr:from>/.exec(shapeXml);
+            const oldRow1 = parseInt(fromMatch[3], 10) + 1;
+            if (oldRow1 < blockStartRow || oldRow1 > blockEndRow) return shapeXml; // outside the block -- untouched
+            let s = shapeXml;
+            const newRow0 = newRowFor(oldRow1) - 1;
+            s = s.replace(/(<xdr:from><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${newRow0}$2`);
+            if (/<xdr:to>/.test(s)) {
+              s = s.replace(/(<xdr:to><xdr:col>\d+<\/xdr:col><xdr:colOff>\d+<\/xdr:colOff><xdr:row>)\d+(<\/xdr:row>)/, `$1${newRow0}$2`);
+            }
+            const newY = cumulativeEmuAtTopOfNewRow(newRow0 + 1) + parseInt(fromMatch[4], 10);
+            s = s.replace(/(<a:off x="\d+" y=")\d+(")/, `$1${newY}$2`);
+            return s;
+          });
+        }
+
+        const twoCellRe = /<xdr:twoCellAnchor>[\s\S]*?<\/xdr:twoCellAnchor>/g;
+        const processedTwoCell = remapAnchors(twoCellRe);
+        drawingXml = drawingXml.replace(twoCellRe, () => processedTwoCell.shift());
+
+        const oneCellRe = /<xdr:oneCellAnchor>[\s\S]*?<\/xdr:oneCellAnchor>/g;
+        const processedOneCell = remapAnchors(oneCellRe);
+        drawingXml = drawingXml.replace(oneCellRe, () => processedOneCell.shift());
+
+        zip.file(drawingPartName, drawingXml);
+      }
+    }
+
+    if (zip.files["xl/calcChain.xml"]) {
+      delete zip.files["xl/calcChain.xml"];
+      const ctFile = zip.file("[Content_Types].xml");
+      if (ctFile) {
+        const ct = await ctFile.async("string");
+        zip.file("[Content_Types].xml", ct.replace(/<Override PartName="\/xl\/calcChain\.xml"[^>]*?\/>/, ""));
+      }
+      const relsFile = zip.file("xl/_rels/workbook.xml.rels");
+      if (relsFile) {
+        const rels = await relsFile.async("string");
+        zip.file("xl/_rels/workbook.xml.rels", rels.replace(/<Relationship[^>]*Target="calcChain\.xml"\/>/, ""));
+      }
+    }
+
+    for (const name of Object.keys(zip.files)) {
+      const entry = zip.files[name];
+      if (entry && entry.dir && !originalNames.has(name)) delete zip.files[name];
+    }
+
+    return zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" });
+  }
+
   return {
     cellAddress, colNumberToLetter, colLetterToNumber, applyCellPatches, getSheetPartNames,
     patchCellInSheetXml, patchCellStyleInSheetXml, patchCellValueAndStyleInSheetXml, ensureFillStyle,
     pickIdleFlagColor, IDLE_FLAG_ARGB_CANDIDATES, pickShiftColors, SHIFT_FLAG_ARGB_CANDIDATES,
     getDrawingPartNames, findPassengerMarkedRows, getCellStyleIndex, applyRowInsertions,
-    applyRowDeletions,
+    applyRowDeletions, applyRowReorder,
   };
 });

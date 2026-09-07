@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907d";
+    var APP_VERSION = "20260907e";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2967,7 +2967,11 @@ window.__initDriverAssignmentApp = function () {
           const cells = { [day.taskCol]: task.code, [day.nameCol]: E.formatDriverForTaskCell(task.driver) };
           if (task.startMin != null && day.startCol != null) cells[day.startCol] = E.minutesToExcelTimeSerial(task.startMin);
           if (endMin != null && day.endCol != null) cells[day.endCol] = E.minutesToExcelTimeSerial(endMin);
-          return { cells };
+          // `task` isn't read by applyRowInsertions itself (it only ever looks at `.cells`) --
+          // carried along purely so buildTaskRowReordersBySheetIndex below can work out exactly
+          // which final row each reserve task landed at, using the SAME beforeRow/group order the
+          // surgical patcher itself uses, without having to reimplement or duplicate that logic.
+          return { cells, task };
         }),
       }));
     });
@@ -2997,6 +3001,62 @@ window.__initDriverAssignmentApp = function () {
     return deletionsBySheetIndex;
   }
 
+  // Physically reorders each day's real task-row block (original rows, plus any engine-added
+  // reserve rows just inserted into it) so the DOWNLOADED file's row order matches EXACTLY what
+  // the live Task view shows, top to bottom. Confirmed directly as a real, reported gap: the live
+  // table re-sorts by time (and respects a supervisor's own drag reorder), but the export only
+  // ever patched CONTENT into each row's original fixed position -- "Rayan 1500, Ahmad 1600, Ali
+  // 1700" on screen came out as whatever physical order those three rows happened to already be
+  // in, e.g. Ahmad/Ali/Rayan. A supervisor's own manually Added Task is deliberately excluded --
+  // it has no real chronological slot of its own (see addTaskBtn), always landing at its own
+  // placeholder row after the last real row same as it always has; reordering leaves it alone.
+  // Must run against the buffer AFTER both insertions and deletions (same reason the deletion
+  // step already translates through insertions) -- this mirrors that exact same beforeRow/shift
+  // math so every task's FINAL physical row (where the buffer this actually runs against has it)
+  // is computed correctly, not its row in some earlier intermediate state.
+  function buildTaskRowReordersBySheetIndex(insertionsBySheetIndex, deletionsBySheetIndex) {
+    const reordersBySheetIndex = {};
+    livePlan.taskDays.forEach((day) => {
+      const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
+      const insertionsForSheet = insertionsBySheetIndex[day.sheetIndex] || [];
+      const deletedRowsForSheet = (deletionsBySheetIndex[day.sheetIndex] || []).slice().sort((a, b) => a - b);
+
+      function afterInsertions(oldRow) {
+        let shift = 0;
+        insertionsForSheet.forEach((ins) => { if (oldRow >= ins.beforeRow) shift += ins.rows.length; });
+        return oldRow + shift;
+      }
+      function afterDeletions(rowPostInsertion) {
+        let removedBefore = 0;
+        deletedRowsForSheet.forEach((d) => { if (d < rowPostInsertion) removedBefore++; });
+        return rowPostInsertion - removedBefore;
+      }
+
+      // An engine-added reserve's final row: the SAME newFirstRow/group-order math
+      // XlsxSurgicalPatch.applyRowInsertions itself uses, via the `task` reference
+      // buildReserveInsertionsBySheetIndex attaches to each row spec -- guarantees this always
+      // agrees with where the surgical patcher actually put it.
+      const reserveFinalRow = new Map();
+      insertionsForSheet.forEach((ins) => {
+        const newFirstRow = afterInsertions(ins.beforeRow - 1) + 1;
+        ins.rows.forEach((rowSpec, i) => { if (rowSpec.task) reserveFinalRow.set(rowSpec.task, newFirstRow + i); });
+      });
+
+      const finalRows = [];
+      day.tasks.forEach((task) => {
+        const isNewRow = origCodes[task.row] === undefined;
+        if (isNewRow && !task.engineAddedReserve) return; // a plain Add Task row -- stays at its own placeholder row
+        const finalRow = task.engineAddedReserve ? reserveFinalRow.get(task) : afterDeletions(afterInsertions(task.row));
+        if (finalRow == null) return; // shouldn't happen, but stay safe rather than push a bad value
+        finalRows.push(finalRow);
+      });
+
+      if (finalRows.length < 2) return; // nothing meaningful to reorder
+      reordersBySheetIndex[day.sheetIndex] = { blockStartRow: Math.min(...finalRows), newRowOrder: finalRows };
+    });
+    return reordersBySheetIndex;
+  }
+
   taskDownloadBtn.addEventListener("click", async () => {
     if (!livePlan) return;
     try {
@@ -3010,6 +3070,10 @@ window.__initDriverAssignmentApp = function () {
       const deletionsBySheetIndex = buildRemovedRowDeletionsBySheetIndex(insertionsBySheetIndex);
       if (Object.keys(deletionsBySheetIndex).length) {
         buf = await XlsxSurgicalPatch.applyRowDeletions(buf, deletionsBySheetIndex);
+      }
+      const reordersBySheetIndex = buildTaskRowReordersBySheetIndex(insertionsBySheetIndex, deletionsBySheetIndex);
+      if (Object.keys(reordersBySheetIndex).length) {
+        buf = await XlsxSurgicalPatch.applyRowReorder(buf, reordersBySheetIndex);
       }
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
       setStatus("Downloaded the current Task Program.");
