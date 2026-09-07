@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907a";
+    var APP_VERSION = "20260907c";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -301,11 +301,15 @@
   .shift-demand-table td.num, .shift-demand-table th.num { text-align: right; }
   .task-duplicate-warning { margin-top: 10px; padding: 10px 12px; background: #fdf3f3; border: 1px solid #f0b8b8; border-radius: 8px; color: var(--red); font-size: 13px; font-weight: 700; }
   #rosterSwapModeBtn.active { background: #2f6fed; color: #fff; border-color: #2f6fed; }
+  #driverSwapRangeBtn.active { background: #2f6fed; color: #fff; border-color: #2f6fed; }
   .roster-swap-panel { margin-top: 10px; padding: 10px 12px; background: #eef4ff; border: 1px solid #c7d9fb; border-radius: 8px; font-size: 13px; }
   .roster-swap-hint { color: #2a4d8f; }
   .roster-swap-keys { color: #6b83ad; font-weight: 400; }
   .roster-swap-preview { font-weight: 700; color: #1d3a70; margin-bottom: 8px; }
   .roster-swap-actions { display: flex; gap: 10px; }
+  .driver-swap-range-row { display: flex; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
+  .driver-swap-range-row label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #2a4d8f; font-weight: 600; }
+  .driver-swap-range-row select, .driver-swap-range-row input[type="date"] { font-size: 13px; padding: 4px 6px; }
   .roster-grid-table input.roster-cell-swap-selected { outline: 2px solid #2f6fed !important; outline-offset: -1px; background: #dce8ff !important; }
   #taskViewTable tr.task-row-duplicate { background: #fde3e3; }
   #taskViewTable tr.task-row-duplicate:hover { background: #fbd2d2; }
@@ -491,8 +495,10 @@
     <div class="roster-legend" id="rosterShiftLegend"></div>
     <div class="generate-row" style="margin-top:10px;">
       <button type="button" class="plain" id="rosterSwapModeBtn">Swap two task codes (F2)</button>
+      <button type="button" class="plain" id="driverSwapRangeBtn">Swap Between Drivers</button>
     </div>
     <div id="rosterSwapPanel" class="roster-swap-panel" style="display:none;"></div>
+    <div id="driverSwapRangePanel" class="roster-swap-panel" style="display:none;"></div>
     <div id="rosterDuplicateCodeWarning" class="task-duplicate-warning" style="display:none;"></div>
     <div class="table-scroll" style="margin-top:10px;"><table class="summary-table roster-grid-table" id="rosterGridTable"></table></div>
   </div>
@@ -658,6 +664,8 @@ window.__initDriverAssignmentApp = function () {
   const taskDuplicateWarning = document.getElementById("taskDuplicateWarning");
   const rosterSwapModeBtn = document.getElementById("rosterSwapModeBtn");
   const rosterSwapPanel = document.getElementById("rosterSwapPanel");
+  const driverSwapRangeBtn = document.getElementById("driverSwapRangeBtn");
+  const driverSwapRangePanel = document.getElementById("driverSwapRangePanel");
   const rosterDuplicateCodeWarning = document.getElementById("rosterDuplicateCodeWarning");
   const driverPickerOverlay = document.getElementById("driverPickerOverlay");
   const driverPickerSearch = document.getElementById("driverPickerSearch");
@@ -1890,6 +1898,122 @@ window.__initDriverAssignmentApp = function () {
     renderAllDaysTable();
     if (livePlan.taskDays.some((d) => d.dateKey === daySelect.value)) renderTaskView(daySelect.value);
     setDayStatus(`Swapped ${driver1.name} and ${driver2.name}'s task codes.`);
+  }
+
+  // --- Swap Between Drivers: exchange two drivers' whole tasks across a date range ------------
+  // Confirmed directly: "I want Rayan to take Ahmad's tasks from 9/1 to 9/6... so once I selected
+  // two persons, how many days I want, you switch the task between them." Distinct from the F2
+  // single-cell swap above in two ways: it repeats the exchange across every day in a range (not
+  // just one pair of cells), and it tolerates one side having nothing that day (the other driver
+  // just ends up unassigned) rather than requiring a real task on both sides -- a supervisor
+  // swapping a driver's whole week will routinely hit a day where one of them had no duty at all.
+  // A real off/leave code (non-blank, not a real task) means that driver genuinely isn't available
+  // that day, so that one day is skipped outright rather than swapped -- confirmed directly:
+  // "if off day then do nothing, skip it" -- while every other day in the range still goes through.
+  function swapDriversForOneDay(driver1, driver2, dateKey) {
+    const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
+    if (!day) return { status: "skipped", reason: "no Task Program day loaded for this date" };
+    const task1 = day.tasks.find((t) => t.driver && t.driver.id === driver1.id);
+    const task2 = day.tasks.find((t) => t.driver && t.driver.id === driver2.id);
+    const status1 = (driver1.statusByDateKey[dateKey] || "").trim();
+    const status2 = (driver2.statusByDateKey[dateKey] || "").trim();
+    if (!task1 && status1 !== "") return { status: "skipped", reason: `${driver1.name} has an off day (${status1})` };
+    if (!task2 && status2 !== "") return { status: "skipped", reason: `${driver2.name} has an off day (${status2})` };
+    if (!task1 && !task2) return { status: "swapped" }; // neither had anything -- trivially fine, nothing to move
+
+    if (task1 && task2) {
+      // Both hold a real task today -- exchange them directly, same "clear both original
+      // assignments against their ORIGINAL pairing before writing either new one" ordering
+      // performSwap() uses above and for the same reason: two sequential setTaskDriver() calls on
+      // the same date would have the second call's stale-write check wrongly clobber the first's
+      // fresh write.
+      const writes = livePlan.engineWrites[dateKey] = livePlan.engineWrites[dateKey] || {};
+      if (driver1.statusByDateKey[dateKey] === writes[driver1.id]) driver1.statusByDateKey[dateKey] = "";
+      delete writes[driver1.id];
+      if (driver2.statusByDateKey[dateKey] === writes[driver2.id]) driver2.statusByDateKey[dateKey] = "";
+      delete writes[driver2.id];
+      task1.driver = driver2;
+      task2.driver = driver1;
+      driver2.statusByDateKey[dateKey] = task1.code;
+      writes[driver2.id] = task1.code;
+      driver1.statusByDateKey[dateKey] = task2.code;
+      writes[driver1.id] = task2.code;
+      return { status: "swapped" };
+    }
+
+    // Exactly one side has a real task -- move it to the other driver; setTaskDriver() already
+    // handles clearing the original holder's Roster cell correctly.
+    const task = task1 || task2;
+    const toDriver = task1 ? driver2 : driver1;
+    setTaskDriver(dateKey, task, toDriver);
+    return { status: "swapped" };
+  }
+
+  let driverSwapRangeOpen = false;
+  function setDriverSwapRangeOpen(open) {
+    driverSwapRangeOpen = open;
+    driverSwapRangeBtn.classList.toggle("active", open);
+    driverSwapRangeBtn.textContent = open ? "Cancel Swap Between Drivers" : "Swap Between Drivers";
+    if (open) { renderDriverSwapRangePanel(); driverSwapRangePanel.style.display = "block"; }
+    else { driverSwapRangePanel.style.display = "none"; driverSwapRangePanel.innerHTML = ""; }
+  }
+  driverSwapRangeBtn.addEventListener("click", () => setDriverSwapRangeOpen(!driverSwapRangeOpen));
+
+  function renderDriverSwapRangePanel() {
+    if (!livePlan || !livePlan.taskDays.length) {
+      driverSwapRangePanel.innerHTML = `<div class="roster-swap-hint">Load a Task Program and Roster, and generate at least one day, before swapping between drivers.</div>`;
+      return;
+    }
+    const drivers = livePlan.rosterData.drivers.slice().sort((a, b) => a.name.localeCompare(b.name));
+    const options = drivers.map((d) => `<option value="${escapeAttr(d.id)}">${escapeAttr(d.name)}</option>`).join("");
+    const dateKeys = livePlan.taskDays.map((d) => d.dateKey).sort();
+    const minDate = dateKeys[0], maxDate = dateKeys[dateKeys.length - 1];
+    driverSwapRangePanel.innerHTML = `
+      <div class="roster-swap-hint">Pick two drivers and a date range -- every day in range gets their tasks exchanged. A day where either driver has a real off/leave code (not a blank cell, not a real task) is skipped, not swapped.</div>
+      <div class="driver-swap-range-row">
+        <label>Driver A <select id="driverSwapRangeA">${options}</select></label>
+        <label>Driver B <select id="driverSwapRangeB">${options}</select></label>
+      </div>
+      <div class="driver-swap-range-row">
+        <label>From <input type="date" id="driverSwapRangeStart" value="${minDate}" min="${minDate}" max="${maxDate}" /></label>
+        <label>To <input type="date" id="driverSwapRangeEnd" value="${maxDate}" min="${minDate}" max="${maxDate}" /></label>
+      </div>
+      <div class="roster-swap-actions">
+        <button type="button" class="primary" id="driverSwapRangeGoBtn">Swap</button>
+        <button type="button" class="plain" id="driverSwapRangeCancelBtn">Cancel</button>
+      </div>`;
+    document.getElementById("driverSwapRangeGoBtn").addEventListener("click", performDriverSwapRange);
+    document.getElementById("driverSwapRangeCancelBtn").addEventListener("click", () => setDriverSwapRangeOpen(false));
+  }
+
+  function performDriverSwapRange() {
+    const idA = document.getElementById("driverSwapRangeA").value;
+    const idB = document.getElementById("driverSwapRangeB").value;
+    const startKey = document.getElementById("driverSwapRangeStart").value;
+    const endKey = document.getElementById("driverSwapRangeEnd").value;
+    if (!idA || !idB || idA === idB) { setDayStatus("Pick two different drivers to swap.", true); return; }
+    if (!startKey || !endKey || startKey > endKey) { setDayStatus("Pick a valid date range (From on or before To).", true); return; }
+    const driverA = livePlan.rosterData.drivers.find((d) => d.id === idA);
+    const driverB = livePlan.rosterData.drivers.find((d) => d.id === idB);
+    const dateKeys = livePlan.taskDays.map((d) => d.dateKey).filter((k) => k >= startKey && k <= endKey).sort();
+    if (!dateKeys.length) { setDayStatus("No loaded day falls inside that date range.", true); return; }
+
+    let swappedCount = 0;
+    const skipped = [];
+    dateKeys.forEach((dateKey) => {
+      const result = swapDriversForOneDay(driverA, driverB, dateKey);
+      if (result.status === "swapped") swappedCount++;
+      else skipped.push(`${dateKey} (${result.reason})`);
+    });
+
+    setDriverSwapRangeOpen(false);
+    renderRosterGrid();
+    renderAllDaysTable();
+    if (livePlan.taskDays.some((d) => d.dateKey === daySelect.value)) renderTaskView(daySelect.value);
+    const skipNote = skipped.length
+      ? ` Skipped ${skipped.length} day${skipped.length === 1 ? "" : "s"}: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? `, ...and ${skipped.length - 5} more` : ""}.`
+      : "";
+    setDayStatus(`Swapped ${driverA.name} and ${driverB.name}'s tasks for ${swappedCount} of ${dateKeys.length} day(s) (${startKey} to ${endKey}).${skipNote}`, !!skipped.length);
   }
 
   document.addEventListener("keydown", (e) => {
