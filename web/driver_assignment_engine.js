@@ -1336,8 +1336,15 @@
   // NEVER carries a genuine midnight-area row at all, so raw-minutes comparison had nothing
   // legitimate to match against and always put it at the very top of the day by mistake.
   function planReserveRowInsertions(day, addedReserveTasks, conditions) {
+    // isAddedRow (a supervisor's own manually Added Task -- see addTaskBtn in the HTML) is
+    // excluded here for the same reason engineAddedReserve already is: its `row` is a session
+    // placeholder (always far past the last real row, unrelated to its own code/time), not a
+    // genuine physical neighbor -- confirmed as a real bug: without this, an Added Task sitting
+    // at e.g. row 87 could get picked as an insertion TARGET, or worse, become the fallback
+    // "last real row" if it happened to have the highest row number, sending a fresh reserve
+    // meant to land right after the real block all the way out past it instead.
     const realRows = day.tasks
-      .filter((t) => !t.engineAddedReserve && t.row != null)
+      .filter((t) => !t.engineAddedReserve && !t.isAddedRow && t.row != null)
       .map((t) => ({ row: t.row, startMin: effectiveDisplayMin(conditions, t.startMin) }))
       .sort((a, b) => a.row - b.row);
     const lastRealRow = realRows.length ? realRows[realRows.length - 1].row : 0;

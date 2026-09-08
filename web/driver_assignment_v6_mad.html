@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907e";
+    var APP_VERSION = "20260907f";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1779,7 +1779,9 @@ window.__initDriverAssignmentApp = function () {
     const kind = E.classifyCode(code);
     const destination = kind === "trip" ? E.classifyDestination(code) : null;
     const row = livePlan.nextFreeRow[dateKey]++;
-    const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null };
+    // isAddedRow (see addTaskBtn below for the fuller explanation) -- this row's placeholder
+    // position (far past the last real row) isn't a genuine chronological neighbor of anything.
+    const task = { row, code, kind, destination, startMin, endMin: null, isPassengerLeg: false, driver: null, isAddedRow: true };
     let insertAt = day.tasks.findIndex((t) => E.effectiveDisplayMin(conditions, t.startMin) > E.effectiveDisplayMin(conditions, startMin));
     if (insertAt === -1) insertAt = day.tasks.length;
     day.tasks.splice(insertAt, 0, task);
@@ -2417,7 +2419,16 @@ window.__initDriverAssignmentApp = function () {
     const dateKey = daySelect.value;
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     const row = livePlan.nextFreeRow[dateKey]++;
-    day.tasks.push({ row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null });
+    // isAddedRow flags this as a placeholder row (always far past the last real row, with no
+    // physical neighbor relationship to anything) -- confirmed as a real, previously-shipped bug:
+    // E.planReserveRowInsertions's own "real rows" list (used to decide WHERE a fresh engine
+    // reserve belongs chronologically) only ever excluded engineAddedReserve rows, so an Added
+    // Task sitting at e.g. row 87 (this day's own next-free-row counter, unrelated to its actual
+    // 06:00 code) got treated as a genuine chronological neighbor -- once as a possible insertion
+    // target, and worse, as the new "last real row" fallback if it happened to have the highest
+    // row number, sending a reserve meant for right after row 53 all the way out to row 87+
+    // instead. isAddedRow lets that filter tell the two kinds of placeholder apart correctly.
+    day.tasks.push({ row, code: "", kind: "reserve", destination: null, startMin: null, endMin: null, isPassengerLeg: false, driver: null, isAddedRow: true });
     renderTaskView(dateKey);
   });
 
@@ -3017,7 +3028,6 @@ window.__initDriverAssignmentApp = function () {
   function buildTaskRowReordersBySheetIndex(insertionsBySheetIndex, deletionsBySheetIndex) {
     const reordersBySheetIndex = {};
     livePlan.taskDays.forEach((day) => {
-      const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
       const insertionsForSheet = insertionsBySheetIndex[day.sheetIndex] || [];
       const deletedRowsForSheet = (deletionsBySheetIndex[day.sheetIndex] || []).slice().sort((a, b) => a - b);
 
@@ -3032,23 +3042,27 @@ window.__initDriverAssignmentApp = function () {
         return rowPostInsertion - removedBefore;
       }
 
-      // An engine-added reserve's final row: the SAME newFirstRow/group-order math
+      // An engine-added reserve's POST-INSERTION row: the SAME newFirstRow/group-order math
       // XlsxSurgicalPatch.applyRowInsertions itself uses, via the `task` reference
       // buildReserveInsertionsBySheetIndex attaches to each row spec -- guarantees this always
-      // agrees with where the surgical patcher actually put it.
-      const reserveFinalRow = new Map();
+      // agrees with where the surgical patcher actually put it. Still needs afterDeletions() on
+      // top just like a real row does -- confirmed as a real bug: a reserve's row stopped at its
+      // post-insertion position and never accounted for a deletion elsewhere on the same day's
+      // sheet, so it could collide with a real row's own (correctly deletion-shifted) final
+      // position and applyRowReorder's own duplicate-row safety check correctly refused the
+      // whole reorder rather than silently misplacing anything.
+      const reserveRowAfterInsertions = new Map();
       insertionsForSheet.forEach((ins) => {
         const newFirstRow = afterInsertions(ins.beforeRow - 1) + 1;
-        ins.rows.forEach((rowSpec, i) => { if (rowSpec.task) reserveFinalRow.set(rowSpec.task, newFirstRow + i); });
+        ins.rows.forEach((rowSpec, i) => { if (rowSpec.task) reserveRowAfterInsertions.set(rowSpec.task, newFirstRow + i); });
       });
 
       const finalRows = [];
       day.tasks.forEach((task) => {
-        const isNewRow = origCodes[task.row] === undefined;
-        if (isNewRow && !task.engineAddedReserve) return; // a plain Add Task row -- stays at its own placeholder row
-        const finalRow = task.engineAddedReserve ? reserveFinalRow.get(task) : afterDeletions(afterInsertions(task.row));
-        if (finalRow == null) return; // shouldn't happen, but stay safe rather than push a bad value
-        finalRows.push(finalRow);
+        if (task.isAddedRow) return; // a plain Add Task row -- stays at its own placeholder row
+        const rowAfterInsertions = task.engineAddedReserve ? reserveRowAfterInsertions.get(task) : afterInsertions(task.row);
+        if (rowAfterInsertions == null) return; // shouldn't happen, but stay safe rather than push a bad value
+        finalRows.push(afterDeletions(rowAfterInsertions));
       });
 
       if (finalRows.length < 2) return; // nothing meaningful to reorder
