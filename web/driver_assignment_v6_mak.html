@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908c")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908c"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908d")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908d"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260908c";
+    var APP_VERSION = "20260908d";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2319,7 +2319,20 @@ window.__initDriverAssignmentApp = function () {
     // Same "a changed start invalidates the old end time" rule as the code-input handler above.
     if (newStart !== task.startMin) task.endMin = null;
     task.startMin = newStart;
+    // Confirmed as a real bug: editing Start here used to update task.startMin only, leaving
+    // task.code's own leading HHMM (and the Roster cell, which always mirrors task.code -- see
+    // setTaskDriver) permanently out of sync with what the Start column now shows -- unlike the
+    // Code-input handler above, which keeps both in lockstep. Rewriting just the leading digits
+    // (keeping the route/suffix letters after the "/" exactly as they were) and re-syncing the
+    // Roster cell the same way the Code handler already does closes that gap.
+    if (newStart != null) {
+      const newLeadingDigits = E.minutesToHHMM(newStart).replace(":", "");
+      const slashIdx = task.code.indexOf("/");
+      task.code = slashIdx !== -1 ? newLeadingDigits + task.code.slice(slashIdx) : newLeadingDigits;
+      if (task.driver) setTaskDriver(dateKey, task, task.driver);
+    }
     renderTaskView(dateKey); // re-renders in the SAME order -- Start no longer drives display order
+    renderRosterGrid();
   }, true);
 
   taskViewTable.addEventListener("click", (e) => {
