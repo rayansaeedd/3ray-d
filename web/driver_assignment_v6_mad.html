@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907g";
+    var APP_VERSION = "20260907h";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -1291,12 +1291,15 @@ window.__initDriverAssignmentApp = function () {
       // buildPatches) instead of rewriting every cell in the whole date range on every export.
       const originalTaskCodes = {};
       const originalTaskStartMins = {};
+      const originalTaskEndMins = {};
       taskDays.forEach((day) => {
         originalTaskCodes[day.dateKey] = {};
         originalTaskStartMins[day.dateKey] = {};
+        originalTaskEndMins[day.dateKey] = {};
         day.tasks.forEach((t) => {
           originalTaskCodes[day.dateKey][t.row] = t.code;
           originalTaskStartMins[day.dateKey][t.row] = t.startMin;
+          originalTaskEndMins[day.dateKey][t.row] = t.endMin;
         });
       });
       const originalRosterValues = {};
@@ -1308,7 +1311,7 @@ window.__initDriverAssignmentApp = function () {
       // grid for that day BECAUSE of this UI (Generate or a driver reassignment), as opposed to a
       // genuine original leave code or a supervisor's own direct hand-edit of that cell. Lets a
       // re-Generate safely undo only its own (or a reassignment's) prior writes before re-running.
-      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalTaskStartMins, originalRosterValues, lastGeneratedRotationState: {} };
+      livePlan = { taskDays, rosterData, dayStatus, results: {}, engineWrites: {}, nextFreeRow, lastRealTaskRow, originalTaskCodes, originalTaskStartMins, originalTaskEndMins, originalRosterValues, lastGeneratedRotationState: {} };
       dayWorkflow.style.display = "block";
       taskDownloadBtn.disabled = false;
       rosterDownloadBtn.disabled = false;
@@ -2193,6 +2196,14 @@ window.__initDriverAssignmentApp = function () {
         const chainRescueNote = task.chainRescued
           ? `<span class="chain-rescue-note">${driverLabel} placed here by Chain Rescue</span>`
           : "";
+        // A reserve the engine invented never gets a real end time shown or exported (see
+        // buildReserveTasksForUnassignedDrivers/buildReserveInsertionsBySheetIndex) -- the
+        // duration it computes internally is real and still drives next-day rest-time math, but
+        // there's no genuine "sign-out" for a manufactured slot, so displaying one here would just
+        // be manufacturing a second fact nobody actually knows. A real task's end time reads
+        // straight off task.endMin, blank if it's genuinely unknown (never set, or cleared by a
+        // time edit below) rather than none was ever recorded.
+        const endTimeVal = !task.engineAddedReserve && task.endMin != null ? E.minutesToHHMM(task.endMin) : "";
         return `<tr class="task-row${isAdded ? " task-row-added" : ""}${isDuplicate ? " task-row-duplicate" : ""}${task.chainRescued ? " task-row-chain-rescued" : ""}${task.recentlyMoved ? " task-row-code-moved" : ""}" draggable="true" data-task-row="${task.row}">
           <td class="task-drag-handle" title="Drag to reorder">&#8942;&#8942;</td>
           <td class="task-order-num">${index + 1}</td>
@@ -2200,10 +2211,11 @@ window.__initDriverAssignmentApp = function () {
           <td>${task.kind}</td>
           <td><input type="time" class="task-start-input" data-task-row="${task.row}" value="${timeVal}" /></td>
           <td class="task-driver-cell"><button type="button" class="plain task-driver-btn" data-task-row="${task.row}">${duplicateFlag}${driverLabel}</button></td>
+          <td class="task-end-cell">${escapeAttr(endTimeVal)}</td>
           <td class="task-delete-cell">${deleteCell}</td>
         </tr>`;
       }).join("");
-    taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th><th></th></tr>${rows}`;
+    taskViewTable.innerHTML = `<tr><th></th><th>#</th><th>Code</th><th>Kind</th><th>Start</th><th>Driver</th><th>End</th><th></th></tr>${rows}`;
 
     if (!duplicates.length) {
       taskDuplicateWarning.style.display = "none";
@@ -2251,8 +2263,11 @@ window.__initDriverAssignmentApp = function () {
     if (parsedStart != null) {
       // Flagged (see the task-row-code-moved CSS rule/comment) only on a genuine timeslot change,
       // not every code edit -- e.g. retyping just the suffix letter while the leading HHMM stays
-      // the same isn't a move, so it shouldn't light up as one.
-      if (parsedStart !== task.startMin) task.recentlyMoved = true;
+      // the same isn't a move, so it shouldn't light up as one. A genuine timeslot change also
+      // invalidates whatever end time the original file had (it was only ever correct for the OLD
+      // start) -- confirmed directly: "when I change task on the table I want you to keep the end
+      // time blank" -- cleared here rather than left showing a now-wrong leftover value.
+      if (parsedStart !== task.startMin) { task.recentlyMoved = true; task.endMin = null; }
       task.startMin = parsedStart;
       const idx = day.tasks.indexOf(task);
       if (idx !== -1) day.tasks.splice(idx, 1);
@@ -2282,7 +2297,10 @@ window.__initDriverAssignmentApp = function () {
     const day = livePlan.taskDays.find((d) => d.dateKey === dateKey);
     const task = day.tasks.find((x) => x.row === row);
     if (!task) return;
-    task.startMin = E.parseHHMM(t.value);
+    const newStart = E.parseHHMM(t.value);
+    // Same "a changed start invalidates the old end time" rule as the code-input handler above.
+    if (newStart !== task.startMin) task.endMin = null;
+    task.startMin = newStart;
     renderTaskView(dateKey); // re-renders in the SAME order -- Start no longer drives display order
   }, true);
 
@@ -2889,6 +2907,7 @@ window.__initDriverAssignmentApp = function () {
       if (!taskPatches[day.sheetIndex]) taskPatches[day.sheetIndex] = [];
       const origCodes = livePlan.originalTaskCodes[day.dateKey] || {};
       const origStartMins = livePlan.originalTaskStartMins[day.dateKey] || {};
+      const origEndMins = livePlan.originalTaskEndMins[day.dateKey] || {};
       // Removed original tasks aren't in day.tasks anymore (see the removedTasks handler above)
       // and don't need any cell patch here -- their whole row gets physically deleted at download
       // time instead (see buildRemovedRowDeletionsBySheetIndex / applyRowDeletions), so there's
@@ -2919,6 +2938,20 @@ window.__initDriverAssignmentApp = function () {
             if (styleIndex != null) startPatch.styleIndex = styleIndex;
           }
           taskPatches[day.sheetIndex].push(startPatch);
+        }
+        // A changed Start invalidates the original End time (it was only ever correct for the OLD
+        // start) -- both edit paths that can change startMin already null out task.endMin when
+        // that happens, so this just needs the ordinary "patch what changed against the original"
+        // comparison, same as Start above; a genuinely null endMin patches as a blank cell,
+        // clearing whatever real end time the original file had there. Confirmed directly: "when I
+        // change task on the table I want you to keep the end time blank."
+        if (day.endCol != null && origEndMins[task.row] !== task.endMin) {
+          const endPatch = { row: task.row, col: day.endCol, value: task.endMin != null ? E.minutesToExcelTimeSerial(task.endMin) : null };
+          if (isNewRow) {
+            const styleIndex = await templateStyleIndex(day, day.endCol);
+            if (styleIndex != null) endPatch.styleIndex = styleIndex;
+          }
+          taskPatches[day.sheetIndex].push(endPatch);
         }
         // A row that already had a real answer in the original file (task.originalDriverRawText)
         // only gets a name patch if it now points to a DIFFERENT resolved driver than before --
@@ -2974,10 +3007,14 @@ window.__initDriverAssignmentApp = function () {
       insertionsBySheetIndex[day.sheetIndex] = plan.map((group) => ({
         beforeRow: group.beforeRow,
         rows: group.tasks.map((task) => {
-          const endMin = task.endMin != null ? task.endMin : null;
           const cells = { [day.taskCol]: task.code, [day.nameCol]: E.formatDriverForTaskCell(task.driver) };
           if (task.startMin != null && day.startCol != null) cells[day.startCol] = E.minutesToExcelTimeSerial(task.startMin);
-          if (endMin != null && day.endCol != null) cells[day.endCol] = E.minutesToExcelTimeSerial(endMin);
+          // task.endMin is deliberately NOT written here -- it's a real number the engine computed
+          // purely to judge rest time for the NEXT day's scheduling, not a genuine sign-out anyone
+          // actually recorded, so this reserve's End cell stays blank in both the live table and
+          // the exported file (see renderTaskView's own engineAddedReserve check for the display
+          // side of this same rule). Omitting the column entirely still gets the new row's normal
+          // template style cloned onto it, same as any other column this row has no override for.
           // `task` isn't read by applyRowInsertions itself (it only ever looks at `.cells`) --
           // carried along purely so buildTaskRowReordersBySheetIndex below can work out exactly
           // which final row each reserve task landed at, using the SAME beforeRow/group order the
