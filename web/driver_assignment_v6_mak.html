@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908b")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908b"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908c")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908c"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260908b";
+    var APP_VERSION = "20260908c";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -2376,9 +2376,15 @@ window.__initDriverAssignmentApp = function () {
   });
 
   // Restores a previously-removed original task exactly as it was: same code, same driver (if it
-  // had one), reinserted at the end of the day's working order (same place Add Task always lands
-  // a row -- there's no reliable "original position" to restore into once drag-and-drop has been
-  // used, so this keeps the rule simple and consistent).
+  // had one), reinserted at its correct chronological position among the day's other tasks --
+  // same slot-finding logic reserve auto-fill/a code-time-edit already use elsewhere. Confirmed as
+  // a real bug: this used to always append to the very end of day.tasks regardless of the task's
+  // own real time, which broke the whole day's sort order for every OTHER task added afterward too
+  // -- day.tasks's own array order is exactly what the Task view renders (see renderTaskView), and
+  // every insertion after this one only ever searches for its own correct spot relative to an
+  // ASSUMED-sorted array, so one out-of-order append here left a permanent, un-fixable split: newly
+  // added tasks kept landing correctly among themselves, but could never interleave with whatever
+  // got stuck at the bottom out of order.
   removedTasksList.addEventListener("click", (e) => {
     const btn = e.target.closest(".removed-task-restore-btn");
     if (!btn) return;
@@ -2391,7 +2397,9 @@ window.__initDriverAssignmentApp = function () {
     const entry = list[entryIdx];
     list.splice(entryIdx, 1);
     entry.task.code = entry.originalCode;
-    day.tasks.push(entry.task);
+    let insertAt = day.tasks.findIndex((other) => E.effectiveDisplayMin(conditions, other.startMin) > E.effectiveDisplayMin(conditions, entry.task.startMin));
+    if (insertAt === -1) insertAt = day.tasks.length;
+    day.tasks.splice(insertAt, 0, entry.task);
     if (entry.originalDriverId) {
       const driver = livePlan.rosterData.drivers.find((d) => d.id === entry.originalDriverId);
       if (driver) setTaskDriver(dateKey, entry.task, driver);

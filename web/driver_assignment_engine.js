@@ -2165,14 +2165,22 @@
         // from the "4th+ CONSECUTIVE" rule above: this catches a driver who's, say, R,T,R,T,R,R
         // across the window (4 reserves total, never more than 2 in a row) just as much as a real
         // streak would.
+        // The "3" in the original request was specific to the DEFAULT 4-reserve/2-trip ratio the
+        // supervisor had configured at the time, not a fixed number independent of it -- confirmed
+        // as a real bug: hardcoding it here meant a driver sitting exactly AT a configured 4-reserve
+        // target still got flagged as "excess" (a false alarm), while a driver already 1 trip OVER a
+        // configured 2-trip cap was never flagged at all (a missed real violation), any time the
+        // configured ratio wasn't exactly 3:3. Comparing against the driver's actual configured
+        // ratioReserveDays/ratioTripDays instead keeps this rule correct for whatever ratio is set.
         const kinds = st.recentKinds || [];
         const reserveCount = kinds.filter((k) => k === "reserve").length;
         const tripCount = kinds.filter((k) => k === "trip").length;
-        if (reserveCount > 3 || tripCount > 3) {
-          const overKind = reserveCount > 3 ? "reserve" : "trip";
+        if (reserveCount > conditions.ratioReserveDays || tripCount > conditions.ratioTripDays) {
+          const overKind = reserveCount > conditions.ratioReserveDays ? "reserve" : "trip";
+          const threshold = overKind === "reserve" ? conditions.ratioReserveDays : conditions.ratioTripDays;
           violations.push({
             driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "excess-kind-in-window",
-            detail: `${overKind} count (${overKind === "reserve" ? reserveCount : tripCount}) exceeds 3 within their last ${kinds.length} working day(s) (recent history: ${kinds.join(",")})`,
+            detail: `${overKind} count (${overKind === "reserve" ? reserveCount : tripCount}) exceeds the configured ${threshold} within their last ${kinds.length} working day(s) (recent history: ${kinds.join(",")})`,
           });
         }
       });
