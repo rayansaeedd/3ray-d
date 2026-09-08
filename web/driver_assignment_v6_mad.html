@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907f";
+    var APP_VERSION = "20260907g";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -3085,15 +3085,38 @@ window.__initDriverAssignmentApp = function () {
       if (Object.keys(deletionsBySheetIndex).length) {
         buf = await XlsxSurgicalPatch.applyRowDeletions(buf, deletionsBySheetIndex);
       }
-      const reordersBySheetIndex = buildTaskRowReordersBySheetIndex(insertionsBySheetIndex, deletionsBySheetIndex);
-      if (Object.keys(reordersBySheetIndex).length) {
-        buf = await XlsxSurgicalPatch.applyRowReorder(buf, reordersBySheetIndex);
+      // The physical row-reorder (making the file's order match the live table) is a cosmetic
+      // correctness layer on top of everything above -- it must never be able to block getting a
+      // real, correctly-coded-and-assigned file into the supervisor's hands. Confirmed directly as
+      // a real, reported failure: its own safety checks refusing an unexpected row-layout edge
+      // case used to abort the ENTIRE download, with the only sign being a status message far off
+      // -screen from the Download button itself -- from the supervisor's side, clicking Download
+      // just "did nothing." Isolated in its own try/catch so a problem here falls back to
+      // downloading without the reorder (still fully correct otherwise) instead of downloading
+      // nothing at all, with a loud, impossible-to-miss alert() explaining exactly what happened.
+      let reorderSkippedReason = null;
+      try {
+        const reordersBySheetIndex = buildTaskRowReordersBySheetIndex(insertionsBySheetIndex, deletionsBySheetIndex);
+        if (Object.keys(reordersBySheetIndex).length) {
+          buf = await XlsxSurgicalPatch.applyRowReorder(buf, reordersBySheetIndex);
+        }
+      } catch (reorderErr) {
+        console.error("Row reorder skipped:", reorderErr);
+        reorderSkippedReason = reorderErr.message;
       }
       downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), taskFileName);
-      setStatus("Downloaded the current Task Program.");
+      if (reorderSkippedReason) {
+        const msg = "Downloaded the Task Program -- but the row order could NOT be rearranged to match the live table this time (everything else, codes/drivers/times, is correct). Reason: " + reorderSkippedReason;
+        setStatus(msg, true);
+        alert(msg);
+      } else {
+        setStatus("Downloaded the current Task Program.");
+      }
     } catch (err) {
       console.error(err);
-      setStatus("Could not build the Task Program download: " + err.message, true);
+      const msg = "Could not build the Task Program download: " + err.message;
+      setStatus(msg, true);
+      alert(msg);
     }
   });
 
@@ -3107,7 +3130,9 @@ window.__initDriverAssignmentApp = function () {
       setStatus("Downloaded the current Roster.");
     } catch (err) {
       console.error(err);
-      setStatus("Could not build the Roster download: " + err.message, true);
+      const msg = "Could not build the Roster download: " + err.message;
+      setStatus(msg, true);
+      alert(msg);
     }
   });
 
