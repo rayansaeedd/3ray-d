@@ -1930,15 +1930,24 @@
       return tasks;
     }
 
-    function ownShiftIdx(driverId, date) {
-      const st = rotationState[driverId];
-      return st ? computeShiftIndexForDriver(st, conditions, date) : null;
-    }
-
-    function isShiftEligible(driverId, task, day) {
-      const own = ownShiftIdx(driverId, day.date);
-      const taskIdx = classifyShiftForMinutes(conditions, task.startMin);
-      return own != null && taskIdx != null && own === taskIdx;
+    // A swap only ever trades two tasks that are BOTH already real, on the SAME calendar day --
+    // so the only question that matters for safety is whether the two tasks themselves sit in the
+    // same shift band, not whether either driver's independently-computed "locked shift" formula
+    // happens to agree with what they're actually, really working that day. Confirmed directly
+    // against a real file: a driver's locked shift is seeded once from their first working day of
+    // the month and only advances in whole shiftLockWeeks blocks, so a driver whose day-to-day
+    // placement legitimately drifted off that formula (a widening allowance used elsewhere in the
+    // engine) looked "ineligible" for a same-day swap into a band they were already demonstrably
+    // working that exact day -- blocking an otherwise obviously-safe fairness swap between a
+    // 100%-reserve driver and an at-cap driver who shared the same real shift that day. Comparing
+    // the two tasks to each other instead of to a formula guarantees neither driver's actual
+    // time-of-day ever changes, regardless of what the locked-shift formula separately believes.
+    // rotationState is no longer read here for exactly that reason -- kept as a parameter only for
+    // call-site compatibility.
+    function sameShiftBand(taskA, taskB) {
+      const a = classifyShiftForMinutes(conditions, taskA.startMin);
+      const b = classifyShiftForMinutes(conditions, taskB.startMin);
+      return a != null && b != null && a === b;
     }
 
     // entries[i] is the entry being replaced by newTask (same day, different task) -- checks rest
@@ -1975,7 +1984,7 @@
       tripEntries.forEach(({ task: tripTask, driverId: gId }) => {
         reserveEntries.forEach(({ task: reserveTask, driverId: rId }) => {
           if (gId === rId) return;
-          if (!isShiftEligible(rId, tripTask, day) || !isShiftEligible(gId, reserveTask, day)) return;
+          if (!sameShiftBand(tripTask, reserveTask)) return;
           const gEntries = byDriver[gId].entries, rEntries = byDriver[rId].entries;
           const gIdx = gEntries.findIndex((e) => e.task === tripTask);
           const rIdx = rEntries.findIndex((e) => e.task === reserveTask);

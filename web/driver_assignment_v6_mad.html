@@ -37,8 +37,8 @@
       if (document.readyState !== "loading") resolve();
       else document.addEventListener("DOMContentLoaded", resolve);
     });
-    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908a")
-      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908a"); });
+    var scriptsReady = loadScriptFresh("driver_assignment_engine.js?v=20260908b")
+      .then(function () { return loadScriptFresh("xlsx_surgical_patch.js?v=20260908b"); });
     Promise.all([scriptsReady, domReady]).then(function () {
       if (window.__initDriverAssignmentApp) window.__initDriverAssignmentApp();
     }).catch(function (err) {
@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260908a";
+    var APP_VERSION = "20260908b";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
