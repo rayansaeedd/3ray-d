@@ -2120,6 +2120,24 @@
           });
         }
         recordAssignment(state, day, task, driver, conditions);
+
+        // Confirmed directly: "if a driver have more than 3 trip or more than 3 reserve on his 6
+        // working days" -- st.recentKinds (just updated above) IS that rolling 6-working-day
+        // window (capped at ratioReserveDays+ratioTripDays, 4+2=6 by default -- see recordAssignment),
+        // so this is a straight count over it post-update, not a separate reimplementation. Distinct
+        // from the "4th+ CONSECUTIVE" rule above: this catches a driver who's, say, R,T,R,T,R,R
+        // across the window (4 reserves total, never more than 2 in a row) just as much as a real
+        // streak would.
+        const kinds = st.recentKinds || [];
+        const reserveCount = kinds.filter((k) => k === "reserve").length;
+        const tripCount = kinds.filter((k) => k === "trip").length;
+        if (reserveCount > 3 || tripCount > 3) {
+          const overKind = reserveCount > 3 ? "reserve" : "trip";
+          violations.push({
+            driverId: driver.id, driverName: driver.name, dateKey: day.dateKey, rule: "excess-kind-in-window",
+            detail: `${overKind} count (${overKind === "reserve" ? reserveCount : tripCount}) exceeds 3 within their last ${kinds.length} working day(s) (recent history: ${kinds.join(",")})`,
+          });
+        }
       });
     });
 

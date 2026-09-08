@@ -58,7 +58,7 @@
      cache-busters above and with web/version.txt on every deploy. -->
 <script>
   (function () {
-    var APP_VERSION = "20260907h";
+    var APP_VERSION = "20260907i";
     function checkVersion() {
       fetch("version.txt?t=" + Date.now(), { cache: "no-store" })
         .then(function (r) { return r.ok ? r.text() : null; })
@@ -292,6 +292,10 @@
   #taskViewTable tr.task-row-chain-rescued:hover { background: #E6CEEB; }
   .chain-rescue-note { display: block; margin-top: 2px; font-size: 11px; color: #6A1B9A; font-weight: 600; }
   input.roster-cell-chain-rescued { box-shadow: inset 0 0 0 2px #6A1B9A; }
+  /* More than 3 reserve OR more than 3 trip within a driver's own rolling working-day window (see
+     E.auditRotationRules's "excess-kind-in-window" rule) -- a real fairness/fatigue flag, not just
+     the narrower "4th+ in a row" streak check, so it can catch a spread-out imbalance too. */
+  input.roster-cell-excess-kind { box-shadow: inset 0 0 0 3px var(--red); }
   .task-delete-btn { color: var(--red); font-size: 16px; font-weight: 700; line-height: 1; padding: 2px 6px; }
   .task-delete-btn:hover { background: rgba(192,0,0,0.1); border-radius: 4px; }
   .shift-demand-panel { margin-bottom: 14px; padding: 10px 12px; background: #f4f8f6; border: 1px solid #d8ebe3; border-radius: 8px; }
@@ -1504,6 +1508,18 @@ window.__initDriverAssignmentApp = function () {
       taskByDriverPerDate[day.dateKey] = map;
     });
 
+    // Confirmed directly: "if a driver have more than 3 trip or more than 3 reserve on his 6
+    // working days... add red color on that task on the roster." Recomputed fresh on every render
+    // (same live-replay philosophy as computeReadOnlyRotationState below) straight off
+    // E.auditRotationRules's own "excess-kind-in-window" rule -- never a separate reimplementation
+    // that could disagree with what the audit already reports elsewhere -- so a hand-edit
+    // (reassigning a driver, a swap, Add Task) is reflected in this highlight immediately, not
+    // just at whatever state Generate last left things in.
+    const excessKindCells = new Map();
+    E.auditRotationRules(livePlan.taskDays, conditions, memoryRotationState)
+      .filter((v) => v.rule === "excess-kind-in-window")
+      .forEach((v) => excessKindCells.set(`${v.driverId}|${v.dateKey}`, v.detail));
+
     // Reads from the same session-replay + cross-month-memory blend, so this is literally "from
     // the memory" the supervisor imported for this session. Confirmed directly:
     // this used to show a PROJECTED band for a fixed reference week (computed from the rotation
@@ -1584,12 +1600,14 @@ window.__initDriverAssignmentApp = function () {
             if (shiftIdx != null) inputStyle = ` style="background:${SHIFT_COLORS[shiftIdx]};"`;
           }
           const isSwapSelected = swapSelection.some((c) => c.driverId === driver.id && c.dateKey === dk);
+          const excessKindDetail = excessKindCells.get(`${driver.id}|${dk}`);
           // An outline, not a fill -- the cell's background is already load-bearing (the real
           // shift color above), so this rings the box instead of covering it up. See
           // buildReserveTasksForUnassignedDrivers/engineAddedReserve in the Task view.
-          const classNames = [isSwapSelected && "roster-cell-swap-selected", task && task.engineAddedReserve && "roster-cell-engine-added", task && task.chainRescued && "roster-cell-chain-rescued"].filter(Boolean);
+          const classNames = [isSwapSelected && "roster-cell-swap-selected", task && task.engineAddedReserve && "roster-cell-engine-added", task && task.chainRescued && "roster-cell-chain-rescued", excessKindDetail && "roster-cell-excess-kind"].filter(Boolean);
           const inputClass = classNames.length ? ` class="${classNames.join(" ")}"` : "";
-          return `<td class="${selected}"><input type="text"${inputClass}${inputStyle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
+          const inputTitle = excessKindDetail ? ` title="${escapeAttr(excessKindDetail)}"` : "";
+          return `<td class="${selected}"><input type="text"${inputClass}${inputStyle}${inputTitle} data-roster-driver="${driver.id}" data-roster-date="${dk}" value="${escapeAttr(val)}" /></td>`;
         }).join("");
         return `<tr><td class="roster-driver-name">${lastWeekSwatch(driver.id)}${driver.name}</td>${cells}</tr>`;
       }).join("");
