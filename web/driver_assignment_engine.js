@@ -1895,12 +1895,39 @@
     }
 
     function maxRollingTripCount(entries) {
+      // A driver with fewer total tracked days than one full window (vacation, a late start, a
+      // short data range) never has a WINDOW-sized slice to check below, so the loop would
+      // silently return 0 and this driver could never be flagged as a ceiling violator no matter
+      // how skewed their handful of real days are. Treat their whole history as the one window
+      // they've got instead -- same cap applies whether they worked 6 days or 5.
+      if (entries.length < WINDOW) return entries.filter((e) => e.kind === "trip").length;
       let max = 0;
       for (let i = 0; i + WINDOW <= entries.length; i++) {
         const c = entries.slice(i, i + WINDOW).filter((e) => e.kind === "trip").length;
         if (c > max) max = c;
       }
       return max;
+    }
+
+    // The specific trip tasks that actually sit inside a window pushing this driver over the
+    // ceiling -- not just any trip they happen to hold. Without this, Phase 1 below could pick a
+    // trip far outside the offending stretch, which doesn't fix the violation at all and just
+    // burns a round (and an unnecessary real-duty swap) before the next round tries again.
+    function violatingTripTasks(entries) {
+      const tasks = new Set();
+      if (entries.length < WINDOW) {
+        if (entries.filter((e) => e.kind === "trip").length > TRIP_CAP) {
+          entries.forEach((e) => { if (e.kind === "trip") tasks.add(e.task); });
+        }
+        return tasks;
+      }
+      for (let i = 0; i + WINDOW <= entries.length; i++) {
+        const slice = entries.slice(i, i + WINDOW);
+        if (slice.filter((e) => e.kind === "trip").length > TRIP_CAP) {
+          slice.forEach((e) => { if (e.kind === "trip") tasks.add(e.task); });
+        }
+      }
+      return tasks;
     }
 
     function ownShiftIdx(driverId, date) {
@@ -2001,10 +2028,11 @@
 
       let applied = false;
       for (const gId of violators) {
+        const targetTasks = violatingTripTasks(byDriver[gId].entries);
         let best = null;
         orderedDays.forEach((day) => {
           candidatesForDay(day, byDriver).forEach((c) => {
-            if (c.gId !== gId) return;
+            if (c.gId !== gId || !targetTasks.has(c.tripTask)) return;
             if (!best || reserveTotal[c.rId] > reserveTotal[best.rId]) best = c;
           });
         });
